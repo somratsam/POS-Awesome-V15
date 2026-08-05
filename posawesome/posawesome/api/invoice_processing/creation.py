@@ -1446,6 +1446,33 @@ def _guard_return_cash_refund(invoice_doc):
         )
 
 
+def _mode_of_payment_names(invoice_doc):
+    """Names of the Mode of Payment rows currently on the invoice."""
+    return {row.mode_of_payment for row in (invoice_doc.payments or []) if row.mode_of_payment}
+
+
+def _suppress_stale_mode_of_payment_refresh_toast(invoice_doc, previous_modes, log_watermark):
+    """Drop ERPNext's "Payment methods refreshed" toast when nothing changed.
+
+    ERPNext's update_multi_mode_option() (erpnext/accounts/doctype/sales_invoice/
+    sales_invoice.py) fires that toast whenever the invoice already had a
+    payments table and `is_created_using_pos` is falsy. POS Awesome never sets
+    that flag, so the check degenerates to "the invoice already had payments" -
+    true on nearly every update_invoice call - regardless of whether the
+    resolved Mode of Payment list actually changed. Only let the toast reach
+    the frontend when it genuinely did.
+    """
+    if _mode_of_payment_names(invoice_doc) != previous_modes:
+        return
+
+    stale_text = _("Payment methods refreshed. Please review before proceeding.")
+    frappe.local.message_log = [
+        entry
+        for i, entry in enumerate(frappe.local.message_log)
+        if i < log_watermark or entry.get("message") != stale_text
+    ]
+
+
 @frappe.whitelist()
 def update_invoice(data):
     currency_cache = {}
@@ -1569,7 +1596,12 @@ def update_invoice(data):
 
     # Set missing values first
     incoming_payment_rows = data.get("payments") or []
+    previous_mode_of_payments = _mode_of_payment_names(invoice_doc)
+    message_log_watermark = len(frappe.local.message_log)
     invoice_doc.set_missing_values()
+    _suppress_stale_mode_of_payment_refresh_toast(
+        invoice_doc, previous_mode_of_payments, message_log_watermark
+    )
     _reapply_incoming_payment_amounts(invoice_doc, incoming_payment_rows)
     if effective_price_list:
         invoice_doc.selling_price_list = effective_price_list
