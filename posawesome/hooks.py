@@ -192,6 +192,7 @@ doc_events = {
 override_doctype_class = {
     "POS Invoice": "posawesome.posawesome.overrides.pos_invoice.CustomPOSInvoice",
     "POS Invoice Merge Log": "posawesome.posawesome.overrides.pos_invoice_merge_log.CustomPOSInvoiceMergeLog",
+    "Sales Invoice": "posawesome.posawesome.overrides.sales_invoice.CustomSalesInvoice",
 }
 
 # exempt linked doctypes from being automatically cancelled
