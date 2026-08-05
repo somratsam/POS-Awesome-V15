@@ -93,13 +93,8 @@
 								ref="postingDateComponent"
 								:pos_profile="pos_profile"
 								:posting_date_display="posting_date_display"
-								:customer_balance="customer_balance"
-								:customer_balance_currency="customer_balance_currency"
-								:balance_loading="customer_balance_loading"
 								:price-list="selected_price_list"
 								:price-lists="price_lists"
-								:formatCurrency="formatCurrency"
-								:currencySymbol="currencySymbol"
 								@update:posting_date_display="
 									(val) => {
 										posting_date_display = val;
@@ -112,6 +107,14 @@
 								"
 							/>
 						</v-card>
+
+						<CustomerBalanceRow
+							:pos_profile="pos_profile"
+							:customer_balance="customer_balance"
+							:customer_balance_currency="customer_balance_currency"
+							:balance_loading="customer_balance_loading"
+							:formatCurrency="formatCurrency"
+						/>
 
 						<v-card
 							v-if="pos_profile.posa_allow_multi_currency"
@@ -296,6 +299,7 @@ import format from "../../format";
 import InvoiceCustomerSection from "./invoice/InvoiceCustomerSection.vue";
 import DeliveryCharges from "./invoice/DeliveryCharges.vue";
 import PostingDateRow from "./invoice/PostingDateRow.vue";
+import CustomerBalanceRow from "./invoice/CustomerBalanceRow.vue";
 import MultiCurrencyRow from "./invoice/MultiCurrencyRow.vue";
 import CancelSaleDialog from "./invoice/CancelSaleDialog.vue";
 import InvoiceSummary from "./invoice/InvoiceSummary.vue";
@@ -474,6 +478,7 @@ export default {
 		InvoiceCustomerSection,
 		DeliveryCharges,
 		PostingDateRow,
+		CustomerBalanceRow,
 		MultiCurrencyRow,
 		InvoiceSummary,
 		CancelSaleDialog,
