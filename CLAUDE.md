@@ -30,6 +30,33 @@ entirely on this site. `bench console` confirmed it in under a minute;
 guessing from the code alone would have produced a fix for a problem that
 didn't exist while missing the real one.
 
+## Check for Name Collisions Before Creating Standard Docs
+
+Before creating any standard Print Format (or any standard doc — Page, Report,
+Workspace, etc.) that could share a name with an existing record, always check
+for a name collision first. `bench migrate`'s standard-doc sync
+(`frappe/modules/import_file.py`'s `delete_old_doc()`) force-deletes any
+existing record with the same name — `frappe.delete_doc(doctype, name,
+force=1, for_reload=True)` — before inserting the new one. This is a delete
+and recreate, not a merge or field-level update: no backup, and it bypasses
+Frappe's normal Version/Trash logging even when the doctype has
+`track_changes` enabled (the `for_reload=True` fast path skips it). Check via
+a direct DB query for the exact name before running migrate — e.g. `bench
+--site <site> mariadb -e "SELECT name FROM \`tabPrint Format\` WHERE
+name='<name>'"` — not just by browsing Desk, since a record you haven't
+personally seen in the current session can still exist.
+
+Concrete example that happened in this repo: a new standard Print Format was
+created at `posawesome/posawesome/print_format/z_report/z_report.json` named
+"Z Report" to hold a new HTML-based report. A Print Format named "Z Report"
+already existed on the site — manually created earlier, containing hand-tuned
+raw ESC/POS Jinja commands (`raw_printing: 1`) that were never exported to
+git. Running `bench migrate` silently deleted that original record and
+replaced it with the new one. `creation == modified` on the surviving record
+(both stamped to the exact migrate time) was the tell; there was no Version
+row and no filesystem backup to recover from. A pre-migrate name check would
+have caught this in seconds.
+
 ## Build Commands
 
 ### Main Build Commands

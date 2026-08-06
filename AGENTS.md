@@ -31,6 +31,13 @@ Before editing files:
     fields referenced defensively in code (`getattr(doc, "field", default)`)
     still actually exist. Code can look authoritative while it's actually a
     stale fallback superseded by a later migration.
+3b. Before creating any standard doc (Print Format, Page, Report, Workspace,
+    etc.) under an app's module folder, check the target site for an existing
+    record with the same name first, e.g. `bench --site <site> mariadb -e
+    "SELECT name FROM \`tab<DocType>\` WHERE name='<name>'"`. `bench
+    migrate`'s standard-doc sync force-deletes any existing record with that
+    name (no backup, bypasses version history) before inserting the new one.
+    Browsing Desk is not sufficient — check the database directly.
 4. Find the single source of truth for the logic.
 5. Avoid local one-file patches when the logic is shared.
 6. Align frontend, backend, cache, sync, print, and reports where relevant.

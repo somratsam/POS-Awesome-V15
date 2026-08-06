@@ -107,6 +107,17 @@ found.
   leaving "Use Server Cache" OFF in POS Profile settings (see baseline below).
   Proper code fix (e.g. skip-caching empty results, or a dedicated cache-bust hook
   on POS Profile save) still pending.
+- **Z Report lookup + reprint.** The Z Report now prints automatically on shift
+  close (`usePosShift.ts`'s `submit_closing_pos()` → `printZReport()` →
+  `printDocumentViaQz()`, using the `Z Report` print format and
+  `get_z_report_data()`), but there's no way for staff to browse past `POS Closing
+  Shift` records and reprint one later — e.g. if the automatic print fails or jams,
+  a second copy is needed, or a shift from days ago needs checking. Needs: a
+  screen/list within POS Awesome where staff can search past closing shifts (by
+  date, shift number, or similar), select one, and trigger a print against it using
+  the same `printZReport()`/`printDocumentViaQz()` path already built for the
+  automatic case — just called manually against a chosen past closing shift name
+  instead of the just-closed one. Not yet built.
 
 ## 4. Recommended POS Profile baseline settings
 
