@@ -229,6 +229,29 @@ export function useItemCreation() {
 		return item;
 	}
 
+	async function fetchItemVariantsMeta(
+		itemCode: string,
+		posProfile: any,
+		priceList: any,
+		customerVal: any,
+	) {
+		try {
+			const res = await frappe.call({
+				method: "posawesome.posawesome.api.items.get_item_variants",
+				args: {
+					pos_profile: JSON.stringify(posProfile),
+					parent_item_code: itemCode,
+					price_list: priceList,
+					customer: customerVal,
+				},
+			});
+			return res && res.message ? res.message : null;
+		} catch (e) {
+			console.error("Failed to fetch item variants", e);
+			return null;
+		}
+	}
+
 	/**
 	 * Handle variant item selection
 	 */
@@ -246,33 +269,35 @@ export function useItemCreation() {
 		let variants = items.filter((it) => it.variant_of == item.item_code);
 		let attrsMeta = {};
 
-		// Fetch variants if not already loaded
 		if (!variants.length) {
-			try {
-				const res = await frappe.call({
-					method: "posawesome.posawesome.api.items.get_item_variants",
-					args: {
-						pos_profile: JSON.stringify(pos_profile),
-						parent_item_code: item.item_code,
-						price_list: active_price_list,
-						customer: customer,
-					},
-				});
-				if (res.message) {
-					variants = res.message.variants || res.message;
-					attrsMeta = res.message.attributes_meta || {};
-					// Add variants to the main items list so they are cached
-					// context.items should be the reactive array
-					if (Array.isArray(items)) {
-						items.push(...variants);
-					} else if (context.itemsStore) {
-						// If context provided store, maybe add them?
-						// But usually ItemsSelector manages the list.
-						// We'll leave it to the caller to manage hydration if items is not array
-					}
+			// No cached variants: fetch the variant list and their attribute
+			// metadata together, and cache the variants for next time.
+			const message = await fetchItemVariantsMeta(
+				item.item_code,
+				pos_profile,
+				active_price_list,
+				customer,
+			);
+			if (message) {
+				variants = message.variants || message;
+				attrsMeta = message.attributes_meta || {};
+				if (Array.isArray(items)) {
+					items.push(...variants);
 				}
-			} catch (e) {
-				console.error("Failed to fetch variants", e);
+			}
+		} else {
+			// Cards can use the already-cached variants, but attributes_meta is
+			// only returned by this endpoint, so it must still be fetched for the
+			// filter chip row to render. A failure here (e.g. offline) is
+			// non-fatal — the dialog still opens with cards, just without chips.
+			const message = await fetchItemVariantsMeta(
+				item.item_code,
+				pos_profile,
+				active_price_list,
+				customer,
+			);
+			if (message) {
+				attrsMeta = message.attributes_meta || {};
 			}
 		}
 
