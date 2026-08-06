@@ -10,6 +10,7 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
     get_cashiers,
     get_pos_invoices,
     get_payments_entries,
+    get_shift_invoice_rows,
 )
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview import (
     get_closing_shift_overview,
@@ -56,6 +57,7 @@ class POSClosingShift(Document):
                 title=_("Invalid Opening Entry"),
             )
         self.update_payment_reconciliation()
+        self.update_customer_credit_totals()
 
     def update_payment_reconciliation(self):
         # update the difference values in Payment Reconciliation child table
@@ -63,6 +65,26 @@ class POSClosingShift(Document):
         precision = frappe.get_cached_value("System Settings", None, "currency_precision") or 3
         for d in self.payment_reconciliation:
             d.difference = +flt(d.closing_amount, precision) - flt(d.expected_amount, precision)
+
+    def update_customer_credit_totals(self):
+        # Credit Issued Today = abs(total of return invoices) for this shift.
+        # Credit Redeemed Today = sum of posa_redeemed_customer_credit on
+        # non-return invoices. Matches the figures already shown on the Z
+        # Report print format.
+        credit_issued = 0.0
+        credit_redeemed = 0.0
+        for row in get_shift_invoice_rows(self):
+            conversion_rate = row.get("conversion_rate")
+            if row.get("is_return"):
+                credit_issued += abs(get_base_value(row, "grand_total", "base_grand_total", conversion_rate))
+            else:
+                credit_redeemed += get_base_value(
+                    row,
+                    "posa_redeemed_customer_credit",
+                    conversion_rate=conversion_rate,
+                )
+        self.customer_credit_issued = flt(credit_issued)
+        self.customer_credit_redeemed = flt(credit_redeemed)
 
     def on_submit(self):
         opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)

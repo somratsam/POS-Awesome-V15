@@ -48,6 +48,51 @@ def get_pos_invoices(pos_opening_shift, doctype=None, submit_printed=1):
     return data
 
 
+def get_shift_invoice_rows(closing_shift_doc):
+    """Return invoice rows (is_return, grand_total, customer credit redeemed)
+    for every invoice already linked to a closing shift's pos_transactions
+    child table.
+
+    Reads the invoice list from pos_transactions rather than re-querying by
+    posa_pos_opening_shift like get_pos_invoices() does: a fresh POS Invoice
+    query would incorrectly return zero rows post-close, since
+    consolidate_closing_shift_invoices() (on_submit) sets consolidated_invoice
+    on every invoice in the shift, and get_pos_invoices()'s own filter
+    excludes consolidated POS Invoices.
+    """
+    names_by_doctype = {"Sales Invoice": [], "POS Invoice": []}
+    for row in closing_shift_doc.get("pos_transactions") or []:
+        if row.get("sales_invoice"):
+            names_by_doctype["Sales Invoice"].append(row.get("sales_invoice"))
+        elif row.get("pos_invoice"):
+            names_by_doctype["POS Invoice"].append(row.get("pos_invoice"))
+
+    fields = [
+        "name",
+        "is_return",
+        "grand_total",
+        "base_grand_total",
+        "conversion_rate",
+        "total_qty",
+        "discount_amount",
+        "base_discount_amount",
+        "posa_redeemed_customer_credit",
+    ]
+
+    rows = []
+    for doctype, names in names_by_doctype.items():
+        if not names:
+            continue
+        rows.extend(
+            frappe.get_all(
+                doctype,
+                filters={"name": ["in", names]},
+                fields=fields,
+            )
+        )
+    return rows
+
+
 @frappe.whitelist()
 def get_payments_entries(pos_opening_shift):
     return frappe.get_all(

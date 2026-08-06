@@ -794,6 +794,14 @@ def get_closing_shift_overview(pos_opening_shift):
                 include_count=True,
             ),
         },
+        # Credit Issued Today = abs(total of return invoices), matching the
+        # figure already shown on the Z Report print format. Reuses the
+        # returns totals already computed above, no new query.
+        "customer_credit_issued": {
+            "count": returns_count,
+            "company_currency_total": flt(returns_company_currency_total),
+            "by_currency": prepare_currency_rows(returns_totals_by_currency, include_count=True),
+        },
         "cash_expected": {
             "mode_of_payment": cash_mode_of_payment,
             "company_currency_total": flt(cash_expected_company_currency_total),
