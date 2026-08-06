@@ -214,6 +214,7 @@ export function useClosingShift(eventBus: any) {
 			loyalty_redemption: normalizeLoyaltyRedemption(
 				payload.loyalty_redemption,
 			),
+			customer_credit_issued: normalizeCredit(payload.customer_credit_issued),
 			customer_credit_redeemed: normalizeCredit(payload.customer_credit_redeemed),
 			cash_expected: {
 				mode_of_payment: payload.cash_expected?.mode_of_payment || "",

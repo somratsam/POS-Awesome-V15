@@ -292,6 +292,23 @@ export function useClosingSummary(
 			: [];
 	});
 
+	const customerCreditIssuedSummary = computed(() => {
+		const ov = unref(overview);
+		return (
+			ov?.customer_credit_issued || {
+				count: 0,
+				company_currency_total: 0,
+				by_currency: [],
+			}
+		);
+	});
+
+	const customerCreditIssuedByCurrency = computed(() => {
+		return Array.isArray(customerCreditIssuedSummary.value.by_currency)
+			? customerCreditIssuedSummary.value.by_currency
+			: [];
+	});
+
 	const cashExpectedByCurrency = computed(() => {
 		return Array.isArray(cashExpectedSummary.value.by_currency)
 			? cashExpectedSummary.value.by_currency
@@ -385,6 +402,10 @@ export function useClosingSummary(
 			customerCreditRedeemedSummary.value.company_currency_total,
 			overviewCompanyCurrency.value,
 		);
+		const customerCreditIssuedValue = formatCurrencyWithSymbol(
+			customerCreditIssuedSummary.value.company_currency_total,
+			overviewCompanyCurrency.value,
+		);
 		const cashValue = formatCurrencyWithSymbol(
 			cashExpectedSummary.value.company_currency_total,
 			overviewCompanyCurrency.value,
@@ -438,6 +459,14 @@ export function useClosingSummary(
 				caption: `${__("Invoices")}: ${formatCount(customerCreditRedeemedSummary.value.count || 0)}`,
 				icon: "mdi-account-credit-card-outline",
 				color: "accent-info",
+			},
+			{
+				key: "customer-credit-issued",
+				label: __("Customer Credit Issued"),
+				value: customerCreditIssuedValue,
+				caption: `${__("Return invoices")}: ${formatCount(customerCreditIssuedSummary.value.count || 0)}`,
+				icon: "mdi-account-cash-outline",
+				color: "accent-warning",
 			},
 			{
 				key: "cash-expected",
@@ -547,6 +576,8 @@ export function useClosingSummary(
 		loyaltyRedemptionByCurrency,
 		customerCreditRedeemedSummary,
 		customerCreditRedeemedByCurrency,
+		customerCreditIssuedSummary,
+		customerCreditIssuedByCurrency,
 		primaryInsights,
 		secondaryInsights,
 		shouldShowCompanyEquivalent,

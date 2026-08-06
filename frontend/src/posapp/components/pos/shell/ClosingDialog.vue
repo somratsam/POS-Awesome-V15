@@ -21,6 +21,8 @@
 								:loyalty-redemption-by-currency="loyaltyRedemptionByCurrency"
 								:customer-credit-redeemed-summary="customerCreditRedeemedSummary"
 								:customer-credit-redeemed-by-currency="customerCreditRedeemedByCurrency"
+								:customer-credit-issued-summary="customerCreditIssuedSummary"
+								:customer-credit-issued-by-currency="customerCreditIssuedByCurrency"
 								:payments-by-mode="paymentsByMode"
 								:overview-company-currency="overviewCompanyCurrency"
 								:format-currency-with-symbol="formatCurrencyWithSymbol"
