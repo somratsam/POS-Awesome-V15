@@ -6,6 +6,30 @@ POSAwesome is a Frappe application - a Point of Sale (POS) system built on the F
 
 **Enhanced Camera Scanner**: Features advanced OpenCV-based image processing for superior barcode and QR code scanning with real-time image enhancement.
 
+## Verify Against Live State Before Fixing Permissions/Settings/Roles
+
+Before proposing a fix involving permissions, roles, POS Profile settings, or any
+area where code might not reflect the actual current state of a site, verify
+directly against the live database via `bench --site <site> console` first —
+check for migrations already applied (`Patch Log`), deprecated/removed
+fields (`Custom Field` records can be deleted while old code still references
+the fieldname defensively), and patches under `posawesome/patches/` that may
+have changed the intended source of truth since the code reading it was
+written. Don't rely on reading code in isolation to determine current
+behavior — a function can look authoritative while actually being superseded
+or a stale fallback path.
+
+Concrete example that happened in this repo: `employees.py`'s
+`_is_pos_supervisor()` looked like it checked a `posa_is_pos_supervisor`
+field on the User doctype. Reading only part of the function led to a wrong
+diagnosis of a frontend/backend "mismatch" against a role-based check
+elsewhere. The full function actually checks the role first and only falls
+back to the field — and a patch (`migrate_pos_supervisor_to_role.py`) had
+already migrated every user off that field and deleted the Custom Field
+entirely on this site. `bench console` confirmed it in under a minute;
+guessing from the code alone would have produced a fix for a problem that
+didn't exist while missing the real one.
+
 ## Build Commands
 
 ### Main Build Commands

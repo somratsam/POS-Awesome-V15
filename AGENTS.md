@@ -24,6 +24,13 @@ Before editing files:
 1. Understand the requested bug or feature.
 2. Identify all linked modules affected by the change.
 3. Read the current implementation before modifying it.
+3a. If the change involves permissions, roles, POS Profile settings, or any
+    area where reading code alone can't confirm current behavior, verify
+    directly against a live site via `bench --site <site> console` first —
+    check `Patch Log` for migrations already applied and check whether
+    fields referenced defensively in code (`getattr(doc, "field", default)`)
+    still actually exist. Code can look authoritative while it's actually a
+    stale fallback superseded by a later migration.
 4. Find the single source of truth for the logic.
 5. Avoid local one-file patches when the logic is shared.
 6. Align frontend, backend, cache, sync, print, and reports where relevant.
