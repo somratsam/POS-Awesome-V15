@@ -17,7 +17,6 @@ from posawesome.posawesome.api.pos_access import get_authorized_pos_item, get_au
 
 
 QUICK_EDIT_FLAG = "posa_allow_item_quick_edit"
-PRIVILEGED_ROLES = {"System Manager", "Stock Manager", "Item Manager"}
 SUPPLIER_BRAND_MAPPING_DOCTYPE = "RetailMind Supplier Brand Mapping"
 STANDARD_QUICK_EDIT_FIELDS = frozenset(
     {
@@ -203,17 +202,10 @@ def _upsert_item_price(item_code, price_list, rate, uom=None, buying=False, sell
     return doc.name
 
 
-def _is_user_privileged(user):
-    roles = set(frappe.get_roles(user) or [])
-    return bool(roles.intersection(PRIVILEGED_ROLES))
-
-
 def _can_save(profile):
     user = str(frappe.session.user or "").strip()
     if not user or user == "Guest":
         return False
-    if _is_user_privileged(user):
-        return True
     if not cint(profile.get(QUICK_EDIT_FLAG)):
         return False
     try:

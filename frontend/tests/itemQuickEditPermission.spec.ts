@@ -38,14 +38,20 @@ describe("item quick edit visibility", () => {
 		).toBe(true);
 	});
 
-	it("matches the server privileged-role bypass", () => {
+	it("gives no special treatment to System/Stock/Item Manager roles", () => {
 		for (const role of ["System Manager", "Stock Manager", "Item Manager"]) {
 			expect(
 				canShowItemQuickEdit(
 					{ posa_allow_item_quick_edit: 0 },
 					context("manager@example.com", [role]),
 				),
-			).toBe(true);
+			).toBe(false);
+			expect(
+				canShowItemQuickEdit(
+					{ posa_allow_item_quick_edit: 1 },
+					context("manager@example.com", [role]),
+				),
+			).toBe(false);
 		}
 	});
 });
