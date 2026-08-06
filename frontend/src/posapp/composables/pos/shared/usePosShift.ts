@@ -15,6 +15,7 @@ import {
 } from "../../../../offline/index";
 import { getValidCachedOpeningForCurrentUser } from "../../../utils/openingCache";
 import { createBootstrapSnapshotFromRegisterData } from "../../../../offline/bootstrapSnapshot";
+import { printDocumentViaQz } from "../../../services/qzTray";
 import {
 	finishStartupPhase,
 	startStartupPhase,
@@ -244,6 +245,23 @@ export function usePosShift(openDialog?: () => void) {
 			});
 	}
 
+	async function printZReport(closingShiftName: string) {
+		try {
+			await printDocumentViaQz({
+				doctype: "POS Closing Shift",
+				name: closingShiftName,
+				printFormat: "Z Report",
+				noLetterhead: 1,
+			});
+		} catch (err) {
+			console.warn("Failed to print Z Report", err);
+			toastStore.show({
+				title: translateMessage("Z Report print failed"),
+				color: "warning",
+			});
+		}
+	}
+
 	function submit_closing_pos(data: any) {
 		console.log("Submitting closing shift", data);
 		frappe
@@ -256,6 +274,7 @@ export function usePosShift(openDialog?: () => void) {
 			.then((r: any) => {
 				console.log("Submit result", r);
 				if (r.message) {
+					printZReport(r.message);
 					pos_profile.value = null;
 					pos_opening_shift.value = null;
 					uiStore.posOpeningShift = null;

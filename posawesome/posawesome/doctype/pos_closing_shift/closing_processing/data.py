@@ -93,6 +93,47 @@ def get_shift_invoice_rows(closing_shift_doc):
     return rows
 
 
+def get_payment_mode_counts(sale_invoice_names, return_invoice_names):
+    """Return per-mode-of-payment transaction counts and totals, split by
+    sale vs return invoices, for the given invoice name lists.
+
+    Sales Invoice and POS Invoice both use the "Sales Invoice Payment" child
+    doctype for their payments table, so a single query covers both. There is
+    no stored field anywhere with these counts (the pos_payments child table
+    on POS Closing Shift tracks a separate Payment Entry flow this app
+    doesn't use for normal sales, and is empty in practice) -- this is a
+    genuinely new query, not a duplicate of anything already computed.
+    """
+    result = {}
+
+    def accumulate(names, sales_key, count_key, is_return):
+        if not names:
+            return
+        condition = "amount < 0" if is_return else "amount > 0"
+        rows = frappe.db.sql(
+            f"""
+            select mode_of_payment, count(*) as cnt, sum(amount) as total
+            from `tabSales Invoice Payment`
+            where parent in %(names)s and {condition}
+            group by mode_of_payment
+            """,
+            {"names": tuple(names)},
+            as_dict=1,
+        )
+        for row in rows:
+            entry = result.setdefault(
+                row.mode_of_payment,
+                {"sale_count": 0, "sale_total": 0.0, "return_count": 0, "return_total": 0.0},
+            )
+            entry[count_key] = row.cnt or 0
+            entry[sales_key] = frappe.utils.flt(row.total)
+
+    accumulate(sale_invoice_names, "sale_total", "sale_count", is_return=False)
+    accumulate(return_invoice_names, "return_total", "return_count", is_return=True)
+
+    return result
+
+
 @frappe.whitelist()
 def get_payments_entries(pos_opening_shift):
     return frappe.get_all(
