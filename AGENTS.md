@@ -155,3 +155,20 @@ A task is complete only when:
 3. Existing behavior is not broken.
 4. Build/lint/test commands are run where available.
 5. Risks are documented.
+6. **Every implementation gets a full, professional-standard check, not just
+   "does it work" — this is standard practice for every change, not
+   something that only happens when explicitly asked:**
+   - Confirm nothing else broke: run the relevant tests (frontend `vitest`,
+     backend module tests in isolation given the known pre-existing
+     `run-tests` environment crash), and check for regressions in shared
+     files/composables/stores the change touches.
+   - For anything touching user input, authorization, or data access, do a
+     genuine security review — trace the actual code path rather than
+     asserting it's safe: parameterized/escaped queries vs. string
+     interpolation (trace into the ORM/driver, don't just assume the
+     framework handles it), injection surfaces, XSS via `v-html` near
+     user-controlled data, missing bounds/limits on anything a whitelisted
+     method exposes (whitelisted methods are callable directly by any
+     authenticated session, not just through whatever UI calls them today),
+     and whether authorization is actually re-validated server-side or just
+     trusts a client-supplied identifier.

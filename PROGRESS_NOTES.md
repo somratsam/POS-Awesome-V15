@@ -23,6 +23,9 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `863d66f` — feat: add Z Report history/reprint dialog to POS Awesome
+- `f4aa91b` — refactor: extract printZReport into a shared, reusable service function
+- `6d136d7` — feat: add list_closing_shifts for the Z Report history/reprint lookup
 - `9f1dcd5` — docs: note Z Report reprint follow-up and standard-doc collision risk
 - `2043356` — feat: print the Z Report automatically via QZ Tray on shift close
 - `15fb224` — feat: show Customer Credit Issued on the pre-close shift summary
@@ -40,9 +43,9 @@ Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 of base commit `cd5eba1` ("Release: 15.33.0 — 2026-07-23").
 
 See section 3 for what `4c7fdd2`/`189692c` fixed. **Section 2 below covers today's
-main body of work — the four newest commits, `e393e89` through `9f1dcd5`.**
+main body of work — the seven newest commits, `e393e89` through `863d66f`.**
 
-## 2. Today's major work: POS Closing Shift Z Report (Part A + Part B)
+## 2. Today's major work: POS Closing Shift Z Report (Part A + Part B + Part C)
 
 ### Why this happened
 
@@ -204,6 +207,56 @@ data was permanently lost, but the mechanism is a real trap. See the standing no
 now in `CLAUDE.md`/`AGENTS.md`: **always check for a name collision via a direct DB
 query before creating any standard doc**, not just by browsing Desk.
 
+### Part C — Z Report history + reprint (`6d136d7`, `f4aa91b`, `863d66f`)
+
+Fills the gap Part B's own notes flagged as deferred: the automatic print only
+covers the shift that was *just* closed. Built in three pieces, each reviewed
+and tested before the next:
+
+1. **`list_closing_shifts(pos_profile, search, from_date, to_date, limit)`**
+   (new, in `closing_processing/data.py`) — reuses `get_authorized_pos_profile()`
+   from `pos_access.py` exactly as `item_quick_edit.py` already does. `pos_profile`
+   is only a hint; the query always filters on `profile_doc.name` (the
+   server-validated result), never the raw client input — confirmed live: a bogus
+   profile name throws cleanly, never returns data. `limit_page_length` clamped to
+   `max(1, min(cint(limit) or 50, 200))`, added after a pre-apply security review
+   caught that this whitelisted method has no ceiling otherwise — callable
+   directly by any authenticated session regardless of what the frontend sends.
+   That same review traced the `search` parameter's `or_filters` LIKE query
+   through `frappe/model/db_query.py`'s `prepare_filter_condition()` into the
+   MariaDB driver's `escape()` (real `escape_string()` + quoting, not string
+   interpolation) to confirm it's injection-safe. This review prompted a new
+   standing rule in `CLAUDE.md`/`AGENTS.md`: every change now requires both a
+   regression check (relevant tests run, not just "does it work") and, for
+   anything touching user input/authorization/data access, a genuine traced
+   security review — not an assertion that something is "probably fine."
+2. **`printZReport` extraction** — moved out of `usePosShift.ts`'s private closure
+   into an exported function in `documentPrint.ts` (pure relocation, identical
+   behavior — confirmed via `usePosShift.spec.ts`'s existing test that exercises
+   `submit_closing_pos()`'s success path). Needed since the history dialog has to
+   call the same print path against an arbitrary *past* shift name, and the
+   function had no actual dependency on `usePosShift()`'s own state.
+3. **`ZReportHistoryDialog.vue`** (new, in `components/pos/closing/`) + a
+   NavbarMenu entry — date range + search, one-click per-row Print icon. Deliberately
+   **no POS Profile picker anywhere in the UI**: the dialog reads
+   `uiStore.posProfile.name` once per fetch and sends it only as a hint; the
+   `get_authorized_pos_profile()` call above is the actual scope boundary, not
+   anything client-side. Deliberately **no supervisor gate** either — sits in
+   `NavbarMenu.vue`'s unconditional `quickActions` grid (same array as "Print Last
+   Invoice"/"Close Shift"), not `supervisorSections`; reprinting an
+   already-printed report isn't a sensitive action, and the real access control is
+   the same server-side profile check, not a client-side role check.
+
+Two existing specs (`navbarMenu.spec.ts`, `navbarMenuActions.spec.ts`) hardcoded
+the exact `quickActions` id array and correctly caught the new entry — fixed by
+updating both to expect it, not by weakening the assertions.
+
+**Verified in the browser** (not just isolated tests): entry point, dialog,
+search, and print all confirmed working — and, just as importantly, receipts and
+the automatic Z Report print-on-close were both re-confirmed still working
+afterward, since this work touched `usePosShift.ts` and `NavbarMenu.vue`,
+both actively-used, shared components.
+
 ### What's verified (all today, on `staging.local`)
 
 - Part A: real submitted shifts with returns and credit redemptions
@@ -223,25 +276,29 @@ query before creating any standard doc**, not just by browsing Desk.
   confirmed identical whether today's changes are present or stashed out —
   see `test_overview_loyalty.py`, which hits it regardless): `test_pos_closing_shift.py`
   9/9 passing, `test_cash_movement_integration.py` 2/2 passing.
-- Full frontend `vitest run`: 217/217 test files, 1051/1051 tests passing.
+- Full frontend `vitest run`: 217/217 test files, 1051/1051 tests passing (both
+  before Part C and again after, once two pre-existing specs that hardcoded the
+  `quickActions` id list were updated for the new entry).
 - `bench build --app posawesome`: clean, exit 0, zero errors.
 - `bench --site staging.local migrate`: clean, exit 0, zero errors.
 - Checked for file/logic overlap with every prior commit this session — none found.
-- **Live end-to-end test: confirmed working.** The user closed a real shift in the
-  browser and the Z Report printed automatically via QZ Tray with no permission
-  popup — the entire point of this migration. Part B is proven in practice, not just
-  via isolated backend/render verification.
+- **Live end-to-end test: confirmed working**, for both Part B and Part C. The user
+  closed a real shift in the browser and the Z Report printed automatically via QZ
+  Tray with no permission popup (Part B). Separately, the Z Report History dialog's
+  entry point, search, and per-row print were all confirmed working in the browser
+  too, and — since this touched `usePosShift.ts`/`NavbarMenu.vue`, both shared,
+  actively-used components — receipts and the automatic print-on-close were
+  re-confirmed still working afterward (Part C).
+- **Gap worth knowing about**: no dedicated unit tests were written for
+  `list_closing_shifts` or `ZReportHistoryDialog.vue` specifically — verification
+  was live/manual (bench console + browser) plus confirming the existing suite
+  still passes, not new automated coverage. Fine for now, but if this feature
+  needs to change later, there's no regression net specific to it yet.
 
 ### Deferred from today's work
 
-- **Z Report lookup + reprint.** The Z Report only auto-prints on the just-closed
-  shift (`submit_closing_pos()` → `printZReport()` → `printDocumentViaQz()`). There's
-  no screen in POS Awesome to browse past `POS Closing Shift` records and reprint one
-  — needed for when the automatic print fails/jams, a second copy is needed, or a
-  shift from days ago needs checking. Build: a search/list screen (by date, shift
-  number, or similar) that lets staff pick a past shift and calls the same
-  `printZReport()`/`printDocumentViaQz()` path manually against the chosen shift's
-  name instead of the just-closed one. Not started.
+- **Z Report lookup + reprint — DONE, see Part C above.** Was deferred when Part B
+  shipped; built later the same day. Not listed as still-open here anymore.
 - **Same-shift exchange distinction not carried into the Z Report.** The *old*,
   invoice-level "Swan Sales Invoice" print format has logic to distinguish two cases
   when `posa_redeemed_customer_credit > 0` on an invoice: if a matching return

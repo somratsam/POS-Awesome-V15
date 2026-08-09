@@ -57,6 +57,40 @@ replaced it with the new one. `creation == modified` on the surviving record
 row and no filesystem backup to recover from. A pre-migrate name check would
 have caught this in seconds.
 
+## Every Change Needs a Full, Professional-Standard Check Before It's "Done"
+
+Don't treat a change as complete once it merely works. Every implementation —
+not just the ones where the user explicitly asks for verification — needs
+both of the following before it's done:
+
+1. **Confirm nothing else broke.** Run the relevant tests (frontend `vitest`,
+   backend module tests in isolation given the known pre-existing
+   `run-tests` environment crash — see the fork's `PROGRESS_NOTES.md` for
+   that crash's signature and how it was confirmed pre-existing), and check
+   for regressions in code paths the change touches, especially shared
+   files/composables/stores also used elsewhere.
+2. **For anything touching user input, authorization, or data access, do a
+   genuine security review.** Trace how the input is actually handled —
+   don't assert it's safe, prove it by reading the actual code path: is a
+   filter/query parameterized or escaped (trace it into the ORM/driver, e.g.
+   `frappe/model/db_query.py`'s `prepare_filter_condition` and
+   `frappe.db.escape`) versus string-interpolated into raw SQL? Is there an
+   injection surface? Does the frontend use `v-html` anywhere near
+   user-controlled data (XSS)? Are there missing bounds/limits on anything a
+   whitelisted method exposes (a whitelisted method is callable directly by
+   any authenticated session, not just through whatever UI currently calls
+   it)? Is authorization actually re-validated server-side, or does the code
+   trust a client-supplied identifier (a profile name, a doctype name, a
+   user id) without re-checking it belongs to the requesting user?
+
+This is standard practice for every change going forward, not something that
+only happens when explicitly asked. A "looks fine" scan is not the same as
+tracing the actual code path — see the Z Report History feature's
+`list_closing_shifts` for a worked example: the `search` parameter's safety
+was confirmed by reading `db_query.py` and the MariaDB driver's `escape()`
+down to the actual `escape_string()` call, not by assuming Frappe's ORM is
+safe in general.
+
 ## Build Commands
 
 ### Main Build Commands
