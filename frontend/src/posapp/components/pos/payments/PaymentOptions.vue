@@ -56,6 +56,17 @@
 							class="my-0 pa-1"
 							@update:model-value="handleRedeemCustomerCreditUpdate"
 						></v-switch>
+						<v-alert
+							v-if="redeemCustomerCredit && customerCreditBlocked"
+							type="error"
+							variant="tonal"
+							density="compact"
+							class="mx-1 mb-1"
+						>
+							{{ $frappe._("Customer must select items worth at least their available credit of") }}
+							{{ formatCurrency(availableCustomerCredit) }}
+							{{ $frappe._("to redeem it. It will be applied automatically once the cart reaches that amount.") }}
+						</v-alert>
 					</v-col>
 				</v-row>
 			</div>
@@ -220,6 +231,10 @@ const props = defineProps({
 	customerCreditSources: {
 		type: Number,
 		default: 0,
+	},
+	customerCreditBlocked: {
+		type: Boolean,
+		default: false,
 	},
 	formatCurrency: {
 		type: Function,

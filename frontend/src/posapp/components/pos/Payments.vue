@@ -186,6 +186,7 @@
 							:available-customer-credit="available_customer_credit"
 							:redeemed-customer-credit="redeemed_customer_credit"
 							:customer-credit-sources="customer_credit_dict.length"
+							:customer-credit-blocked="customer_credit_blocked"
 							:format-currency="formatCurrency"
 							@update:is-write-off-change="is_write_off_change = $event"
 							@update:is-credit-sale="is_credit_sale = $event"
@@ -208,6 +209,7 @@
 							:available-customer-credit="available_customer_credit"
 							:redeem-customer-credit="redeem_customer_credit"
 							:customer-credit-dict="customer_credit_dict"
+							:customer-credit-redemption-requested="customer_credit_redemption_requested"
 							:credit-source-label="creditSourceLabel"
 							:format-currency="formatCurrency"
 							:currency-symbol="currencySymbol"
@@ -598,6 +600,8 @@ const {
 	loyalty_amount,
 	redeemed_customer_credit,
 	customer_credit_dict,
+	customer_credit_redemption_requested,
+	customer_credit_blocked,
 	available_customer_credit,
 	available_points_amount,
 	get_available_credit,
@@ -688,6 +692,8 @@ const {
 	},
 	customerCreditDict: customer_credit_dict,
 	redeemedCustomerCredit: redeemed_customer_credit,
+	customerCreditRedemptionRequested: customer_credit_redemption_requested,
+	customerCreditBlocked: customer_credit_blocked,
 	isCashback: is_cashback,
 	getTotalChange: () => Math.max(-diff_payment.value, 0),
 	getPaidChange: () => paid_change.value,
@@ -743,6 +749,7 @@ const { ensureReturnPaymentsAreNegative, restoreReturnPayments, validateSubmissi
 		creditChange: credit_change,
 		redeemedCustomerCredit: redeemed_customer_credit,
 		customerCreditDict: customer_credit_dict,
+		customerCreditRedemptionRequested: customer_credit_redemption_requested,
 		giftCardRedemptions: giftCardRedemptions,
 		diff_payment: diff_payment,
 		is_credit_sale: is_credit_sale,

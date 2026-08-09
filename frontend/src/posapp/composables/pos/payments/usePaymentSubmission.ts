@@ -40,6 +40,13 @@ export interface PaymentSubmissionOptions {
 	creditChange?: Ref<number>;
 	redeemedCustomerCredit?: Ref<number>;
 	customerCreditDict?: Ref<any[]>;
+	// True only for a genuine "Use Customer Balance" redemption (see
+	// useRedemptionLogic.ts) -- tells the backend to enforce the "redeem all
+	// available credit, or none" policy via _validate_customer_credit_redemption
+	// in creation.py. M-Pesa/phone payment reuse the same redeemed_customer_credit
+	// payload shape for an unrelated, deliberately-partial settlement amount
+	// and never set this.
+	customerCreditRedemptionRequested?: Ref<boolean>;
 	giftCardRedemptions?: Ref<any[]>;
 	diff_payment?: ComputedRef<number>;
 	is_credit_sale?: Ref<boolean>;
@@ -781,6 +788,24 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			);
 		}
 
+		// Defense-in-depth client-side mirror of the backend's
+		// _validate_customer_credit_redemption: the reactive logic in
+		// useRedemptionLogic.ts should already keep this true, but a genuine
+		// balance redemption must always redeem its full available amount,
+		// never less. The backend re-verifies independently regardless.
+		if (unref(options.customerCreditRedemptionRequested) && customerCreditDict?.value?.length) {
+			const available_total = customerCreditDict.value.reduce(
+				(total: number, row: any) => total + formatFloat(row?.total_credit || 0, prec),
+				0,
+			);
+			const expected = formatFloat(Math.min(available_total, invoice_total), prec);
+			if (formatFloat(unref(redeemedCustomerCredit) || 0, prec) !== expected) {
+				throw new Error(
+					__("The full available customer credit ({0}) must be applied.", [expected]),
+				);
+			}
+		}
+
 		const giftCardRows = Array.isArray(options.giftCardRedemptions?.value)
 			? options.giftCardRedemptions?.value || []
 			: [];
@@ -1031,6 +1056,9 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			write_off_amount: writeOffAmount,
 			redeemed_customer_credit: unref(redeemedCustomerCredit),
 			customer_credit_dict: unref(customerCreditDict),
+			customer_credit_redemption_requested: unref(options.customerCreditRedemptionRequested)
+				? 1
+				: 0,
 			gift_card_redemptions: unref(options.giftCardRedemptions) || [],
 			is_cashback: unref(isCashback),
 		};

@@ -311,4 +311,41 @@ describe("usePaymentMethods", () => {
 			}),
 		]);
 	});
+
+	it("resets the customer-credit-redemption-requested policy flags so M-Pesa is never subject to the must-redeem-full-balance rule", () => {
+		const customerCreditDict = ref<any[]>([]);
+		const customerCreditRedemptionRequested = ref(true);
+		const customerCreditBlocked = ref(true);
+
+		const invoiceDoc = ref<any>({
+			rounded_total: 500,
+			grand_total: 500,
+			payments: [],
+		});
+
+		const { set_mpesa_payment } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 250,
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+			customerCreditDict,
+			customerCreditRedemptionRequested,
+			customerCreditBlocked,
+		});
+
+		// Simulates a genuine balance redemption having already been engaged
+		// (both flags true) before the cashier also opens M-Pesa -- M-Pesa
+		// must unconditionally win and disengage the policy.
+		set_mpesa_payment({
+			name: "ACC-PAY-0001",
+			unallocated_amount: 400,
+		});
+
+		expect(customerCreditRedemptionRequested.value).toBe(false);
+		expect(customerCreditBlocked.value).toBe(false);
+	});
 });

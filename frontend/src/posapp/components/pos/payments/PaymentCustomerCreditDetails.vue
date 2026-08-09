@@ -27,6 +27,7 @@
 					hide-details
 					type="text"
 					:model-value="formatCurrency(row.credit_to_redeem)"
+					:readonly="customerCreditRedemptionRequested"
 					@change="handleCreditToRedeemChange(row, $event)"
 					:prefix="currencySymbol(invoiceDoc.currency)"
 				></v-text-field>
@@ -54,6 +55,13 @@ defineProps({
 	customerCreditDict: {
 		type: Array,
 		default: () => [],
+	},
+	// True while this dict represents a genuine "Use Customer Balance"
+	// redemption that must be applied in full -- the field becomes readonly
+	// rather than silently snapping back a typed-in value.
+	customerCreditRedemptionRequested: {
+		type: Boolean,
+		default: false,
 	},
 	creditSourceLabel: {
 		type: Function,

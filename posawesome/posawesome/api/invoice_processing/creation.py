@@ -28,7 +28,7 @@ from posawesome.posawesome.api.invoice_processing.stock import (
 from posawesome.posawesome.api.tax_contracts import apply_pos_tax_inclusion_contract
 from posawesome.posawesome.api.payment_processing.utils import get_bank_cash_account as get_bank_account
 from posawesome.posawesome.api.utilities import ensure_child_doctype, set_batch_nos_for_bundels
-from posawesome.posawesome.api.payments import redeeming_customer_credit
+from posawesome.posawesome.api.payments import redeeming_customer_credit, get_available_credit
 from posawesome.posawesome.api.idempotency import (
     assert_invoice_request_scope,
     extract_invoice_client_request_id,
@@ -1020,17 +1020,76 @@ def _set_if_field_exists(doc, fieldname, value):
         doc.set(fieldname, value)
 
 
+def _validate_customer_credit_redemption(invoice_doc, data):
+    """Enforce the "redeem all available credit, or none" policy.
+
+    Only runs when the client explicitly flags this as a genuine "Use
+    Customer Balance" redemption via customer_credit_redemption_requested.
+    M-Pesa (usePaymentMethods.ts's set_mpesa_payment()) and the phone
+    payment-request flow reuse the same redeemed_customer_credit /
+    customer_credit_dict payload shape for a specific settlement amount that
+    isn't "the customer's store credit" in this sense, and must not be
+    affected -- they never set this flag.
+
+    Recomputes available credit server-side via get_available_credit(), the
+    same function the frontend calls to display it, instead of trusting the
+    client-supplied per-row total_credit figures (those drive the frontend's
+    own pre-submit UX only).
+    """
+    if invoice_doc.get("is_return"):
+        return
+    if not cint((data or {}).get("customer_credit_redemption_requested")):
+        return
+    if not invoice_doc.customer:
+        return
+
+    real_total = sum(
+        flt(row.get("total_credit"))
+        for row in get_available_credit(invoice_doc.customer, invoice_doc.company)
+    )
+
+    invoice_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
+    loyalty_covered = flt(invoice_doc.get("loyalty_amount"))
+    max_redeemable = max(invoice_total - loyalty_covered, 0)
+
+    precision = invoice_doc.precision("grand_total") or 2
+    redeemed = flt((data or {}).get("redeemed_customer_credit"))
+
+    if flt(real_total, precision) > flt(max_redeemable, precision):
+        if redeemed > 0:
+            frappe.throw(
+                _(
+                    "Customer must select items worth at least their available credit ({0}) to redeem it."
+                ).format(frappe.utils.fmt_money(real_total, currency=invoice_doc.currency))
+            )
+        return
+
+    expected = min(real_total, max_redeemable)
+    if flt(redeemed, precision) != flt(expected, precision):
+        frappe.throw(
+            _(
+                "The full available customer credit ({0}) must be applied -- partial redemption is not allowed."
+            ).format(frappe.utils.fmt_money(expected, currency=invoice_doc.currency))
+        )
+
+
 def _apply_customer_credit_print_fields(invoice_doc, data):
     redeemed_credit = flt((data or {}).get("redeemed_customer_credit"))
     credit_rows = (data or {}).get("customer_credit_dict") or []
 
-    available_credit = 0
-    if isinstance(credit_rows, list):
-        for row in credit_rows:
-            if hasattr(row, "get"):
-                available_credit += flt(row.get("total_credit"))
-            else:
-                available_credit += flt(getattr(row, "total_credit", 0))
+    if cint((data or {}).get("customer_credit_redemption_requested")) and invoice_doc.customer:
+        available_credit = sum(
+            flt(row.get("total_credit"))
+            for row in get_available_credit(invoice_doc.customer, invoice_doc.company)
+        )
+    else:
+        available_credit = 0
+        if isinstance(credit_rows, list):
+            for row in credit_rows:
+                if hasattr(row, "get"):
+                    available_credit += flt(row.get("total_credit"))
+                else:
+                    available_credit += flt(getattr(row, "total_credit", 0))
 
     remaining_credit = max(flt(available_credit - redeemed_credit), 0)
     precision = invoice_doc.precision("grand_total") or 2
@@ -2018,6 +2077,8 @@ def submit_invoice(invoice, data, submit_in_background=False):
         cash_account = {"account": frappe.get_value("Company", invoice_doc.company, "default_cash_account")}
 
     invoice_doc.remarks = _build_invoice_remarks(invoice_doc)
+
+    _validate_customer_credit_redemption(invoice_doc, data)
 
     # calculating cash
     total_cash = 0

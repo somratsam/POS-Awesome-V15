@@ -22,6 +22,15 @@ export interface PaymentMethodsOptions {
 	setRedeemCustomerCredit?: (_val: boolean) => void;
 	customerCreditDict?: Ref<any[]>;
 	redeemedCustomerCredit?: Ref<number>;
+	// Both must be reset to false whenever set_mpesa_payment() pushes its own
+	// row -- M-Pesa reuses the same customer_credit_dict/redeemed_customer_credit
+	// state shape for a specific, deliberately-partial settlement amount that
+	// is NOT "the customer's store credit must be fully redeemed" (see
+	// useRedemptionLogic.ts). Leaving either flag on would either force
+	// M-Pesa's amount up to the full unallocated Payment Entry balance, or
+	// block the sale outright if that balance exceeds the invoice total.
+	customerCreditRedemptionRequested?: Ref<boolean>;
+	customerCreditBlocked?: Ref<boolean>;
 	isCashback?: Ref<boolean>;
 	getTotalChange?: () => number;
 	getPaidChange?: () => number;
@@ -223,6 +232,15 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		};
 
 		clear_all_amounts();
+
+		// See the field comments above: this is a specific settlement amount,
+		// not a "must redeem the customer's full store credit" action.
+		if (options.customerCreditRedemptionRequested) {
+			options.customerCreditRedemptionRequested.value = false;
+		}
+		if (options.customerCreditBlocked) {
+			options.customerCreditBlocked.value = false;
+		}
 
 		if (options.customerCreditDict) {
 			options.customerCreditDict.value.push(advance);
