@@ -1,5 +1,6 @@
 import frappe
-from frappe.utils import cint
+from frappe.utils import cint, cstr, getdate
+from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.invoices import (
     submit_printed_invoices,
 )
@@ -157,4 +158,51 @@ def get_payments_entries(pos_opening_shift):
             "party",
             "payment_type",
         ],
+    )
+
+
+@frappe.whitelist()
+def list_closing_shifts(pos_profile=None, search=None, from_date=None, to_date=None, limit=50):
+    """Return submitted POS Closing Shift records for the Z Report lookup/reprint
+    screen, scoped to the caller's authorized POS Profile.
+
+    pos_profile is only a hint for resolving that authorization -- it is never
+    trusted directly. get_authorized_pos_profile() re-validates the requesting
+    user actually has access to whichever profile it resolves to (assigned via
+    POS Profile User, or a profile-manager role) and throws otherwise, so there
+    is no path to seeing another store's shifts by passing a different name.
+    """
+    profile_doc = get_authorized_pos_profile(pos_profile)
+
+    filters = {
+        "docstatus": 1,
+        "pos_profile": profile_doc.name,
+    }
+    if from_date and to_date:
+        filters["posting_date"] = ["between", [getdate(from_date), getdate(to_date)]]
+    elif from_date:
+        filters["posting_date"] = [">=", getdate(from_date)]
+    elif to_date:
+        filters["posting_date"] = ["<=", getdate(to_date)]
+
+    or_filters = None
+    search = cstr(search).strip()
+    if search:
+        or_filters = [["name", "like", f"%{search}%"]]
+
+    return frappe.get_all(
+        "POS Closing Shift",
+        filters=filters,
+        or_filters=or_filters,
+        fields=[
+            "name",
+            "posting_date",
+            "period_end_date",
+            "user",
+            "grand_total",
+            "customer_credit_issued",
+            "customer_credit_redeemed",
+        ],
+        order_by="posting_date desc, period_end_date desc",
+        limit_page_length=max(1, min(cint(limit) or 50, 200)),
     )
