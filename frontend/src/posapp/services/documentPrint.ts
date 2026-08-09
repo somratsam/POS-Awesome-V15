@@ -1,5 +1,6 @@
 import { printDocumentViaQz, type QzPrintDocumentOptions } from "./qzTray";
 import { parseBooleanSetting } from "../utils/stock";
+import { useToastStore } from "../stores/toastStore.js";
 import {
 	printRawDocumentViaQz,
 	shouldUseRawDocumentPrinting,
@@ -33,6 +34,23 @@ export async function printDocumentViaConfiguredQz(options: ConfiguredQzDocument
 
 export function shouldUseConfiguredQzDocumentPrinting(profile?: Record<string, any> | null) {
 	return shouldUseRawDocumentPrinting(profile) || parseBooleanSetting(profile?.posa_silent_print);
+}
+
+export async function printZReport(closingShiftName: string) {
+	try {
+		await printDocumentViaQz({
+			doctype: "POS Closing Shift",
+			name: closingShiftName,
+			printFormat: "Z Report",
+			noLetterhead: 1,
+		});
+	} catch (err) {
+		console.warn("Failed to print Z Report", err);
+		useToastStore().show({
+			title: translate("Z Report print failed"),
+			color: "warning",
+		});
+	}
 }
 
 function translate(text: string) {
