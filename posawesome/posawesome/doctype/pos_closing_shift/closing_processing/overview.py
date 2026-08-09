@@ -477,6 +477,30 @@ def get_closing_shift_overview(pos_opening_shift):
                 conversion_rate,
             )
 
+    # "Exchanges Today": zero-cost alias over the same already-fetched
+    # `invoices` list -- no new query. Needs its own two passes (collect
+    # returning customers, then sum redemptions) since a customer's return
+    # can appear before or after their redeeming invoice in the list, unlike
+    # the single-pass accumulation above. Mirrors this function's own
+    # is_return definition (also true for a negative total without the flag
+    # set) for internal consistency with the returns figures above.
+    returning_customers = set()
+    for invoice in invoices:
+        invoice_total = invoice.get("rounded_total") or invoice.get("grand_total") or 0
+        is_return = bool(invoice.get("is_return")) or flt(invoice_total) < 0
+        if is_return and invoice.get("customer"):
+            returning_customers.add(invoice.get("customer"))
+
+    same_shift_exchange_total = 0.0
+    for invoice in invoices:
+        invoice_total = invoice.get("rounded_total") or invoice.get("grand_total") or 0
+        is_return = bool(invoice.get("is_return")) or flt(invoice_total) < 0
+        if is_return or invoice.get("customer") not in returning_customers:
+            continue
+        redeemed = flt(invoice.get("posa_redeemed_customer_credit"))
+        if redeemed > 0:
+            same_shift_exchange_total += redeemed
+
     for entry in payment_entries:
         mode = entry.get("mode_of_payment")
         payment_currency = (
@@ -802,6 +826,11 @@ def get_closing_shift_overview(pos_opening_shift):
             "company_currency_total": flt(returns_company_currency_total),
             "by_currency": prepare_currency_rows(returns_totals_by_currency, include_count=True),
         },
+        # "Exchanges Today" -- display-only breakdown of customer_credit_redeemed
+        # above: how much of it came from a customer who both returned an item
+        # and redeemed credit within this same shift. See same_shift_exchange_total
+        # on the POS Closing Shift doctype for the post-close equivalent.
+        "same_shift_exchange_total": flt(same_shift_exchange_total),
         "cash_expected": {
             "mode_of_payment": cash_mode_of_payment,
             "company_currency_total": flt(cash_expected_company_currency_total),

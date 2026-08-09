@@ -133,6 +133,7 @@ def get_z_report_data(pos_closing_shift):
         "grand_total": flt(doc.grand_total, CURRENCY_PRECISION),
         "customer_credit_issued": flt(doc.customer_credit_issued, CURRENCY_PRECISION),
         "customer_credit_redeemed": flt(doc.customer_credit_redeemed, CURRENCY_PRECISION),
+        "same_shift_exchange_total": flt(doc.same_shift_exchange_total, CURRENCY_PRECISION),
         "total_sales": flt(total_sales, CURRENCY_PRECISION),
         "total_returns": flt(total_returns, CURRENCY_PRECISION),
         "net_sales": flt(total_sales - total_returns, CURRENCY_PRECISION),

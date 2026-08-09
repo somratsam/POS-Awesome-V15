@@ -11,6 +11,7 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
     get_pos_invoices,
     get_payments_entries,
     get_shift_invoice_rows,
+    get_same_shift_exchange_total,
 )
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview import (
     get_closing_shift_overview,
@@ -58,6 +59,7 @@ class POSClosingShift(Document):
             )
         self.update_payment_reconciliation()
         self.update_customer_credit_totals()
+        self.update_same_shift_exchange_total()
 
     def update_payment_reconciliation(self):
         # update the difference values in Payment Reconciliation child table
@@ -85,6 +87,17 @@ class POSClosingShift(Document):
                 )
         self.customer_credit_issued = flt(credit_issued)
         self.customer_credit_redeemed = flt(credit_redeemed)
+
+    def update_same_shift_exchange_total(self):
+        # "Exchanges Today": display-only breakdown of how much of
+        # customer_credit_redeemed came from a customer who returned an item
+        # and redeemed credit within this same shift (a genuine exchange),
+        # as opposed to redeeming older, cross-visit credit. Deliberately a
+        # separate, independent method -- does not feed into or get fed by
+        # update_customer_credit_totals()'s own stored figures.
+        self.same_shift_exchange_total = flt(
+            get_same_shift_exchange_total(get_shift_invoice_rows(self))
+        )
 
     def on_submit(self):
         opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)

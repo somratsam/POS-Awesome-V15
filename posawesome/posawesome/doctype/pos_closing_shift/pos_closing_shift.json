@@ -31,6 +31,7 @@
   "total_quantity",
   "customer_credit_issued",
   "customer_credit_redeemed",
+  "same_shift_exchange_total",
   "column_break_16",
   "taxes",
   "section_break_14",
@@ -170,6 +171,13 @@
    "fieldname": "customer_credit_redeemed",
    "fieldtype": "Currency",
    "label": "Customer Credit Redeemed",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "same_shift_exchange_total",
+   "fieldtype": "Currency",
+   "label": "Exchanges Today",
    "read_only": 1
   },
   {
