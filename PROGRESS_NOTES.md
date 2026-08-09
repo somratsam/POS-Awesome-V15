@@ -23,6 +23,8 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `c4de168` — feat: track same-shift exchanges separately on Z Report ("Exchanges Today")
+- `ab0ba1b` — feat: enforce all-or-nothing customer credit redemption
 - `64d5c69` — feat: add VAT and Additional Information section to Z Report
 - `863d66f` — feat: add Z Report history/reprint dialog to POS Awesome
 - `f4aa91b` — refactor: extract printZReport into a shared, reusable service function
@@ -300,20 +302,17 @@ both actively-used, shared components.
 
 - **Z Report lookup + reprint — DONE, see Part C above.** Was deferred when Part B
   shipped; built later the same day. Not listed as still-open here anymore.
-- **Same-shift exchange distinction not carried into the Z Report.** The *old*,
-  invoice-level "Swan Sales Invoice" print format has logic to distinguish two cases
-  when `posa_redeemed_customer_credit > 0` on an invoice: if a matching return
-  invoice for the same customer exists **within the same POS opening shift**, it's
-  treated as an **"Exchange"** (the customer returned an item and immediately used
-  that value toward a new purchase in the same visit — arguably not real credit
-  issuance/redemption, just a swap); otherwise it's genuine **"Credit Applied"** from
-  an older, separate visit. The new shift-level `get_z_report_data()`/
-  `customer_credit_issued`/`customer_credit_redeemed` fields make **no such
-  distinction** — same-shift exchanges and genuine cross-visit credit redemptions are
-  currently summed together into one "Credit Issued Today"/"Credit Redeemed Today"
-  figure. Whether that's acceptable for a shift-level summary (as opposed to the
-  per-invoice receipt, where the distinction matters more) hasn't been decided —
-  worth raising with the business before treating today's numbers as final.
+- **Same-shift exchange distinction not carried into the Z Report — DONE
+  (2026-08-09), see Part F above.** The *old*, invoice-level "Swan Sales Invoice"
+  print format has logic to distinguish two cases when
+  `posa_redeemed_customer_credit > 0` on an invoice: if a matching return invoice
+  for the same customer exists **within the same POS opening shift**, it's
+  treated as an **"Exchange"**; otherwise it's genuine **"Credit Applied"** from
+  an older, separate visit. `customer_credit_issued`/`customer_credit_redeemed`
+  themselves still make no such distinction (unchanged, by design — see Part F's
+  display-only scope), but a new `same_shift_exchange_total` field/"Exchanges
+  Today" line now surfaces the same-shift portion as its own breakdown figure
+  alongside them, on the doctype, the pre-close overview, and the printed report.
 - **"Credit Issued Today" is definitionally just "Total Returns," not a real credit
   ledger figure.** Already noted under Part A above — flagging again here since it's
   the kind of thing that's easy to forget is a placeholder/approximation rather than
@@ -412,6 +411,106 @@ cross-shift-credit distinction for the *monetary* Credit Issued/Redeemed figures
 (see the bullet below) — this session only affects the plain return *count* label,
 not that figure's underlying computation.
 
+### Part E — Enforce all-or-nothing customer credit redemption (`ab0ba1b`)
+
+**Why**: confirmed company policy — customers must purchase items worth at least
+their available credit, and when eligible must redeem the *full* amount, never a
+partial one. Investigated the existing redemption flow first (`api/payments.py`'s
+`get_available_credit()`, `useRedemptionLogic.ts`) and confirmed partial redemption
+was fully possible before this change — no minimum, only upper-bound validation.
+
+**Frontend** (`useRedemptionLogic.ts`): `normalizeCustomerCreditAllocations()` is
+now the single place that re-derives eligibility every time it runs (triggered by
+credit-dict changes, loyalty changes, *and* a new watcher on the invoice total —
+needed because a cashier can leave Payments to add items, then come back, and
+nothing else re-triggers a fetch). Ineligible → toggle stays **on**, redemption
+held at 0, a banner explains why (auto-applies once the cart grows enough — no
+re-toggle needed, per explicit user confirmation on this UX point). Eligible →
+every row forced to its full amount; manual edits snap back.
+
+**Backend** (`creation.py`): new `_validate_customer_credit_redemption()`,
+called from `submit_invoice()`, re-fetches real available credit server-side via
+the same `get_available_credit()` the frontend calls — previously
+`redeemed_customer_credit` was trusted verbatim from the client payload with no
+re-verification, a real gap now closed.
+
+**M-Pesa carve-out**: investigation found `usePaymentMethods.ts`'s
+`set_mpesa_payment()` reuses the *exact same* `customer_credit_dict`/
+`redeemed_customer_credit` state shape and row shape as genuine balance
+redemption, for a deliberately partial, unrelated settlement amount (a specific
+mobile-money payment, not "redeem all my credit"). Scoped via a new
+`customer_credit_redemption_requested` flag, set only by the genuine toggle
+flow and never by M-Pesa — confirmed both flags get reset even if a genuine
+redemption was already in progress when M-Pesa takes over
+(`usePaymentMethods.spec.ts`). M-Pesa is not configured on staging currently
+(`Mpesa C2B Register URL` has zero rows for Swan), so this was a latent risk
+caught before it could bite, not an active bug.
+
+Confirmed via code tracing, not assumption: "Allow Partial Payment"
+(`posa_allow_partial_payment`) only gates whether *total* payments across all
+methods can be less than the invoice total — a different comparison entirely
+from "was the full available credit redeemed." Multi-method remainder-splitting
+(`rebalancePreferredPaymentLine()`) only reads whatever `redeemedCustomerCredit`
+currently equals — unaffected by whether that number came from a manual edit or
+the new forced-full logic. Verified live end-to-end on staging: a real invoice
+with full credit (139.3) redeemed and the remainder split Visa (8.1) + Cash (3).
+
+**Deferred from this work**: a "Deadlock Occurred" error surfaced during this
+same live test — investigated in depth (see the deferred bullet below); confirmed
+pre-existing and NOT caused by this validation, though its extra DB call may
+slightly widen the pre-existing race's timing window.
+
+### Part F — "Exchanges Today" same-shift exchange tracking (`c4de168`)
+
+**Why**: the Sales Invoice receipt (Print Format "Swan Sales Invoice", hand-authored,
+not in git — same situation as the old raw Z Report before it was migrated) already
+distinguishes a genuine same-visit exchange from real cross-shift credit redemption
+at the *single-invoice* level: an existence check (does this customer have any
+return in the same POS Opening Shift?), driving "Exchange Value" vs "Credit
+Applied" on the printed receipt. That distinction was never rolled up to the
+shift/Z Report level. Deliberately scoped as **display-only** — no changes to
+`update_customer_credit_totals()` or any stored accounting figure.
+
+New `get_same_shift_exchange_total()` (`closing_processing/data.py`) mirrors the
+receipt's own existence-check simplification (not per-source amount attribution)
+— now reliable end-to-end since Part E's all-or-nothing enforcement removes the
+"was this a partial exchange" ambiguity for the genuine-redemption case. Shown in
+the same three places Part A's Customer Credit Issued/Redeemed already are: a new
+`same_shift_exchange_total` stored field on POS Closing Shift (computed by
+`update_same_shift_exchange_total()`, called as a **sibling** to — not inside —
+the existing `update_customer_credit_totals()`, which is untouched), the pre-close
+overview screen (zero-cost alias over the already-fetched invoice list in
+`get_closing_shift_overview()`, no new query), and the printed Z Report's
+Customer Credit section as "Exchanges Today" (label chosen from a few
+staff-friendly options, matching the report's existing plain tone).
+
+**Known inherited limitation, not new**: because M-Pesa (Part E above) sets
+`posa_redeemed_customer_credit` through the same field, a customer who pays via
+M-Pesa *and* has a same-shift return would have that M-Pesa amount miscounted
+as a same-shift exchange. This is not a new risk from this feature — the
+existing single-invoice receipt logic has the identical characteristic already,
+since both use the same `posa_redeemed_customer_credit > 0` condition. Low risk
+today since M-Pesa isn't configured for this business; worth remembering if it
+ever is.
+
+Verified live against a real multi-customer shift on staging
+(`POSA-OS-26-0000008`): two separate customers, each returning then redeeming
+within the same shift (139.3 + 172.5), summed correctly to 311.8 across the
+stored field, the pre-close overview, and the printed report. New unit tests,
+`test_same_shift_exchange.py`, 5/5 passing (the real scenario above plus edge
+cases: no returns, wrong customer, no redemption despite a return).
+
+**Verified for both Part E and Part F together** (final combined check before
+commit): backend — `test_pos_closing_shift.py` 9/9, `test_cash_movement_integration.py`
+2/2, `test_same_shift_exchange.py` 5/5, `test_offline_sync_invoices.py` 4/4,
+`test_customer_credit_invoice_fields.py` 2/2, `test_submitted_invoice_shift_security.py`
+1/1 — all in isolation, all passing. Frontend: `vue-tsc --noEmit` clean, full
+`vitest run` 217/217 files / 1054/1054 tests. `bench build --app posawesome --force`
+and `bench --site staging.local migrate`: both clean, exit 0. Security review
+covering both features together: no new whitelisted endpoints, no new
+client-controllable input, no new SQL — both features' new code paths operate
+on data already fetched via existing, already-scoped queries.
+
 ## 3. What `4c7fdd2` and `189692c` fixed
 
 **`4c7fdd2` — attribute chip fix** — `frontend/src/posapp/composables/pos/items/addition/useItemCreation.ts`
@@ -485,9 +584,24 @@ found.
   leaving "Use Server Cache" OFF in POS Profile settings (see baseline below).
   Proper code fix (e.g. skip-caching empty results, or a dedicated cache-bust hook
   on POS Profile save) still pending.
+- **Known issue (2026-08-09): rare "Deadlock Occurred" / HTTP 508 error can appear
+  during invoice submission** (confirmed root cause: a pre-existing race condition
+  in the Submission Ledger's optimistic-locking, most likely triggered by
+  offline-sync retry logic combined with hourly scheduler job bursts — NOT caused
+  by the credit redemption validation added today, though that validation's extra
+  DB call may slightly widen the timing window). Observed specifically on a
+  full-credit + Visa + Cash 3-way split; a simpler full-credit + Visa case worked
+  without issue. IMPORTANT: in the observed case, the sale actually SUBMITTED
+  SUCCESSFULLY despite the error being shown — real risk is cashier
+  confusion/possible accidental duplicate retry, not actual transaction failure.
+  Needs investigation: (1) whether the existing duplicate-submission guard would
+  actually catch a retry in this scenario, (2) whether the submission-ledger's
+  locking can be hardened. Deferred for a future session.
 
-(See section 2 above for today's new deferred items: Z Report lookup/reprint,
-same-shift exchange distinction, Credit Issued definition, VAT section.)
+(Z Report lookup/reprint, the same-shift exchange distinction, and the VAT
+section are all done now — see section 2 above. Still genuinely open: "Credit
+Issued Today" is definitionally just "Total Returns," not a real credit-ledger
+figure — a business definition question, not a bug.)
 
 ## 5. Recommended POS Profile baseline settings
 
