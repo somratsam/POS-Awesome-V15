@@ -78,6 +78,8 @@ def get_shift_invoice_rows(closing_shift_doc):
         "discount_amount",
         "base_discount_amount",
         "posa_redeemed_customer_credit",
+        "total_taxes_and_charges",
+        "base_total_taxes_and_charges",
     ]
 
     rows = []

@@ -44,8 +44,13 @@ def get_z_report_data(pos_closing_shift):
     per-mode cash reconciliation, customer credit issued/redeemed) with
     fresh invoice-derived totals that have no stored equivalent anywhere:
     sales-only quantity (doc.total_quantity nets in returns, confirmed wrong
-    for this purpose), discount totals, and per-payment-mode transaction
+    for this purpose), discount totals, VAT, and per-payment-mode transaction
     counts.
+
+    VAT is summed row-wise from each sale invoice's actual
+    total_taxes_and_charges (not back-calculated from total_sales via a
+    hardcoded rate), so it stays correct regardless of tax rate changes or
+    future per-item/per-customer tax exceptions.
     """
     doc = frappe.get_doc("POS Closing Shift", pos_closing_shift)
     if doc.docstatus != 1:
@@ -59,6 +64,7 @@ def get_z_report_data(pos_closing_shift):
     return_count = 0
     total_qty = 0.0
     total_discount = 0.0
+    total_vat = 0.0
     sale_names = []
     return_names = []
 
@@ -77,6 +83,15 @@ def get_z_report_data(pos_closing_shift):
             total_discount += get_base_value(
                 row, "discount_amount", "base_discount_amount", conversion_rate
             )
+            total_vat += get_base_value(
+                row, "total_taxes_and_charges", "base_total_taxes_and_charges", conversion_rate
+            )
+
+    net_excl_vat = total_sales - total_vat
+    items_per_receipt = flt(total_qty / sale_count, 2) if sale_count else 0.0
+    sales_per_receipt = flt(total_sales / sale_count, CURRENCY_PRECISION) if sale_count else 0.0
+    sales_per_item = flt(total_sales / total_qty, CURRENCY_PRECISION) if total_qty else 0.0
+    total_register_count = sale_count + return_count
 
     pos_profile_doc = frappe.db.get_value(
         "POS Profile",
@@ -125,6 +140,12 @@ def get_z_report_data(pos_closing_shift):
         "return_count": return_count,
         "total_qty": flt(total_qty),
         "total_discount": flt(total_discount, CURRENCY_PRECISION),
+        "total_vat": flt(total_vat, CURRENCY_PRECISION),
+        "net_excl_vat": flt(net_excl_vat, CURRENCY_PRECISION),
+        "items_per_receipt": items_per_receipt,
+        "sales_per_receipt": sales_per_receipt,
+        "sales_per_item": sales_per_item,
+        "total_register_count": total_register_count,
         "payment_modes": payment_modes,
         "payment_reconciliation": payment_reconciliation,
     }
