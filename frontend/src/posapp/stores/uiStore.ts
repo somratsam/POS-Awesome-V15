@@ -59,6 +59,16 @@ export const useUIStore = defineStore("ui", () => {
   const ordersDialog = ref(false);
   const ordersData = ref<any[]>([]);
 
+  const zReportHistoryDialog = ref(false);
+
+  const openZReportHistory = () => {
+    zReportHistoryDialog.value = true;
+  };
+
+  const closeZReportHistory = () => {
+    zReportHistoryDialog.value = false;
+  };
+
   const setActiveView = (view: string) => {
     activeView.value = view;
   };
@@ -314,6 +324,9 @@ export const useUIStore = defineStore("ui", () => {
     ordersData,
     openOrders,
     closeOrders,
+    zReportHistoryDialog,
+    openZReportHistory,
+    closeZReportHistory,
     posProfile,
     stockSettings,
     companyDoc,

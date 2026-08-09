@@ -125,8 +125,9 @@ describe("NavbarMenu cashier pin management", () => {
 			"share-last-invoice",
 			"sync-offline-sales",
 			"close-shift",
+			"z-report-history",
 		]);
-		expect((wrapper.vm as any).quickActionRows).toHaveLength(6);
+		expect((wrapper.vm as any).quickActionRows).toHaveLength(7);
 		expect((wrapper.vm as any).quickActionRows.every((row: any[]) => row.length === 1)).toBe(true);
 
 		await (wrapper.vm as any).openSettingsPanel();

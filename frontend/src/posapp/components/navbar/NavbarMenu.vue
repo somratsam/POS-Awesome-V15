@@ -450,6 +450,14 @@ export default {
 							handler: "closeShift",
 						}
 					: null,
+				{
+					id: "z-report-history",
+					label: __("Z Report History"),
+					subtitle: __("Look up and reprint a past shift's Z Report"),
+					icon: "mdi-file-document-outline",
+					tone: "secondary",
+					handler: "openZReportHistoryAction",
+				},
 			];
 
 			return actions.filter(Boolean);
@@ -652,6 +660,10 @@ export default {
 				case "closeShift":
 					this.closeMenu();
 					this.$emit("close-shift");
+					break;
+				case "openZReportHistoryAction":
+					this.closeMenu();
+					this.$emit("open-z-report-history");
 					break;
 				case "openLanguageDialog":
 					this.closeMenu();
@@ -877,6 +889,7 @@ export default {
 		"toggle-theme",
 		"logout",
 		"refresh-cache-usage",
+		"open-z-report-history",
 	],
 };
 </script>

@@ -102,6 +102,7 @@ describe("NavbarMenu action surfaces", () => {
 			"share-last-invoice",
 			"sync-offline-sales",
 			"close-shift",
+			"z-report-history",
 		]);
 		expect((wrapper.vm as any).quickActions[3].label).toBe("Share Last Invoice");
 		expect((wrapper.vm as any).quickActions[4].label).toBe("Sync Offline Sales");

@@ -83,6 +83,7 @@
 					@open-employee-switch="openEmployeeSwitch"
 					@lock-pos="lockPosScreen"
 					@share-last-invoice="$emit('share-last-invoice')"
+					@open-z-report-history="uiStore.openZReportHistory()"
 					@open-customer-display="$emit('open-customer-display')"
 					@clear-cache="clearCache"
 					@show-about="showAboutDialog = true"

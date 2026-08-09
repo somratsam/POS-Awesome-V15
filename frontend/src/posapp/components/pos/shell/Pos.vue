@@ -7,6 +7,7 @@
 		<Drafts></Drafts>
 		<InvoiceManagement></InvoiceManagement>
 		<SalesOrders></SalesOrders>
+		<ZReportHistoryDialog></ZReportHistoryDialog>
 		<Returns></Returns>
 		<NewAddress></NewAddress>
 		<MpesaPayments></MpesaPayments>
@@ -293,6 +294,7 @@ import PosCoupons from "../offers/PosCoupons.vue";
 import Drafts from "../flows/Drafts.vue";
 import InvoiceManagement from "../flows/InvoiceManagement.vue";
 import SalesOrders from "../flows/SalesOrders.vue";
+import ZReportHistoryDialog from "../closing/ZReportHistoryDialog.vue";
 import NewAddress from "../customer/NewAddress.vue";
 import Variants from "../items/Variants.vue";
 import Returns from "../flows/Returns.vue";
@@ -917,6 +919,7 @@ export default {
 		Variants,
 		MpesaPayments,
 		SalesOrders,
+		ZReportHistoryDialog,
 	},
 
 	methods: {
