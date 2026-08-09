@@ -1,6 +1,6 @@
 # POS Awesome — develop-swan Fork Progress Notes
 
-Last updated: 2026-08-06
+Last updated: 2026-08-09
 
 This file exists so a future session (mine or another Claude Code session) can pick up
 context on this fork quickly without re-deriving it from scratch. If you're starting
@@ -23,6 +23,7 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `64d5c69` — feat: add VAT and Additional Information section to Z Report
 - `863d66f` — feat: add Z Report history/reprint dialog to POS Awesome
 - `f4aa91b` — refactor: extract printZReport into a shared, reusable service function
 - `6d136d7` — feat: add list_closing_shifts for the Z Report history/reprint lookup
@@ -317,11 +318,99 @@ both actively-used, shared components.
   ledger figure.** Already noted under Part A above — flagging again here since it's
   the kind of thing that's easy to forget is a placeholder/approximation rather than
   a deliberate design choice.
-- **VAT section intentionally left out of the new Z Report.** The old raw report had
-  a hardcoded 5% VAT calculation. Left out of the new HTML version per explicit user
-  instruction ("leave out VAT for now — will add later once VAT is configured on
-  staging and we can verify real numbers"). Add once that's ready — don't assume the
-  omission was accidental.
+- **VAT section — DONE, see Part D below.** Was intentionally left out of the new
+  HTML Z Report per explicit user instruction ("leave out VAT for now — will add
+  later once VAT is configured on staging and we can verify real numbers"). VAT
+  was configured on staging and the section was built and verified 2026-08-09.
+
+### Part D — VAT + Additional Information section (2026-08-09, `64d5c69`)
+
+**Why this happened**: deferred from Part B specifically because VAT wasn't
+configured on staging yet (see the now-resolved deferred bullet above). Once it
+was, this filled in the Z Report's "Additional Information" section from the old
+raw report's reference wording (Number of Receipts, Number of Returns, Number of
+Items, Items/Receipt, Discounts Granted, Tax Incl. Sales Figure, VAT Amount, Net
+Excl. VAT, Sales Figure/Receipt, Sales Figure/Item, plus a Total Sales Receipts /
+Total Register line), backed by real numbers instead of the old hardcoded-rate
+approach.
+
+**Real tax setup found on staging** (confirmed via `bench console` before writing
+any code, per the standing verify-against-live-state rule): one `Sales Taxes and
+Charges Template`, "VAT 5% Inclusive - S", company Swan, `is_default: 1`, single
+tax row — `charge_type: On Net Total`, `rate: 5.0`, `account_head: VAT - S`,
+`included_in_print_rate: 1` (item prices are tax-inclusive; `grand_total` is the
+tax-inclusive figure, `net_total` is back-derived). No `Tax Category`, `Item Tax
+Template`, or `Tax Rule` records exist — a genuinely flat, single-rate setup.
+
+**Important gotcha found along the way, since fixed by the user**: the template's
+`is_default: 1` flag does *not* make it apply automatically to POS Awesome
+invoices. Traced the real code path (`sales_invoice.py`/`pos_invoice.py`'s
+POS-specific `set_missing_values()`, `AccountsController.set_taxes()` /
+`set_taxes_and_charges()` in `accounts_controller.py`): a POS-Awesome-created
+invoice only gets tax applied if the **POS Profile's own `taxes_and_charges`
+field** is set (it gets copied onto the invoice, which then triggers
+`set_taxes()`). The company-default fallback (`set_other_charges()`) is only
+reachable via Customer/Lead-quotation mapped-doc transforms, not POS Awesome's
+invoice creation path. Confirmed live: the template existed for ~25 minutes
+before any invoice used it, because the POS Profile ("Test Pos") had
+`taxes_and_charges: None` — fixed by linking it on the POS Profile, after which
+the very next invoice (`ACC-SINV-2026-00024`) correctly showed
+`total_taxes_and_charges: 9.686` against `net_total: 193.714`,
+`grand_total: 203.4` (math confirmed both directions: `net_total × 5% = 9.686`
+and `net_total + tax = grand_total` exactly).
+
+**Implementation** (`closing_processing/data.py`, `closing_processing/z_report.py`,
+`print_format/z_report/z_report.json`):
+- `get_shift_invoice_rows()` now also selects `total_taxes_and_charges` /
+  `base_total_taxes_and_charges` per invoice (both real columns — unlike
+  `posa_redeemed_customer_credit`, no missing-base-column special case needed).
+- `get_z_report_data()` sums VAT row-wise via `get_base_value()` across the
+  shift's non-return invoices — the same multi-currency-safe pattern already used
+  for `total_discount` — **not** a hardcoded `total_sales × rate / (100 + rate)`
+  formula like the old raw report used. With today's flat single-rate setup the
+  two approaches happen to produce identical numbers, but reading the real
+  per-invoice tax amount stays correct if the rate changes or item/customer-level
+  exceptions get added later, without needing a code change.
+- New derived fields: `total_vat`, `net_excl_vat` (`total_sales - total_vat`),
+  `items_per_receipt`, `sales_per_receipt`, `sales_per_item` (all guarded against
+  divide-by-zero for a no-sales shift), `total_register_count`
+  (`sale_count + return_count`). `net_sales` (already returned) is reused as-is
+  for the "Total Register" line's net amount — no duplicate field needed.
+- `Tax Incl. Sales Figure` reuses the existing `total_sales` field directly — it
+  was already tax-inclusive by construction (sum of `base_grand_total`), confirmed
+  against the real taxed invoice above (`get_base_value()` on that invoice's row
+  returned `203.4`, exactly `grand_total`).
+- Print format: new "Additional Information" section added between "Cash Balance"
+  and the footer, same `.section-label`/`.row` markup as the rest of the report.
+  One deliberate wording choice: the count-of-returns line is labeled **"Number of
+  Returns"**, not "Number of Credit Notes" — staff's everyday vocabulary only
+  calls a *cross-shift* return a "credit note"; a same-shift return-and-rebuy is
+  just an "exchange" to them, even though ERPNext creates a credit note document
+  either way. This is a plain count of every return in the shift regardless of
+  same-shift vs. cross-shift — it does **not** attempt the
+  same-shift-exchange-vs-cross-shift distinction, which is still deferred (see
+  below). Proper accounting terminology is untouched everywhere else in the
+  system; this is purely a wording choice for this one staff-facing printed line.
+
+**Verified**: real invoice math traced above; `get_z_report_data()` sanity-checked
+live via `bench console` against an already-closed, pre-VAT shift
+(`POSA-CS-26-0000006`) before any tax data existed, to confirm the new fields
+compute cleanly with no exceptions and no divide-by-zero on a single-receipt shift
+(`total_vat: 0.0`, `net_excl_vat` = `total_sales`, ratios all correct). Later
+confirmed end-to-end against a real closed shift containing the taxed invoice,
+with the printed report's new section checked against hand-computed numbers.
+Backend: `test_pos_closing_shift.py` 9/9, `test_cash_movement_integration.py` 2/2,
+both passing. Frontend: full `vitest run`, 217/217 files, 1051/1051 tests passing
+(no frontend files touched by this change; run anyway per standing convention).
+`bench build --app posawesome --force`: clean, exit 0. `bench --site staging.local
+migrate`: clean, exit 0 — confirmed via direct DB query that the "Z Report" Print
+Format record's `html` column actually contains the new section text post-migrate,
+not just that migrate didn't error.
+
+**Still deferred, unchanged by this work**: the same-shift-exchange vs.
+cross-shift-credit distinction for the *monetary* Credit Issued/Redeemed figures
+(see the bullet below) — this session only affects the plain return *count* label,
+not that figure's underlying computation.
 
 ## 3. What `4c7fdd2` and `189692c` fixed
 
@@ -426,3 +515,14 @@ Template Items" — if "Show Template Items" gets unchecked, "Hide Variants Item
 disappears from the form but its stored value does NOT reset, and can still silently
 affect the backend query. Worth checking both fields together whenever revisiting
 this baseline.
+
+## 6. Environment notes
+
+- **WSL2 memory allocation must be at least 6GB for `bench build --app posawesome`
+  to succeed.** At the default/lower allocation (4GB), the frontend build (Vite,
+  large Vuetify + MDI icon bundle) gets OOM-killed partway through — exits with
+  code 137 (SIGKILL), or 143 (SIGTERM) if it was also running as a backgrounded
+  process that got torn down. Confirmed 2026-08-09: a build failed twice at 4GB,
+  succeeded immediately once the user raised WSL2's memory cap to 6GB (via
+  `.wslconfig`). If a build fails with 137/143 and the code changes look correct,
+  check WSL2's memory allocation before assuming the build itself is broken.
