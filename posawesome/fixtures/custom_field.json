@@ -6525,6 +6525,16 @@
 	{
 		"doctype": "Custom Field",
 		"dt": "POS Profile",
+		"fieldname": "posa_receipt_logo",
+		"fieldtype": "Attach Image",
+		"insert_after": "posa_qz_printer_name",
+		"label": "Receipt Logo",
+		"description": "Logo printed at the top of this POS Profile's receipts. Stored locally and embedded directly into the print -- no external image fetch at print time. Leave blank to print no logo.",
+		"name": "POS Profile-posa_receipt_logo"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
 		"fieldname": "posa_raw_printing",
 		"fieldtype": "Check",
 		"insert_after": "posa_qz_printer_name",
