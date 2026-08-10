@@ -27,7 +27,7 @@
 							@update:model-value="$emit('update:isWriteOffChange', $event)"
 						></v-switch>
 					</v-col>
-					<v-col cols="12" v-if="invoiceDoc.is_return && posProfile.use_cashback">
+					<v-col cols="12" v-if="invoiceDoc.is_return && posProfile.use_cashback && !creditOnlyPolicy">
 						<v-switch
 							:model-value="isCashback"
 							color="primary"
@@ -42,10 +42,18 @@
 							:model-value="isCreditReturn"
 							color="primary"
 							flat
+							:disabled="creditOnlyPolicy"
 							:label="$frappe._('Store as Credit?')"
 							class="my-0 pa-1"
 							@update:model-value="$emit('update:isCreditReturn', $event)"
 						></v-switch>
+						<p v-if="creditOnlyPolicy" class="payment-options-panel__helper mx-1">
+							{{
+								$frappe._(
+									"Required by this POS Profile's return policy -- refunds are disabled, every return is recorded as store credit.",
+								)
+							}}
+						</p>
 					</v-col>
 					<v-col cols="12" v-if="!invoiceDoc.is_return && posProfile.use_customer_credit">
 						<v-switch
@@ -256,6 +264,11 @@ const emit = defineEmits([
 ]);
 
 const $frappe = inject("frappe", window.frappe);
+
+// Confirmed business policy: exchange/credit only for returns. When on,
+// "Store as Credit?" is forced and shown disabled rather than hidden, so
+// staff see it's a deliberate policy lock, not a missing feature.
+const creditOnlyPolicy = computed(() => Boolean(props.posProfile?.posa_returns_credit_only));
 
 const handleRedeemCustomerCreditUpdate = (val) => {
 	emit("update:redeemCustomerCredit", val);

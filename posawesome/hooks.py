@@ -369,6 +369,7 @@ fixtures = [
                     "POS Profile-posa_language",
                     "POS Profile-posa_enable_return_validity",
                     "POS Profile-posa_return_validity_days",
+                    "POS Profile-posa_returns_credit_only",
                     "POS Profile-posa_enable_cash_movement",
                     "POS Profile-posa_allow_pos_expense",
                     "POS Profile-posa_allow_cash_deposit",

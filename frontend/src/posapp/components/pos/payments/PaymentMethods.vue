@@ -1,6 +1,18 @@
 <template>
 	<div v-if="payments && payments.length" class="payment-methods">
 		<div
+			v-if="isReturn && creditOnlyReturn"
+			class="payment-methods__credit-only-note"
+			data-testid="payment-methods-credit-only-note"
+		>
+			{{
+				__(
+					"Payment methods are disabled for this return -- it will be recorded as store credit, per this POS Profile's return policy.",
+				)
+			}}
+		</div>
+		<template v-else>
+		<div
 			v-for="(payment, paymentIndex) in payments"
 			:key="payment.name"
 			class="payment-method-card"
@@ -136,6 +148,7 @@
 				</v-col>
 			</v-row>
 		</div>
+		</template>
 	</div>
 </template>
 
@@ -159,6 +172,7 @@ const props = defineProps({
 		default: () => false,
 	},
 	showKeyboardShortcuts: Boolean,
+	creditOnlyReturn: Boolean,
 });
 
 const emit = defineEmits([
@@ -189,6 +203,16 @@ const blurTarget = (event) => {
 	display: flex;
 	flex-direction: column;
 	gap: var(--pos-space-2);
+}
+
+.payment-methods__credit-only-note {
+	background: var(--pos-surface-raised);
+	border: 1px solid var(--pos-border-light);
+	border-radius: var(--pos-radius-md);
+	padding: var(--pos-space-3);
+	font-size: 0.85rem;
+	line-height: 1.45;
+	color: var(--pos-text-secondary);
 }
 
 .payment-method-card {

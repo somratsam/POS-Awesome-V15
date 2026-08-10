@@ -1349,7 +1349,9 @@ def _resolve_payment_amounts(payment, conversion_rate=1):
     return amount, base_amount
 
 
-def _normalize_return_payment_rows(invoice_doc, conversion_rate=1):
+def _normalize_return_payment_rows(
+    invoice_doc, conversion_rate=1, pos_profile_doc=None, enforce_credit_only_policy=False
+):
     if not invoice_doc.is_return:
         return
 
@@ -1364,7 +1366,7 @@ def _normalize_return_payment_rows(invoice_doc, conversion_rate=1):
     invoice_doc.paid_amount = flt(sum(p.amount for p in invoice_doc.payments or []))
     invoice_doc.base_paid_amount = flt(sum(p.base_amount for p in invoice_doc.payments or []))
 
-    _guard_return_cash_refund(invoice_doc)
+    _guard_return_cash_refund(invoice_doc, pos_profile_doc, enforce_credit_only_policy)
 
 
 def _payment_row_key(row):
@@ -1468,22 +1470,52 @@ def _run_without_return_outstanding_prompts(invoice_doc, operation):
             ]
 
 
-def _guard_return_cash_refund(invoice_doc):
-    """Block a cash refund larger than what was actually paid on the original.
+def _guard_return_cash_refund(invoice_doc, pos_profile_doc=None, enforce_credit_only_policy=False):
+    """Block a cash/card refund on a return, per policy.
 
-    A return against an UNPAID (credit / on-account) invoice must not pay out
-    cash: the credit should reduce the customer's outstanding instead. Refunding
-    cash here both gives money for an unpaid sale and leaves the customer's
-    balance untouched, while corrupting the cash drawer. We cap the refund at
-    the amount the customer actually paid on the original invoice and reject
-    anything beyond it so the error surfaces instead of silently losing money.
+    Two layers, checked in order:
+
+    1. Confirmed business policy: exchange/credit only, no refund of any kind.
+       If the POS Profile has posa_returns_credit_only enabled, block ANY
+       nonzero payment amount outright -- returns must be recorded as store
+       credit, full stop. Only enforced when enforce_credit_only_policy is
+       True -- genuine final submission (submit_invoice /
+       submit_in_background_job), never during update_invoice's draft-save/
+       cart-building calls, where payment amounts may still be in an
+       intermediate, not-yet-decided state (e.g. a default pre-fill before
+       the cashier has even reached the Payments screen). This check runs
+       before the return_against check below so it also covers returns not
+       linked to an original invoice (posa_allow_return_without_invoice),
+       which layer 2 silently skips.
+    2. Otherwise (policy not enforced here, or no profile doc available):
+       the original, narrower guard -- a return against an UNPAID (credit /
+       on-account) invoice must not pay out cash, since the credit should
+       reduce the customer's outstanding instead. Cap the refund at the
+       amount the customer actually paid on the original invoice and reject
+       anything beyond it so the error surfaces instead of silently losing
+       money.
     """
+    if not invoice_doc.get("is_return"):
+        return
+
+    # paid_amount is negative for returns; the refund is its magnitude.
+    refund = abs(flt(invoice_doc.paid_amount))
+
+    if enforce_credit_only_policy and pos_profile_doc and cint(pos_profile_doc.get("posa_returns_credit_only")):
+        if refund > 0:
+            frappe.throw(
+                _(
+                    "This POS Profile only allows returns to be recorded as store "
+                    "credit -- refunds are disabled by policy. Set every payment "
+                    'amount to 0 and use "Store as Credit?" instead.'
+                )
+            )
+        return
+
     return_against = invoice_doc.get("return_against")
     if not return_against:
         return
 
-    # paid_amount is negative for returns; the cash refunded is its magnitude.
-    refund = abs(flt(invoice_doc.paid_amount))
     if refund <= 0:
         return
 
@@ -1758,7 +1790,7 @@ def update_invoice(data):
     data["plc_conversion_rate"] = plc_conversion_rate
     data["exchange_rate_date"] = exchange_rate_date
 
-    _normalize_return_payment_rows(invoice_doc, conversion_rate)
+    _normalize_return_payment_rows(invoice_doc, conversion_rate, profile_doc)
 
     _apply_return_outstanding_policy(invoice_doc)
 
@@ -2122,7 +2154,9 @@ def submit_invoice(invoice, data, submit_in_background=False):
 
     _apply_invoice_gift_card_settlement(invoice_doc, data)
     _apply_customer_credit_print_fields(invoice_doc, data)
-    _normalize_return_payment_rows(invoice_doc, invoice_doc.get("conversion_rate") or 1)
+    _normalize_return_payment_rows(
+        invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
+    )
     _apply_return_outstanding_policy(invoice_doc)
 
     payments = [
@@ -2150,7 +2184,9 @@ def submit_invoice(invoice, data, submit_in_background=False):
         invoice_doc,
         lambda: _save_draft_with_latest_timestamp(invoice_doc),
     )
-    _normalize_return_payment_rows(invoice_doc, invoice_doc.get("conversion_rate") or 1)
+    _normalize_return_payment_rows(
+        invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
+    )
 
     if data.get("due_date"):
         frappe.db.set_value(
@@ -2342,10 +2378,14 @@ def submit_in_background_job(kwargs):
         _apply_loyalty_redemption_settings(invoice_doc, invoice_doc.pos_profile)
 
         _apply_invoice_gift_card_settlement(invoice_doc, data)
-        _normalize_return_payment_rows(invoice_doc, invoice_doc.get("conversion_rate") or 1)
+        _normalize_return_payment_rows(
+            invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
+        )
 
         invoice_doc = _save_draft_with_latest_timestamp(invoice_doc)
-        _normalize_return_payment_rows(invoice_doc, invoice_doc.get("conversion_rate") or 1)
+        _normalize_return_payment_rows(
+            invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
+        )
 
         invoice_doc.submit()
         if ledger_doc:

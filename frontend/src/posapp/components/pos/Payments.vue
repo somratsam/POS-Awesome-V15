@@ -67,6 +67,7 @@
 							:isMpesaC2bPayment="is_mpesa_c2b_payment"
 							:isGiftCardPayment="isGiftCardPayment"
 							:show-keyboard-shortcuts="counterGridMode"
+							:credit-only-return="returnsCreditOnlyPolicy"
 							@update-amount="handlePaymentAmountChange"
 							@set-full-amount="set_full_amount"
 							@set-denomination="setPaymentToDenomination"
@@ -785,6 +786,15 @@ const visiblePaymentMethods = computed(() =>
 
 const creditSaleAllowed = computed(() => parseBooleanSetting(pos_profile.value?.posa_allow_credit_sale));
 
+// Confirmed business policy: exchange/credit only for returns, no refund of any
+// kind. When this POS Profile setting is on, "Store as Credit?" is forced on
+// and no payment method may carry a nonzero amount on a return -- see the
+// applyReturnCreditDefault() short-circuit and the watch(is_credit_return, ...)
+// guard below, plus the matching server-side guard in _guard_return_cash_refund().
+const returnsCreditOnlyPolicy = computed(() =>
+	parseBooleanSetting(pos_profile.value?.posa_returns_credit_only),
+);
+
 const giftCardAppliedAmount = computed(() =>
 	(Array.isArray(giftCardRedemptions.value) ? giftCardRedemptions.value : []).reduce(
 		(sum, row) => sum + flt(row?.amount || 0, currency_precision.value),
@@ -1323,6 +1333,11 @@ const ensurePaymentLinesInitialized = (doc = invoice_doc.value) => {
 // original) set when the return is loaded; if unknown we leave behaviour as is.
 const applyReturnCreditDefault = (doc) => {
 	if (!doc || !doc.is_return) {
+		return;
+	}
+	if (returnsCreditOnlyPolicy.value) {
+		is_credit_return.value = true;
+		is_cashback.value = false;
 		return;
 	}
 	if (!shouldApplyReturnRefundCap(doc)) {
@@ -2074,6 +2089,24 @@ watch(is_credit_return, (newVal) => {
 		ensureReturnPaymentsAreNegative();
 	}
 });
+
+// Defensive backstop for the credit-only return policy: applyReturnCreditDefault
+// already sets is_credit_return=true proactively whenever the policy is active,
+// but there are several other places in this file that reset is_credit_return to
+// false (cancel/reload/new-return flows). Rather than patch every one of those
+// individually -- fragile against a future one being missed -- this watcher
+// re-forces it back to true from any of them, for as long as the policy is on
+// and the current doc is a return. Setting the ref here re-triggers the
+// watch(is_credit_return, ...) above, so payments still get correctly zeroed.
+watch(
+	[is_credit_return, () => invoice_doc.value?.is_return, returnsCreditOnlyPolicy],
+	() => {
+		if (invoice_doc.value?.is_return && returnsCreditOnlyPolicy.value && !is_credit_return.value) {
+			is_credit_return.value = true;
+		}
+	},
+	{ immediate: true },
+);
 
 // Keep "Cashback?" and "Store as Credit?" mutually exclusive for a return.
 // The is_credit_return watch already flips is_cashback; this mirrors the other
