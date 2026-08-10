@@ -6537,7 +6537,7 @@
 		"dt": "POS Profile",
 		"fieldname": "posa_raw_printing",
 		"fieldtype": "Check",
-		"insert_after": "posa_qz_printer_name",
+		"insert_after": "posa_receipt_logo",
 		"label": "Use Raw Receipt Printing",
 		"description": "Send invoices, orders, and payment receipts to QZ Tray as ESC/POS raw commands instead of HTML. Barcode and label raw ZPL/EPL printing is controlled from the barcode printing screen.",
 		"default": "0",
