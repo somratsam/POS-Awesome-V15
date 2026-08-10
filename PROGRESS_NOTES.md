@@ -23,6 +23,8 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `4dfe2c8` — feat: enforce credit-only returns per POS Profile
+  (posa_returns_credit_only)
 - `9c4c387` — feat: pull receipt address and phone dynamically per POS Profile
 - `fd5f349` — docs: define fixed final regression check checklist in
   CLAUDE.md/AGENTS.md
@@ -835,3 +837,148 @@ build` if frontend files were touched (else state N/A), `bench migrate` twice
 if a new field/doc was involved (else state N/A), an explicit security review
 of anything touching user input/auth/data access (else state N/A), and explicit
 naming of adjacent features confirmed unbroken — no silent skipping of any item.
+
+## 8. Confirmed business policy: exchange/credit-only returns, no refunds of any kind
+
+**Confirmed by the user 2026-08-10**, precise wording, not previously written
+down anywhere in this repo (checked — no prior mention in this file, and no
+code enforces it): **exchange and credit only — no refund of any kind, ever,
+on any payment method.** Not cash, not card, not any other mode, no
+exceptions under current policy. A return must always end up as store
+credit or an exchange, never money handed back through Cash/Visa/etc.
+
+**Investigated whether this is actually enforced today — it is not.**
+`PaymentMethods.vue` renders every payment-mode button (Cash, Visa, ...)
+fully enabled for a return with no gating tied to the "Store as Credit?"
+toggle at all. Whether a return defaults to a live, editable refund amount is
+decided by `Payments.vue`'s `applyReturnCreditDefault()`, which — contrary to
+what the policy would suggest — actually **defaults to a live cash/card
+refund** whenever `shouldApplyReturnRefundCap()` can't compute a cap (no
+`return_against`, i.e. a return not linked to an original invoice — which
+`posa_allow_return_without_invoice=1` on "Test Pos" explicitly allows) or
+when the original invoice was fully paid. `use_cashback` (currently `0` on
+Test Pos) only hides a UI label, it does not gate the buttons or block
+submission. The only backend guard, `_guard_return_cash_refund()`
+(`creation.py`), *caps* a cash refund at what was actually paid on the
+original — it does not block cash refunds outright, and it silently does
+nothing at all when there's no `return_against` (the invoice-less-return
+case), so today even that cap doesn't apply in that scenario. `is_cashback`
+is sent to the backend in the submit payload but never read there — purely a
+frontend concept with zero server-side awareness.
+
+**Decision: build this as a toggleable POS Profile setting
+(`posa_returns_credit_only`), not a hardcoded removal** — policy is
+credit-only today, but the business wants the ability to turn it off later
+(a future store, a policy change) without a code change, same pattern as
+every other POS Profile toggle in this codebase.
+
+**Separately investigated, before building: does "Return Without Invoice"
+(`posa_allow_return_without_invoice`) work correctly and safely today?**
+Mechanically yes — a cashier can create a blank `is_return=1` invoice with no
+`return_against`, add items and a customer manually, and it submits and
+issues genuine, correctly-redeemable store credit (`get_available_credit()`
+in `api/payments.py` filters purely on `outstanding_amount < 0` + customer +
+company, never on `return_against`, so credit issuance, the Z Report, and
+the receipt's same-shift exchange detection all work identically whether or
+not the return is linked to an original invoice).
+
+**But it's a real control gap, not just a hypothetical one.** Three separate
+safeguards elsewhere in this codebase all happen to gate on the same field
+this flow deliberately leaves empty (`return_against`):
+1. `creation.py:1580`'s `validate_return_items()` call — checks returned
+   items/qty against the original invoice — only runs
+   `if ... invoice_doc.get("return_against")`. Skipped entirely for an
+   invoice-less return: no verification the customer ever bought what's
+   being "returned," at any quantity or rate.
+2. `_validate_return_window()` (`invoice_processing/utils.py:60-62`)
+   explicitly no-ops when there's no `return_against` — `posa_return_
+   validity_days`/`posa_enable_return_validity` silently do not apply to
+   this flow at all, even when enabled.
+3. `_guard_return_cash_refund()` — established in the prior investigation —
+   also gates on `return_against`, so today's refund cap doesn't apply here
+   either (the new `posa_returns_credit_only` guard being built now
+   deliberately does NOT have this gap — see below).
+
+Net: an intentional, working feature (dedicated button, its own POS Profile
+toggle) whose surrounding safeguards were evidently built assuming a linked
+original invoice and never extended to cover the invoice-less path — a
+cashier can fabricate a return for an item never sold, at any price, with no
+age limit, and none of the business's other return controls engage. Flagged
+for a future follow-up investigation, out of scope for the credit-only fix
+below (which closes the refund-cap instance of this gap as a side effect,
+but not the other two).
+
+### Shipped: `posa_returns_credit_only` (2026-08-10)
+
+New Check field on POS Profile, **default ON** (the safe direction for a
+restriction, not a capability grant — every other risk-bearing toggle in this
+codebase, `posa_allow_credit_sale`/`posa_use_gift_cards`/`posa_allow_partial_
+payment`, defaults off because those *grant* capability; this one *removes*
+it, so the safe default runs the other way). Backfills to `1` on every
+existing row automatically via the `ALTER TABLE ... DEFAULT 1`, matching
+"Test Pos"'s real policy with no manual data-fix needed.
+
+**Frontend** (`Payments.vue`, `PaymentOptions.vue`, `PaymentMethods.vue`):
+"Store as Credit?" forced on and shown disabled (not hidden) with an
+explanatory caption when the policy is active; "Cashback?" hidden entirely;
+Cash/Visa/other payment-method rows on a return replaced with a single
+informational note. `applyReturnCreditDefault()` short-circuits to credit
+when the policy is active; a defensive `watch` re-forces `is_credit_return`
+back to `true` from any of the 7 places in `Payments.vue` that reset it to
+`false` (cancel/reload/new-return flows) — added as a backstop rather than
+patching all 7 individually, since a future 8th reset site is exactly the
+kind of thing that would otherwise silently reopen this.
+
+**Backend** (`creation.py`): `_guard_return_cash_refund()` extended with a
+new layer that blocks any nonzero return payment outright when the profile
+flag is on — checked before the pre-existing `return_against` gate, so it
+also covers invoice-less returns (see the control-gap note above). This is
+the real security boundary, not the frontend hiding.
+
+**Field placement**: ended up between "Use Raw Receipt Printing" and "Raw
+Receipt Width" (the print-settings area), not beside the other return
+controls. The "Sales and Return Controls" section turned out to have
+pre-existing shared-`insert_after`-target ties stacked many levels deep —
+traced the full ancestor chain and found a new tie every time one was fixed,
+including one masquerading as fixed after a first attempt (`posa_apply_
+customer_discount`, an unrelated pricing field, sharing a target with two
+genuine return fields). Rather than restructure a wide swath of this
+doctype's existing field order, anchored to the receipt-print chain built
+earlier this session instead — already proven clean via two verified migrate
+cycles, and it doesn't touch fields whose history/purpose isn't fully known.
+Correctly discoverable and stable, just not ideally grouped.
+
+**Mid-session bug, found via live testing before this ever shipped**: the
+new credit-only check initially ran unconditionally inside `_guard_return_
+cash_refund()`, called (via `_normalize_return_payment_rows()`) from all 5
+places that touch return payment rows — including `update_invoice()`, the
+whitelisted endpoint the frontend calls on every debounced cart-background-
+sync (`triggerBackgroundFlush`, 2s debounce), not just at Pay/Submit. Result:
+adding a single item (qty -1) to a return cart threw the "refunds are
+disabled" error immediately, before the cashier ever reached the Payments
+screen — return functionality was completely unusable. Fixed by threading a
+new `enforce_credit_only_policy` parameter through `_normalize_return_
+payment_rows()`/`_guard_return_cash_refund()`, defaulting `False` (matching
+every caller's real pre-existing behavior) and explicitly set `True` only at
+the 4 call sites inside `submit_invoice()`/`submit_in_background_job()` —
+i.e. only at genuine final submission. `update_invoice()`'s call site is
+untouched; the pre-existing cap-based guard (layer 2) still runs there
+exactly as it always did.
+
+**Verified** (both the feature and the fix, confirmed live in the browser by
+the user before commit): frontend `vitest run` 217/217 files, 1054/1054
+tests; `vue-tsc --noEmit` clean; `bench build --app posawesome` clean, exit
+0; `bench --site staging.local migrate` run twice, field position
+re-verified via `frappe.get_meta()` after each run; relevant backend
+modules in isolation — `test_submitted_invoice_shift_security.py` 1/1,
+`test_same_shift_exchange.py` 5/5, `test_pos_closing_shift.py` 9/9,
+`test_customer_credit_invoice_fields.py` 2/2, `test_gift_card_profile_
+settings.py` 3/3, `test_sale_floor_profile_settings.py` 3/3, `test_api_
+imports.py` 4/4 (`test_creation.py` excluded — confirmed via git-stash
+comparison that its `ImportError` is a pre-existing environment issue,
+identical on unmodified code). Direct function-level tests of `_guard_
+return_cash_refund()` covering all 4 real scenarios (cart-building/no
+error, genuine-refund-attempt/blocked, genuine-credit-return/passes,
+normal-sale/unaffected). Live browser confirmation: cart-building no longer
+errors, Payments screen correctly enforces credit-only, normal sales
+unaffected.
