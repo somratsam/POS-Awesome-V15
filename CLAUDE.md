@@ -60,19 +60,39 @@ have caught this in seconds.
 ## Every Change Needs a Full, Professional-Standard Check Before It's "Done"
 
 Don't treat a change as complete once it merely works. Every implementation —
-not just the ones where the user explicitly asks for verification — needs
-both of the following before it's done:
+not just the ones where the user explicitly asks for verification — needs a
+**"final regression check"** before it's done. That phrase (or any equivalent
+instruction — "run the regression check", "make sure nothing broke", "run the
+final checks") is not a vague vibe, it is this exact fixed checklist, every
+single time, with no items silently skipped:
 
-1. **Confirm nothing else broke.** Run the relevant tests (frontend `vitest`,
-   backend module tests in isolation given the known pre-existing
-   `run-tests` environment crash — see the fork's `PROGRESS_NOTES.md` for
-   that crash's signature and how it was confirmed pre-existing), and check
-   for regressions in code paths the change touches, especially shared
-   files/composables/stores also used elsewhere.
-2. **For anything touching user input, authorization, or data access, do a
-   genuine security review.** Trace how the input is actually handled —
-   don't assert it's safe, prove it by reading the actual code path: is a
-   filter/query parameterized or escaped (trace it into the ORM/driver, e.g.
+1. **Full frontend test suite.** `vitest run` — the whole suite, never scoped
+   to one spec file, even if the change looks frontend-only. Report the exact
+   pass count (e.g. "217/217 files, 1054/1054 tests").
+2. **Relevant backend test modules, run in isolation.** Identify which
+   modules are relevant based on what the change actually touched (not a
+   generic default list), run each via `bench --site <site> run-tests
+   --module <module>` (isolation is required given the known pre-existing
+   `run-tests` full-suite environment crash — see `PROGRESS_NOTES.md` for
+   that crash's signature and how it was confirmed pre-existing), and report
+   the exact pass/fail count per module.
+3. **`bench build --app posawesome`** — required whenever any frontend,
+   `.vue`, or `.ts` file was touched. Confirm a clean exit 0. If no such file
+   was touched, say so explicitly ("N/A — no frontend files touched") instead
+   of silently omitting this step.
+4. **`bench --site <site> migrate`** — required whenever any doctype,
+   fixture, or print-format file was touched. Confirm a clean exit 0. If a
+   new field or document was involved, run migrate a **second time** and
+   confirm it's idempotent (no drift, no reapplication side effects — this
+   caught a real field-ordering bug that only showed up on a second run). If
+   nothing doctype/fixture/print-format-shaped was touched, say so explicitly
+   instead of silently omitting this step.
+5. **Genuine security review** for anything touching user input,
+   authorization, or data access. Trace how the input is actually handled —
+   don't assert it's safe, prove it by reading the actual code path, and
+   **restate explicitly what was checked** (which input, which query, which
+   permission boundary), not just "looks fine": is a filter/query
+   parameterized or escaped (trace it into the ORM/driver, e.g.
    `frappe/model/db_query.py`'s `prepare_filter_condition` and
    `frappe.db.escape`) versus string-interpolated into raw SQL? Is there an
    injection surface? Does the frontend use `v-html` anywhere near
@@ -81,15 +101,23 @@ both of the following before it's done:
    any authenticated session, not just through whatever UI currently calls
    it)? Is authorization actually re-validated server-side, or does the code
    trust a client-supplied identifier (a profile name, a doctype name, a
-   user id) without re-checking it belongs to the requesting user?
+   user id) without re-checking it belongs to the requesting user? If none of
+   this applies, say so explicitly ("N/A — no user input/auth/data-access
+   surface touched") instead of silently omitting this step.
+6. **Explicit confirmation of what was NOT touched or broken.** Name the
+   specific adjacent features/flows actually checked (e.g. "confirmed
+   receipt printing and the automatic Z Report print-on-close still work,
+   since this touched `usePosShift.ts`, a shared file both depend on") — a
+   vague "nothing else affected" does not satisfy this item.
 
-This is standard practice for every change going forward, not something that
-only happens when explicitly asked. A "looks fine" scan is not the same as
-tracing the actual code path — see the Z Report History feature's
-`list_closing_shifts` for a worked example: the `search` parameter's safety
-was confirmed by reading `db_query.py` and the MariaDB driver's `escape()`
-down to the actual `escape_string()` call, not by assuming Frappe's ORM is
-safe in general.
+Report all six items explicitly, in order, every time a final regression
+check is run — this is the authoritative definition and supersedes any
+looser or partial version used in earlier sessions. A "looks fine" scan is
+not the same as tracing the actual code path — see the Z Report History
+feature's `list_closing_shifts` for a worked example: the `search`
+parameter's safety was confirmed by reading `db_query.py` and the MariaDB
+driver's `escape()` down to the actual `escape_string()` call, not by
+assuming Frappe's ORM is safe in general.
 
 ## Build Commands
 

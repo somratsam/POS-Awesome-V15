@@ -155,20 +155,40 @@ A task is complete only when:
 3. Existing behavior is not broken.
 4. Build/lint/test commands are run where available.
 5. Risks are documented.
-6. **Every implementation gets a full, professional-standard check, not just
-   "does it work" — this is standard practice for every change, not
-   something that only happens when explicitly asked:**
-   - Confirm nothing else broke: run the relevant tests (frontend `vitest`,
-     backend module tests in isolation given the known pre-existing
-     `run-tests` environment crash), and check for regressions in shared
-     files/composables/stores the change touches.
-   - For anything touching user input, authorization, or data access, do a
-     genuine security review — trace the actual code path rather than
-     asserting it's safe: parameterized/escaped queries vs. string
-     interpolation (trace into the ORM/driver, don't just assume the
-     framework handles it), injection surfaces, XSS via `v-html` near
-     user-controlled data, missing bounds/limits on anything a whitelisted
-     method exposes (whitelisted methods are callable directly by any
-     authenticated session, not just through whatever UI calls them today),
-     and whether authorization is actually re-validated server-side or just
-     trusts a client-supplied identifier.
+6. **Every implementation gets a "final regression check"** — not just "does
+   it work," standard practice for every change, not something that only
+   happens when explicitly asked. That phrase (or any equivalent instruction)
+   means this exact fixed checklist, every time, with no item silently
+   skipped — if an item doesn't apply, state "N/A because X" rather than
+   omitting it:
+   1. **Full frontend test suite** — `vitest run`, the whole suite, never
+      scoped to one spec file. Report the exact pass count.
+   2. **Relevant backend test modules, run in isolation** — identified from
+      what the change actually touched, run via `bench --site <site>
+      run-tests --module <module>` (isolation required given the known
+      pre-existing `run-tests` full-suite environment crash), exact
+      pass/fail count per module.
+   3. **`bench build --app posawesome`** — required if any frontend/`.vue`/
+      `.ts` file was touched; confirm clean exit 0; otherwise state N/A.
+   4. **`bench --site <site> migrate`** — required if any doctype/fixture/
+      print-format file was touched; confirm clean exit 0; if a new field or
+      document was involved, run it a **second time** and confirm
+      idempotency; otherwise state N/A.
+   5. **Genuine security review** for anything touching user input,
+      authorization, or data access — trace the actual code path rather than
+      asserting it's safe: parameterized/escaped queries vs. string
+      interpolation (trace into the ORM/driver, don't just assume the
+      framework handles it), injection surfaces, XSS via `v-html` near
+      user-controlled data, missing bounds/limits on anything a whitelisted
+      method exposes (whitelisted methods are callable directly by any
+      authenticated session, not just through whatever UI calls them today),
+      and whether authorization is actually re-validated server-side or just
+      trusts a client-supplied identifier. Restate explicitly what was
+      checked, not just "looks fine." Otherwise state N/A.
+   6. **Explicit confirmation of what was NOT touched/broken** — name the
+      specific adjacent features/flows checked, not a vague "nothing else
+      affected."
+
+   Report all six items explicitly, in order, every time. This is the
+   authoritative definition and supersedes any looser or partial version
+   used in earlier sessions.
