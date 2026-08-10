@@ -6535,9 +6535,39 @@
 	{
 		"doctype": "Custom Field",
 		"dt": "POS Profile",
+		"fieldname": "posa_receipt_address_en",
+		"fieldtype": "Small Text",
+		"insert_after": "posa_receipt_logo",
+		"label": "Store Address (English)",
+		"description": "English side of the receipt address block (may include mixed-language text if this store's receipt is styled that way, e.g. \"Muscat OMAN : مسقط\"). Printed as-is, line breaks preserved.",
+		"name": "POS Profile-posa_receipt_address_en"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"fieldname": "posa_receipt_address_ar",
+		"fieldtype": "Small Text",
+		"insert_after": "posa_receipt_address_en",
+		"label": "Store Address (Arabic)",
+		"description": "Arabic-only continuation line of the receipt address block. Printed as-is, line breaks preserved.",
+		"name": "POS Profile-posa_receipt_address_ar"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"fieldname": "posa_receipt_phone",
+		"fieldtype": "Data",
+		"insert_after": "posa_receipt_address_ar",
+		"label": "Store Phone",
+		"description": "Phone number printed on the receipt (digits/formatting only -- the \"TEL:\"/رقم التلفون labels around it stay fixed in the print format).",
+		"name": "POS Profile-posa_receipt_phone"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
 		"fieldname": "posa_raw_printing",
 		"fieldtype": "Check",
-		"insert_after": "posa_receipt_logo",
+		"insert_after": "posa_receipt_phone",
 		"label": "Use Raw Receipt Printing",
 		"description": "Send invoices, orders, and payment receipts to QZ Tray as ESC/POS raw commands instead of HTML. Barcode and label raw ZPL/EPL printing is controlled from the barcode printing screen.",
 		"default": "0",
