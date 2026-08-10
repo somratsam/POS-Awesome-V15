@@ -1,6 +1,6 @@
 # POS Awesome — develop-swan Fork Progress Notes
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This file exists so a future session (mine or another Claude Code session) can pick up
 context on this fork quickly without re-deriving it from scratch. If you're starting
@@ -23,6 +23,9 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `d916379` — fix: correct posa_receipt_logo field position on the POS Profile form
+- `97a2656` — feat: embed receipt logo locally per POS Profile, eliminating external
+  fetch on print
 - `c4de168` — feat: track same-shift exchanges separately on Z Report ("Exchanges Today")
 - `ab0ba1b` — feat: enforce all-or-nothing customer credit redemption
 - `64d5c69` — feat: add VAT and Additional Information section to Z Report
@@ -640,3 +643,127 @@ this baseline.
   succeeded immediately once the user raised WSL2's memory cap to 6GB (via
   `.wslconfig`). If a build fails with 137/143 and the code changes look correct,
   check WSL2's memory allocation before assuming the build itself is broken.
+
+## 7. Receipt print performance + receipt logo, multi-store (2026-08-10, `97a2656`, `d916379`)
+
+### Why this happened
+
+User reported Sales Invoice/receipt printing felt slow despite receipts already
+using the same QZ Tray pipeline (`printDocumentViaQz`) as the Z Report. Investigated
+the full click-to-printer flow rather than assuming: timed `frappe.www.printview.
+get_html_and_style` directly against real invoices/closing shifts (temporary
+Administrator API key, revoked immediately after each use, per the standing
+verify-against-live-state convention) — server-side HTML generation was **not**
+the bottleneck, both receipt and Z Report render in ~75-80ms warm, statistically
+indistinguishable. The Sales Invoice print format ("Swan Sales Invoice" — hand-
+authored, DB-only, never in git, same situation as the old raw Z Report before
+it was migrated) had one concrete, fixed, per-print cost the Z Report doesn't:
+an unconditional `<img src="https://e.swan-intl.com/files/swanGalleriaLogo_bw.png">`
+with **no `Cache-Control`/`Expires` header** (confirmed via direct fetch — 859ms,
+no caching to rely on). That fetch happens client-side, during QZ Tray's HTML-to-
+pixel rendering, invisible to server-side timing — and is paid on every single
+receipt regardless of item count, which is why even short receipts felt slow.
+Also found (not the main cost, but real): a duplicated
+`frappe.db.get_value("User", doc.modified_by, "full_name")` lookup in the
+template, computed twice (header row + "served by" line) for the same value.
+
+### Fix 1 — embed the receipt logo locally, per store (`97a2656`)
+
+New **posa_receipt_logo** (Attach Image) Custom Field on POS Profile — each store's
+logo now lives on its own profile instead of one hardcoded external URL, matching
+this business's actual multi-brand setup (Swan International, 9 brands, one
+warehouse live per the POS Profile baseline in section 5). New whitelisted
+`get_receipt_logo_data_uri(pos_profile)` (`posawesome/api/print_assets.py`) reads
+the profile's attached file straight off local disk (`frappe.utils.file_manager.
+get_file`) and returns it as a `data:image/...;base64,...` URI — called from the
+Jinja template via `frappe.call(...)`, the same sandboxed-call pattern the Z Report
+already established (`frappe.get_attr` isn't available in the print-format Jinja
+sandbox; `frappe.call` is). No logo uploaded for a profile → prints with no `<img>`
+tag at all (explicit user decision: no generic bundled fallback). "Test Pos" was
+backfilled with the existing Swan logo (downloaded once, attached as a real File)
+so current output is visually unchanged.
+
+**Verified**: real-HTTP `get_html_and_style` checks (temp API key pattern) against
+both a plain invoice and a credit-redemption invoice confirmed the returned HTML
+has zero occurrences of the external host and exactly one `data:image` `<img>` tag.
+Direct timing of `get_receipt_logo_data_uri` itself: ~2.3-3.4ms warm (local disk
+read + base64 encode) vs. the 859ms uncached external fetch it replaces — roughly
+250-370x faster, and (unlike the old URL) has no external network dependency to be
+slow or unavailable at all. Also fixed the duplicate `frappe.db.get_value` lookup
+in the same template pass — computed once via `{% set sales_person_name = ... %}`,
+reused in both places.
+
+### Fix 2 — the new field didn't render on the POS Profile form (`d916379`)
+
+Shipped `97a2656` with `posa_receipt_logo`'s `insert_after` set to
+`"posa_qz_printer_name"` — the same anchor the pre-existing `posa_raw_printing`
+field already used. User reported the field wasn't visible on the form even after
+`bench migrate` + `bench clear-cache` + a hard refresh. Investigated (not assumed)
+against the user's own four specific hypotheses: `permlevel` was 0 (not it);
+`DocType.field_order` doesn't exist as a column in this Frappe version for POS
+Profile at all, so that mechanism was never in play; the field wasn't hidden in a
+collapsed section, it was just in the wrong section entirely; `frappe.clear_cache`
+(both scoped and global) had no effect since the *position* isn't a caching
+artifact — it's freshly, deterministically recomputed wrong from the underlying
+data every time.
+
+**Real root cause**, found by instrumenting Frappe's own field-order resolver
+live (`frappe.model.meta.Meta.sort_fields` / `_update_field_order_based_on_
+insert_after`) rather than guessing: it processes every field sharing an
+`insert_after` target together in one pass, then keeps nudging whichever one
+"loses" the pairing forward every time a later link in the *winner's own*
+downstream chain resolves. `posa_raw_printing`'s chain (`posa_raw_print_width` →
+`posa_print_format_rules` → the Cash Movement section) consistently won that
+position tie, walking `posa_receipt_logo` step-by-step all the way past the
+entire Cash Movement and Sales Returns sections to a buried, semantically
+unrelated spot on the form. Confirmed empirically that `idx` cannot durably fix
+this: Custom Field's own controller (`frappe/custom/doctype/custom_field/
+custom_field.py`'s `validate()`) unconditionally recomputes `idx` from
+`insert_after` on every fresh creation, ignoring whatever value a fixture
+supplies — a live `frappe.db.set_value` patch to `idx` "worked" but silently
+didn't survive a real `bench migrate`.
+
+**Fix**: re-point `posa_raw_printing` at `posa_receipt_logo` instead of
+`posa_qz_printer_name`, making the whole local chain strictly linear — no two
+fields sharing a target, so there's no tie to lose. This is the exact same
+technique this codebase already used twice before for this identical class of
+bug (`patches/move_qz_raw_print_fields_to_printing_section.py`, `patches/
+refresh_qz_raw_print_fields_layout.py` — both pre-existing, found while looking
+for precedent). Fixture change (`custom_field.json`) covers fresh installs; new
+`patches/insert_receipt_logo_field_in_print_chain.py` repairs already-migrated
+sites like staging. **Verified via a genuine clean `bench migrate`** (deleted the
+field, reset `posa_raw_printing` to the pre-fix state, migrated from scratch —
+not just a live DB patch) and confirmed idempotent on a second migrate.
+
+### Also verified this session (user-run, findings confirmed against DB/print output)
+
+- **"Remaining Credit" line, post all-or-nothing redemption (Part E, `ab0ba1b`)**:
+  investigated whether it can ever trigger anymore. Live data inconclusive — zero
+  invoices have exercised credit redemption since `ab0ba1b` actually landed
+  (2026-08-09 17:32:19); the closest existing redemption invoices predate it by
+  ~75 minutes. Code-level trace of `_validate_customer_credit_redemption`
+  confirmed redemption is genuinely all-or-nothing (blocks entirely rather than
+  capping) whenever it succeeds, so `posa_remaining_customer_credit_balance` is
+  mathematically forced to 0 going forward — but recommended **against** removing
+  the template line: it's already conditionally hidden (`{% if ... > 0 %}`) so
+  removing it changes nothing for new receipts, while it would silently break
+  correctness for reprints of the 3 real historical invoices
+  (`ACC-SINV-2026-00021/00018/00009`) that still have genuine nonzero remaining
+  balances from before the fix. User agreed to leave it as-is.
+- **Same-shift vs. cross-shift exchange logic (Part F, `c4de168`)**: user ran both
+  real scenarios live. Same-shift return-then-redeem correctly showed "Exchange
+  Value" on the receipt and was correctly reflected in that shift's Z Report
+  "Exchanges Today". Cross-shift (return in one shift, close, reopen, redeem in
+  the new shift) correctly showed "Credit Applied" (not Exchange) and correctly
+  left the new shift's "Exchanges Today" at 0. Both confirmed working as designed.
+
+### Verified (both fixes together, before commit)
+
+Frontend `vitest run`: 217/217 files, 1054/1054 tests passing (no frontend files
+touched by this session's changes; run anyway per standing convention). Backend:
+`test_api_imports.py` 4/4 (confirms `print_assets.py` imports cleanly),
+`test_pos_closing_shift.py` 9/9, both in isolation. `bench --site staging.local
+migrate`: clean, exit 0, run twice to confirm idempotency. No frontend files
+changed this session, so no `bench build` needed for these fixes specifically
+(the earlier investigation-phase build failure was an unrelated WSL2 OOM/cwd
+issue, resolved and noted in section 6 above).
