@@ -23,6 +23,9 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `9c4c387` — feat: pull receipt address and phone dynamically per POS Profile
+- `fd5f349` — docs: define fixed final regression check checklist in
+  CLAUDE.md/AGENTS.md
 - `d916379` — fix: correct posa_receipt_logo field position on the POS Profile form
 - `97a2656` — feat: embed receipt logo locally per POS Profile, eliminating external
   fetch on print
@@ -735,6 +738,56 @@ sites like staging. **Verified via a genuine clean `bench migrate`** (deleted th
 field, reset `posa_raw_printing` to the pre-fix state, migrated from scratch —
 not just a live DB patch) and confirmed idempotent on a second migrate.
 
+### Fix 3 — receipt address and phone, dynamic per store (`9c4c387`)
+
+Same pattern as Fix 1: the receipt's address block (English line, Arabic line,
+phone number) was hardcoded in the print format, one fixed address for every
+store. Checked for a reusable built-in mechanism first, same reasoning as the
+logo — POS Profile already has a standard `company_address` field (Link →
+Address) and its linked Warehouse has its own built-in address fields, but
+neither supports the bilingual English/Arabic pairing this receipt needs
+(both are single-language records), so neither was a clean fit. New
+`posa_receipt_address_en` / `posa_receipt_address_ar` (Small Text) /
+`posa_receipt_phone` (Data) fields on POS Profile instead, following the same
+per-store-config precedent as `posa_receipt_logo`. CR No stays hardcoded —
+explicit decision, it's a company-level legal registration number, not
+per-store data.
+
+**Field-ordering lesson from Fix 2 applied proactively this time**: chained
+linearly after `posa_receipt_logo` (`posa_receipt_logo` → `posa_receipt_
+address_en` → `posa_receipt_address_ar` → `posa_receipt_phone` →
+`posa_raw_printing`, re-pointing `posa_raw_printing`'s own `insert_after` one
+more link down the chain) specifically to avoid recreating the shared-target
+cascade bug. Verified via `bench migrate` run twice (both the raw
+`insert_after` chain and the actual rendered field order via
+`frappe.get_meta("POS Profile")` came back correct and identical both times)
+— landed right the first time, no follow-up patch needed.
+
+Template fetches the three fields via one inline `frappe.db.get_value("POS
+Profile", doc.pos_profile, [...], as_dict=True)` call — no new Python file or
+whitelisted endpoint needed this time (unlike the logo, there's no binary
+file to base64-encode), matching the same inline-`frappe.db.get_value`
+pattern this template already used for the sales-person lookup. "Test Pos"
+backfilled with today's exact text; confirmed via real-HTTP `get_html_and_
+style` check that the rendered address block is byte-for-byte identical to
+the old hardcoded version.
+
+**Arabic text — encoding verified, translation accuracy NOT verified.**
+User asked to see the exact stored Arabic strings and get a best-effort
+(non-professional) reading of each, to sanity-check meaning separately.
+Two items flagged during that pass, still awaiting a native speaker's
+judgment:
+- `مسؤول مبيعا` (paired with "Sales Person" in the transaction-info table)
+  reads like it may be missing a final ت — the standard word would be
+  `مسؤول مبيعات`. Might be intentional shorthand, might be a typo.
+- The exchange-policy paragraph's Arabic (`... مع ارفاق الفاتورة.`) reads as
+  "... with the invoice attached," while the paired English says "With tags
+  attached & Original invoice" — a possible content mismatch (invoice vs.
+  tags), not an encoding issue.
+
+Neither of these affects the address/phone feature — flagging here since
+they were surfaced while reviewing the same template and are still open.
+
 ### Also verified this session (user-run, findings confirmed against DB/print output)
 
 - **"Remaining Credit" line, post all-or-nothing redemption (Part E, `ab0ba1b`)**:
@@ -757,13 +810,28 @@ not just a live DB patch) and confirmed idempotent on a second migrate.
   the new shift) correctly showed "Credit Applied" (not Exchange) and correctly
   left the new shift's "Exchanges Today" at 0. Both confirmed working as designed.
 
-### Verified (both fixes together, before commit)
+### Verified (all three fixes, before commit)
 
 Frontend `vitest run`: 217/217 files, 1054/1054 tests passing (no frontend files
-touched by this session's changes; run anyway per standing convention). Backend:
-`test_api_imports.py` 4/4 (confirms `print_assets.py` imports cleanly),
-`test_pos_closing_shift.py` 9/9, both in isolation. `bench --site staging.local
-migrate`: clean, exit 0, run twice to confirm idempotency. No frontend files
-changed this session, so no `bench build` needed for these fixes specifically
-(the earlier investigation-phase build failure was an unrelated WSL2 OOM/cwd
-issue, resolved and noted in section 6 above).
+touched by this session's changes; run anyway per standing convention). Backend,
+in isolation: `test_api_imports.py` 4/4, `test_pos_closing_shift.py` 9/9,
+`test_gift_card_profile_settings.py` 3/3, `test_sale_floor_profile_settings.py`
+3/3, `test_customer_credit_invoice_fields.py` 2/2 — the last three chosen for
+Fix 3 specifically because they parse `custom_field.json` directly, the exact
+file that change modified. `bench --site staging.local migrate`: clean, exit 0,
+run twice for each fix to confirm idempotency (field ordering re-verified via
+`frappe.get_meta` after each run, not just the raw `insert_after` values). No
+frontend files changed this session, so no `bench build` needed for any of these
+three fixes (the earlier investigation-phase build failure was an unrelated
+WSL2 OOM/cwd issue, resolved and noted in section 6 above).
+
+This full check (Fix 3's regression pass specifically) is also the first run
+under the newly-codified fixed 6-item "final regression check" checklist now
+in `CLAUDE.md`/`AGENTS.md` (`fd5f349`) — added because the phrase had been used
+repeatedly across this session without a fixed definition, so thoroughness
+varied. Going forward every "final regression check" (or equivalent phrasing)
+means: full frontend suite, relevant backend modules in isolation, `bench
+build` if frontend files were touched (else state N/A), `bench migrate` twice
+if a new field/doc was involved (else state N/A), an explicit security review
+of anything touching user input/auth/data access (else state N/A), and explicit
+naming of adjacent features confirmed unbroken — no silent skipping of any item.
