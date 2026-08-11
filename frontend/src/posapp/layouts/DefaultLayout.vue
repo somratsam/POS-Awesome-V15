@@ -375,7 +375,6 @@ function ensureStartupItemsReady(profile) {
 	const customer = selectedCustomer.value || profile.customer || null;
 	const priceList = profile.selling_price_list || null;
 
-	void startupInitPromise;
 	void itemsStore.initialize(profile, customer, priceList).catch((error) => {
 		console.error("Failed to initialize POS item catalog", error);
 	});

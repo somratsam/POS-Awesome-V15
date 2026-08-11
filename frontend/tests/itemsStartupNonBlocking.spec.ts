@@ -33,7 +33,7 @@ describe("item startup critical path", () => {
 		const initializeStore = vi.fn(async () => undefined);
 		const isInitialized = ref(false);
 		const initTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
-		const stop = startItemsSelectorInitialization({
+		const { stop } = startItemsSelectorInitialization({
 			uiPosProfile: ref({ name: "POS-1", currency: "PKR" }),
 			selectedCustomer: ref("Walk In"),
 			customerPriceList: ref("Retail"),

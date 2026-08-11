@@ -238,7 +238,10 @@ describe("itemsStore loadItems", () => {
 		]);
 	});
 
-	it("primes detail cache directly from get_items responses on first load", async () => {
+	it("primes detail cache directly from get_items responses on a search", async () => {
+		// Browsing without a search term is gated (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY,
+		// itemsStore.ts) so "first load" no longer fetches on its own -- the first
+		// real fetch now happens on the first search, which is what this exercises.
 		const store = useItemsStore();
 		const profile = {
 			name: "POS-1",
@@ -249,11 +252,16 @@ describe("itemsStore loadItems", () => {
 		} as any;
 
 		await store.initialize(profile);
+		itemServiceMocks.getItemsData.mockClear();
+		itemsSyncMocks.primeItemDetailsCache.mockClear();
+
+		await store.loadItems({ forceServer: true, searchValue: "item" });
 
 		expect(itemServiceMocks.getItemsData).toHaveBeenCalledTimes(1);
 		expect(itemServiceMocks.getItemsData).toHaveBeenCalledWith(
 			expect.objectContaining({
 				price_list: "Retail",
+				search_value: "item",
 			}),
 			expect.any(AbortSignal),
 		);
@@ -274,10 +282,14 @@ describe("itemsStore loadItems", () => {
 	});
 
 	it("deduplicates concurrent initialization inside the store", async () => {
-		let releaseCatalog: ((items: any[]) => void) | undefined;
-		itemServiceMocks.getItemsData.mockReturnValueOnce(
-			new Promise<any[]>((resolve) => {
-				releaseCatalog = resolve;
+		// getItemsData is never called on cold start while browsing without a
+		// search is gated (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY, itemsStore.ts),
+		// so dedup is verified via the cache-health read instead -- it still runs
+		// unconditionally at the top of every runInitialization() attempt.
+		let releaseCacheCount: ((value: number) => void) | undefined;
+		offlineMocks.getStoredItemsCountByScope.mockReturnValueOnce(
+			new Promise<number>((resolve) => {
+				releaseCacheCount = resolve;
 			}),
 		);
 		const store = useItemsStore();
@@ -292,12 +304,15 @@ describe("itemsStore loadItems", () => {
 		const first = store.initialize(profile, "Walk In", "Retail");
 		const second = store.initialize(profile, "Walk In", "Retail");
 		await vi.waitFor(() =>
-			expect(itemServiceMocks.getItemsData).toHaveBeenCalledTimes(1),
+			expect(offlineMocks.getStoredItemsCountByScope).toHaveBeenCalledTimes(
+				1,
+			),
 		);
-		releaseCatalog?.([]);
+		releaseCacheCount?.(0);
 		await Promise.all([first, second]);
 
-		expect(itemServiceMocks.getItemsData).toHaveBeenCalledTimes(1);
+		expect(offlineMocks.getStoredItemsCountByScope).toHaveBeenCalledTimes(1);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
 	});
 
 	it("does not repeat catalog storage work for transient startup customer contexts", async () => {
@@ -316,7 +331,7 @@ describe("itemsStore loadItems", () => {
 			offlineMocks.getStoredItemsCountByScope.mock.calls.length;
 		await store.initialize(profile, "Walk In", "Retail");
 
-		expect(itemServiceMocks.getItemsData).toHaveBeenCalledTimes(1);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
 		expect(offlineMocks.getStoredItemsCountByScope).toHaveBeenCalledTimes(
 			storageReadsAfterFirstPass,
 		);
@@ -336,6 +351,9 @@ describe("itemsStore loadItems", () => {
 				item_groups: [],
 				posa_use_limit_search: 1,
 			} as any);
+			// Cold start no longer populates the catalog (browse-without-search is
+			// gated); seed it the way it actually happens now -- via a real search.
+			await store.loadItems({ forceServer: true, searchValue: "seed" });
 
 			itemServiceMocks.getItemsData.mockClear();
 			itemsSearchMocks.performLocalSearch.mockReturnValue([]);
@@ -373,6 +391,9 @@ describe("itemsStore loadItems", () => {
 			currency: "PKR",
 			item_groups: [],
 		} as any);
+		// Cold start no longer populates the catalog (browse-without-search is
+		// gated); seed it the way it actually happens now -- via a real search.
+		await store.loadItems({ forceServer: true, searchValue: "seed" });
 
 		store.$patch({
 			searchTerm: "item",
@@ -393,7 +414,15 @@ describe("itemsStore loadItems", () => {
 		expect(store.filteredItemsSearchTerm).toBe("item");
 	});
 
-	it("preserves an existing catalog when an unscoped manual reload returns empty", async () => {
+	it("an unscoped manual reload clears the grid via the browse-without-search gate instead of re-fetching", async () => {
+		// Before BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY (itemsStore.ts), an unscoped
+		// reload (preserveSearch: false, so activeSearch is always "") re-fetched
+		// the whole catalog and, if the server unexpectedly returned empty, kept
+		// showing the previous results rather than flashing blank. That
+		// "re-fetch the whole catalog" step is itself now gated -- an unscoped
+		// reload has no search term, so it never reaches the network at all and
+		// goes straight to the same empty, waiting-for-a-query state as any other
+		// browse-all path. It does not matter what was on screen before.
 		const store = useItemsStore();
 		await store.initialize({
 			name: "POS-1",
@@ -402,21 +431,28 @@ describe("itemsStore loadItems", () => {
 			currency: "PKR",
 			item_groups: [],
 		} as any);
-
-		itemServiceMocks.getItemsData.mockResolvedValueOnce([]);
+		// Seed a populated catalog the way it actually happens now -- via a real
+		// search -- so this proves the reload clears it, not that it was already empty.
+		await store.loadItems({ forceServer: true, searchValue: "seed" });
+		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
+		itemServiceMocks.getItemsData.mockClear();
 
 		await store.recoverItemCatalog({
 			reason: "reload_button",
 			preserveSearch: false,
 		});
 
-		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
-		expect(store.filteredItems.map((item) => item.item_code)).toEqual([
-			"ITEM-1",
-		]);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+		expect(store.items).toEqual([]);
+		expect(store.filteredItems).toEqual([]);
 	});
 
-	it("does not replace the master catalog when reloading one item group", async () => {
+	it("reloading with only an item-group filter (no search term) also clears via the browse-without-search gate", async () => {
+		// Selecting a group tab is browsing a subset, not "actual search/scan" --
+		// recoverItemCatalog()'s activeSearch is searchTerm.value regardless of
+		// preserveSearch, and no search term was ever typed here, so this reload
+		// has no search value either and goes through the same gate as any other
+		// browse-all path (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY, itemsStore.ts).
 		const store = useItemsStore();
 		await store.initialize({
 			name: "POS-1",
@@ -425,24 +461,21 @@ describe("itemsStore loadItems", () => {
 			currency: "PKR",
 			item_groups: [],
 		} as any);
+		// Seed a populated catalog the way it actually happens now -- via a real
+		// search -- so this proves the reload clears it, not that it was already empty.
+		await store.loadItems({ forceServer: true, searchValue: "seed" });
 		await store.filterByGroup("Medicines");
-		itemServiceMocks.getItemsData.mockResolvedValueOnce([
-			{
-				item_code: "MED-1",
-				item_name: "Medicine One",
-				item_group: "Medicines",
-			},
-		]);
+		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
+		itemServiceMocks.getItemsData.mockClear();
 
 		await store.recoverItemCatalog({
 			reason: "reload_button",
 			preserveSearch: true,
 		});
 
-		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
-		expect(store.filteredItems.map((item) => item.item_code)).toEqual([
-			"MED-1",
-		]);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+		expect(store.items).toEqual([]);
+		expect(store.filteredItems).toEqual([]);
 	});
 
 	it("does not insert a quick-edited item that no longer matches the active search", () => {
@@ -574,9 +607,12 @@ describe("itemsStore loadItems", () => {
 		await store.initialize(profile);
 		itemsSyncMocks.primeItemDetailsCache.mockClear();
 
+		// A bare browse-all reload is gated (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY,
+		// itemsStore.ts); a search term is what actually reaches the network now.
 		await store.loadItems({
 			forceServer: true,
 			priceList: "Customer Retail",
+			searchValue: "item",
 		});
 
 		expect(itemServiceMocks.getItemsData).toHaveBeenLastCalledWith(
@@ -592,7 +628,12 @@ describe("itemsStore loadItems", () => {
 		);
 	});
 
-	it("limits customer price list cache-miss refreshes to the foreground page", async () => {
+	it("does not fall back to a full catalog fetch on a price-list cache miss while browsing without a search is gated", async () => {
+		// Before BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY (itemsStore.ts), a price-list
+		// change with no cached data fell back to a full, unscoped catalog fetch.
+		// That fallback has no search term, so it's now gated like every other
+		// browse-all path -- a customer/price-list change must not silently repopulate
+		// the whole grid. It still checks the cache; it just doesn't fetch past it.
 		const store = useItemsStore();
 		const profile = {
 			name: "POS-1",
@@ -610,33 +651,16 @@ describe("itemsStore loadItems", () => {
 		expect(offlineMocks.getCachedPriceListItems).toHaveBeenCalledWith(
 			"Customer Retail",
 		);
-		expect(itemServiceMocks.getItemsData).toHaveBeenCalledWith(
-			expect.objectContaining({
-				price_list: "Customer Retail",
-				limit: 50,
-			}),
-			expect.any(AbortSignal),
-		);
-		expect(itemsSyncMocks.backgroundSyncItems).toHaveBeenCalledWith(
-			expect.objectContaining({
-				groupFilter: "ALL",
-				reset: true,
-			}),
-			expect.anything(),
-			"Customer Retail",
-			"POS-1_Main WH",
-			true,
-			expect.any(Boolean),
-			expect.any(Function),
-			expect.any(Function),
-			expect.any(Function),
-			expect.anything(),
-			expect.anything(),
-			expect.anything(),
-		);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+		expect(itemsSyncMocks.backgroundSyncItems).not.toHaveBeenCalled();
+		expect(store.items).toEqual([]);
 	});
 
 	it("does not prime detail cache when the server returns no items", async () => {
+		// Cold start no longer reaches the network on its own (browse-without-search
+		// is gated), so this is exercised via a real search instead -- and the
+		// queued empty response must actually be consumed here, not left to leak
+		// into whichever later test calls getItemsData next.
 		const store = useItemsStore();
 		const profile = {
 			name: "POS-1",
@@ -646,14 +670,22 @@ describe("itemsStore loadItems", () => {
 			item_groups: [],
 		} as any;
 
+		await store.initialize(profile);
+		itemsSyncMocks.primeItemDetailsCache.mockClear();
 		itemServiceMocks.getItemsData.mockResolvedValueOnce([]);
 
-		await store.initialize(profile);
+		await store.loadItems({ forceServer: true, searchValue: "nomatch" });
 
 		expect(itemsSyncMocks.primeItemDetailsCache).not.toHaveBeenCalled();
 	});
 
-	it("limits the initial cold-start fetch so background sync can hydrate the rest", async () => {
+	it("stays empty on cold start and does not trigger background sync while browsing without a search is gated", async () => {
+		// Before BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY (itemsStore.ts), cold start
+		// fetched a capped first page and kicked off background sync to hydrate
+		// the rest. Both of those only ever ran from the same no-search fetch,
+		// so both are now dormant until the cashier actually searches or scans --
+		// reverting the flag brings this exact behavior back with nothing else to
+		// rebuild.
 		const store = useItemsStore();
 		const profile = {
 			name: "POS-1",
@@ -666,34 +698,18 @@ describe("itemsStore loadItems", () => {
 
 		await store.initialize(profile);
 
-		expect(itemServiceMocks.getItemsData).toHaveBeenCalledWith(
-			expect.objectContaining({
-				price_list: "Retail",
-				limit: 50,
-			}),
-			expect.any(AbortSignal),
-		);
-		expect(itemsSyncMocks.backgroundSyncItems).toHaveBeenCalledTimes(1);
-		expect(itemsSyncMocks.backgroundSyncItems).toHaveBeenCalledWith(
-			expect.objectContaining({
-				groupFilter: "ALL",
-				reset: true,
-			}),
-			expect.anything(),
-			"Retail",
-			"POS-1_Main WH",
-			true,
-			expect.any(Boolean),
-			expect.any(Function),
-			expect.any(Function),
-			expect.any(Function),
-			expect.anything(),
-			expect.anything(),
-			expect.anything(),
-		);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+		expect(itemsSyncMocks.backgroundSyncItems).not.toHaveBeenCalled();
+		expect(store.items).toEqual([]);
+		expect(store.itemsLoaded).toBe(true);
 	});
 
-	it("starts the catalog API when a large or blocked IndexedDB read misses the cold-start grace", async () => {
+	it("still settles cleanly (no fetch, no hang) when a large or blocked IndexedDB read misses the cold-start grace", async () => {
+		// This used to prove the 700ms grace-miss correctly fell through to a
+		// server fetch. It now falls through to the browse-without-search gate
+		// instead (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY, itemsStore.ts) -- still
+		// no fetch, but the store must still settle (itemsLoaded true, not stuck)
+		// rather than hang waiting on the still-blocked cache read.
 		vi.useFakeTimers();
 		try {
 			let releaseBlockedRead: ((value: number) => void) | undefined;
@@ -717,18 +733,59 @@ describe("itemsStore loadItems", () => {
 
 			await Promise.resolve();
 			expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
-			await vi.advanceTimersByTimeAsync(250);
-			expect(itemServiceMocks.getItemsData).toHaveBeenCalledWith(
-				expect.objectContaining({
-					price_list: "Retail",
-					limit: 50,
-				}),
-				expect.any(AbortSignal),
-			);
+			await vi.advanceTimersByTimeAsync(700);
+			expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+			expect(store.itemsLoaded).toBe(true);
+			expect(store.items).toEqual([]);
 			releaseBlockedRead?.(0);
 			vi.useRealTimers();
 			await initialization;
 			expect(store.itemsLoaded).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("cold start never reaches the network while browsing without a search is gated, even if a queued fetch would fail", async () => {
+		// This originally proved that a genuine network failure on the cold-start
+		// fallback fetch propagates instead of being silently swallowed (the
+		// runInitialization() try/catch in itemsStore.ts). That exact scenario is
+		// currently unreachable: BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY makes
+		// loadItems() return before ever attempting a fetch when there's no
+		// search term, so the guarded fetch this test used to trigger can no
+		// longer run from a no-search cold start. The try/catch itself is
+		// untouched in the source -- reverting that flag brings back both the
+		// original cold-start fetch AND this exact failure-handling behavior
+		// together, with nothing else to rebuild. What's verifiable right now is
+		// that the network is never reached at all, so it can't hang or surface
+		// a fetch failure. (Deliberately not queuing a rejection here: since the
+		// point is that getItemsData must never be called, a queued-but-unused
+		// mock response would just sit there and leak into whichever later test
+		// happens to call getItemsData next -- not queuing anything is both
+		// simpler and immune to that.)
+		vi.useFakeTimers();
+		try {
+			offlineMocks.getStoredItemsCountByScope.mockImplementation(
+				() => new Promise(() => {}),
+			);
+
+			const store = useItemsStore();
+			const initialization = store.initialize({
+				name: "POS-FALLBACK-FAIL",
+				warehouse: "Main WH",
+				selling_price_list: "Retail",
+				currency: "PKR",
+				item_groups: [],
+				posa_use_limit_search: 0,
+			} as any);
+
+			await vi.advanceTimersByTimeAsync(700);
+			vi.useRealTimers();
+			await initialization;
+
+			expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+			expect(store.itemsLoaded).toBe(true);
+			expect(store.items).toEqual([]);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -765,7 +822,10 @@ describe("itemsStore loadItems", () => {
 		itemServiceMocks.getItemsData.mockClear();
 		cacheMocks.getCachedItems.mockClear();
 
-		await store.loadItems();
+		// A bare browse-all call is gated (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY,
+		// itemsStore.ts); a search term is what actually reaches the
+		// large-catalog/memory-cache logic under test here now.
+		await store.loadItems({ searchValue: "item" });
 
 		expect(cacheMocks.getCachedItems).not.toHaveBeenCalled();
 		expect(itemServiceMocks.getItemsData).toHaveBeenCalledTimes(1);
@@ -901,7 +961,13 @@ describe("itemsStore loadItems", () => {
 		expect(store.filteredItemsSearchTerm).toBe("panadol");
 	});
 
-	it("background-hydrates IndexedDB for online limit-search force-server profiles without materializing 40k rows", async () => {
+	it("does not background-hydrate IndexedDB on cold start while browsing without a search is gated", async () => {
+		// This used to prove a fresh cold start kicks off background hydration
+		// for limit-search + force-server profiles. That hydration only ever
+		// piggybacked on the same no-search catalog fetch that
+		// BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY (itemsStore.ts) now gates, so it's
+		// dormant too until the cashier searches or scans. Reverting the flag
+		// restores this exact hydration behavior with nothing else to rebuild.
 		const store = useItemsStore();
 		const profile = {
 			name: "POS-COUNTER",
@@ -915,17 +981,9 @@ describe("itemsStore loadItems", () => {
 
 		await store.initialize(profile);
 
-		expect(itemsSyncMocks.backgroundSyncItems).toHaveBeenCalledTimes(1);
-		const call = itemsSyncMocks.backgroundSyncItems.mock.calls[0];
-		expect(call[0]).toEqual(
-			expect.objectContaining({
-				groupFilter: "ALL",
-				reset: true,
-			}),
-		);
-		expect(call[3]).toBe("POS-COUNTER_Main Store");
-		expect(call[4]).toBe(true);
-		expect(call[5]).toBe(false);
+		expect(itemsSyncMocks.backgroundSyncItems).not.toHaveBeenCalled();
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+		expect(store.items).toEqual([]);
 	});
 
 	it("does not redownload a complete 40k limit-search catalog on every startup", async () => {

@@ -109,7 +109,47 @@
 				/>
 
 				<v-card flat class="selector-section-card selector-results-card pos-themed-card">
-					<v-row class="items">
+					<v-row v-if="showCatalogLoadFailure" class="items" data-test="catalog-load-error">
+						<v-col cols="12" class="pt-0 mt-0">
+							<div
+								class="d-flex flex-column align-center justify-center text-center fill-height pa-4"
+								style="height: 100%; min-height: 200px"
+							>
+								<v-icon size="64" color="error" class="mb-4">mdi-cloud-alert-outline</v-icon>
+								<div class="text-h6 text-medium-emphasis mb-1">
+									{{ __("Catalog failed to load") }}
+								</div>
+								<div class="text-body-2 text-medium-emphasis mb-4">
+									{{ __("We couldn't load the product catalog. Check your connection and try again.") }}
+								</div>
+								<v-btn
+									color="primary"
+									:loading="retryingCatalogLoad"
+									data-test="catalog-load-retry"
+									@click="handleRetryCatalogLoad"
+								>
+									{{ __("Retry") }}
+								</v-btn>
+							</div>
+						</v-col>
+					</v-row>
+					<v-row v-else-if="showBrowsePrompt" class="items" data-test="catalog-browse-prompt">
+						<v-col cols="12" class="pt-0 mt-0">
+							<div class="catalog-browse-prompt">
+								<div class="catalog-browse-prompt__icon">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+										<path d="M20.5 11.3 12.7 3.5H5a1 1 0 0 0-1 1v7.7L12.3 20a1 1 0 0 0 1.4 0l6.8-6.8a1 1 0 0 0 0-1.4Z" />
+										<circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none" />
+									</svg>
+								</div>
+								<p class="catalog-browse-prompt__title">{{ __("Scan a tag or search to begin") }}</p>
+								<p class="catalog-browse-prompt__subtitle">
+									{{ __("Find any item by name, style code, barcode or brand — search above or scan the tag.") }}
+								</p>
+							</div>
+						</v-col>
+					</v-row>
+					<v-row v-else class="items">
 						<v-col cols="12" class="pt-0 mt-0">
 							<PharmacyItemSearchTable
 								v-if="presentation === 'counter-grid-dialog'"
@@ -412,6 +452,8 @@ const selectedItems = ref(new Map<string, any>());
 const selectedKeys = computed(() => new Set(selectedItems.value.keys()));
 const selectedItemsArray = computed(() => Array.from(selectedItems.value.values()));
 let stopItemInitializationWatcher: (() => void) | null = null;
+let retryCatalogInitialization: (() => Promise<void>) | null = null;
+const retryingCatalogLoad = ref(false);
 let cleanupItemsSelectorEvents: (() => void) | null = null;
 let cleanupTypeToSearch: (() => void) | null = null;
 let cleanupLayoutLifecycle: (() => void) | null = null;
@@ -702,6 +744,44 @@ const isLoadingOrSyncing = computed(() => {
 	if (isBackgroundLoading.value && items.value.length === 0) return true;
 	return false;
 });
+
+// Distinguishes "the catalog genuinely failed to load" from a normal empty
+// search result. Only true once we know why nothing is showing and nothing
+// is actively in flight -- avoids flashing this over a legitimate loading
+// state or a plain "no matches" search.
+const showCatalogLoadFailure = computed(() => {
+	return (
+		Boolean(initError.value) &&
+		displayedItems.value.length === 0 &&
+		!isLoadingOrSyncing.value
+	);
+});
+
+// Shown when browsing without a search term is gated (see
+// BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY in itemsStore.ts) and nothing is
+// loaded, nothing is in flight, and nothing has actually been searched or
+// scanned yet -- distinct from a genuine zero-result search, which keeps the
+// normal grid's own "No items found" state instead.
+const showBrowsePrompt = computed(() => {
+	return (
+		!showCatalogLoadFailure.value &&
+		displayedItems.value.length === 0 &&
+		!isLoadingOrSyncing.value &&
+		!first_search.value?.trim()
+	);
+});
+
+const handleRetryCatalogLoad = async () => {
+	if (retryingCatalogLoad.value || !retryCatalogInitialization) {
+		return;
+	}
+	retryingCatalogLoad.value = true;
+	try {
+		await retryCatalogInitialization();
+	} finally {
+		retryingCatalogLoad.value = false;
+	}
+};
 
 const scheduleItemCatalogRecovery = (reason: string) => {
 	if (itemCatalogRecoveryTimer) {
@@ -1517,7 +1597,7 @@ onMounted(async () => {
 		handleRemoteStockAdjustment,
 	});
 
-	stopItemInitializationWatcher = startItemsSelectorInitialization({
+	const itemsInitializationHandle = startItemsSelectorInitialization({
 		uiPosProfile,
 		selectedCustomer,
 		customerPriceList: customer_price_list,
@@ -1532,6 +1612,8 @@ onMounted(async () => {
 		loadItemSettings: () => itemsSelectorSettings.loadItemSettings(),
 		startBackgroundSyncScheduler: () => itemSync.startBackgroundSyncScheduler(),
 	});
+	stopItemInitializationWatcher = itemsInitializationHandle.stop;
+	retryCatalogInitialization = itemsInitializationHandle.retry;
 
 	itemSelectorLayoutLifecycle.mount();
 	cleanupLayoutLifecycle = itemSelectorLayoutLifecycle.cleanup;
@@ -1559,6 +1641,7 @@ onBeforeUnmount(() => {
 	}
 	stopItemInitializationWatcher?.();
 	stopItemInitializationWatcher = null;
+	retryCatalogInitialization = null;
 	if (initTimeout.value) clearTimeout(initTimeout.value);
 	itemSync.stopBackgroundSyncScheduler();
 	// @ts-ignore
@@ -1972,6 +2055,49 @@ defineExpose({
 	padding: 8px;
 	gap: 7px;
 	background: var(--counter-rugged-muted);
+}
+
+.catalog-browse-prompt {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	min-height: 320px;
+	padding: var(--pos-space-6) var(--pos-space-4);
+}
+
+.catalog-browse-prompt__icon {
+	width: 72px;
+	height: 72px;
+	border-radius: 50%;
+	background: var(--pos-primary-container);
+	color: var(--pos-primary);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-bottom: var(--pos-space-4);
+}
+
+.catalog-browse-prompt__icon svg {
+	width: 32px;
+	height: 32px;
+}
+
+.catalog-browse-prompt__title {
+	color: var(--pos-text-primary);
+	font-size: 1.25rem;
+	font-weight: 600;
+	margin: 0 0 6px;
+	text-wrap: balance;
+}
+
+.catalog-browse-prompt__subtitle {
+	color: var(--pos-text-secondary);
+	font-size: 0.875rem;
+	line-height: 1.55;
+	max-width: 360px;
+	margin: 0;
 }
 
 .items-selector-shell--counter-dialog .selection-card {

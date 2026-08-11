@@ -38,7 +38,25 @@ export const useItemsStore = defineStore("items", () => {
 	const HOT_CATALOG_DEFAULT_LIMIT = 5000;
 	const HOT_CATALOG_MAX_LIMIT = 10000;
 	const HOT_CATALOG_DAYS = 120;
-	const COLD_START_CACHE_GRACE_MS = 250;
+	// Was 250ms. Cold IndexedDB opens (first-ever load, cleared storage, a new
+	// browser profile -- exactly what a fresh terminal setup looks like) can
+	// easily run past that, which threw away a nearly-finished local read and
+	// forced an unnecessary live server round-trip every time. 700ms gives real
+	// cold storage more room to win the race without meaningfully delaying the
+	// rarer case where it's actually missing and we do need the server.
+	const COLD_START_CACHE_GRACE_MS = 700;
+	// REVERSIBLE TOGGLE -- browse-without-search catalog population.
+	// When true, any catalog fetch with no search/scan term is skipped
+	// entirely and the grid stays empty until the cashier searches or scans
+	// (ItemsSelector.vue then shows the "Scan a tag or search" prompt). This
+	// is enforced once, here in loadItems(), so it applies uniformly to every
+	// caller -- initial load, Reload Items, price-list changes, background
+	// warmup -- without needing to touch any of them individually.
+	//
+	// To restore the original "populate the grid on load" behavior, set this
+	// back to false. The fetch/population logic below the check it guards is
+	// completely untouched and will resume running exactly as it did before.
+	const BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY = true;
 	type StoreInitialization = { key: string; promise: Promise<void> };
 	let initializationInFlight: StoreInitialization | null = null;
 	let completedInitializationKey: string | null = null;
@@ -831,7 +849,17 @@ export const useItemsStore = defineStore("items", () => {
 			!itemsLoaded.value ||
 			(!limitSearchEnabled.value && items.value.length === 0);
 		if (needsInitialServerCatalog && !isOffline()) {
-			await loadItems({ forceServer: false });
+			try {
+				await loadItems({ forceServer: false });
+			} catch (error) {
+				finishStartupPhase(phase, "error", {
+					error,
+					itemsLoaded: itemsLoaded.value,
+					itemCount: items.value.length,
+					cacheSettled,
+				});
+				throw error;
+			}
 		}
 		await Promise.resolve(itemGroupsPromise).catch((error) => {
 			traceStartupEvent("items.profile_groups", "error", { error });
@@ -1082,6 +1110,14 @@ export const useItemsStore = defineStore("items", () => {
 						limitSearchEnabled.value,
 					),
 			});
+
+			if (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY && !searchValue) {
+				setItems([], { totalCount: totalItemCount.value });
+				itemsLoaded.value = true;
+				cachedPagination.value.loading = false;
+				updatePerformanceMetrics(startTime);
+				return [];
+			}
 
 			cacheKey = generateCacheKey(
 				searchValue,
