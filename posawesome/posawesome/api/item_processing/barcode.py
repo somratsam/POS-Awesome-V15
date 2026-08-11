@@ -450,6 +450,24 @@ def get_items_from_barcode(selling_price_list, currency, barcode):
         "currency": currency,
         "scale_qty": scale_qty,
         "scale_price": scale_price,
+        # Same base-Item fields get_items()'s search path returns (search.py's
+        # _build_search_plan `fields` list) -- item_doc is already loaded above,
+        # so this is free. Callers that swap a get_items() search result for this
+        # endpoint's response (e.g. barcode scanning, which must bypass catalog
+        # visibility filters like Hide Variants Items) still need this shape;
+        # without it, structural fields like has_variants/item_group silently
+        # come back undefined instead of matching a normal search result.
+        "stock_uom": item_doc.stock_uom,
+        "is_stock_item": item_doc.is_stock_item,
+        "has_variants": item_doc.has_variants,
+        "variant_of": item_doc.variant_of,
+        "item_group": item_doc.item_group,
+        "has_batch_no": item_doc.has_batch_no,
+        "has_serial_no": item_doc.has_serial_no,
+        "max_discount": item_doc.max_discount,
+        "brand": item_doc.brand,
+        "allow_negative_stock": item_doc.allow_negative_stock,
+        "idx": item_doc.idx,
     }
 
 

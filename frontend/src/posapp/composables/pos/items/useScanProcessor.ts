@@ -14,6 +14,7 @@ import {
 	type ScanAssignment,
 } from "./scanProcessor/scanAssignment";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
+import itemService from "../../../services/itemService";
 // @ts-ignore
 import placeholderImage from "../../../components/pos/placeholder-image.png";
 
@@ -436,6 +437,12 @@ export function useScanProcessor(context: ScanProcessorContext) {
 		let searchCode = scannedCode;
 		let qtyFromBarcode: number | null = null;
 		let priceFromBarcode: number | null = null;
+		// True once searchCode has been resolved to a real item_code (serial/batch
+		// lookup below) rather than still being a raw scanned value. Determines
+		// which server lookup is safe to use once no server call has found it
+		// locally yet -- get_items_from_barcode() only searches the Item Barcode
+		// table, so it must not be used once searchCode is already an item_code.
+		let resolvedToItemCode = false;
 		let scaleResponse: any = null;
 		let scanAssignment: ScanAssignment = emptyScanAssignment();
 
@@ -562,6 +569,7 @@ export function useScanProcessor(context: ScanProcessorContext) {
 					const resolved = resolveRes?.message || {};
 					if (resolved?.item_code) {
 						searchCode = String(resolved.item_code);
+						resolvedToItemCode = true;
 						if (resolved?.serial_no) {
 							scanAssignment.serialNo = String(
 								resolved.serial_no,
@@ -610,8 +618,13 @@ export function useScanProcessor(context: ScanProcessorContext) {
 		// If not found locally, attempt to fetch from server using processed code
 		try {
 			let newItem: any = null;
-			if (qtyFromBarcode !== null) {
-				// Scale barcodes use a direct, faster lookup
+			if (qtyFromBarcode !== null || resolvedToItemCode) {
+				// searchCode is already a confirmed item_code here -- either a
+				// scale barcode (parsed above) or resolved via the serial/batch
+				// lookup above. get_item_detail() takes the item_code directly
+				// and, like get_items_from_barcode() below, applies no catalog
+				// visibility filtering -- appropriate for both, since in each
+				// case a specific item has already been identified.
 				const res = await frappe.call({
 					method: "posawesome.posawesome.api.items.get_item_detail",
 					args: {
@@ -625,18 +638,22 @@ export function useScanProcessor(context: ScanProcessorContext) {
 					newItem = res.message;
 				}
 			} else {
-				// Regular barcodes and searches use the generic search
-				const res = await frappe.call({
-					method: "posawesome.posawesome.api.items.get_items",
-					args: {
-						pos_profile: pos_profile.value,
-						price_list: active_price_list.value,
-						search_value: searchCode,
-					},
+				// A raw scanned barcode is a direct, exact lookup for one specific
+				// item -- it must not go through the catalog browse/search
+				// endpoint (get_items), which applies visibility filters like
+				// Hide Variants Items and Hide Unavailable Items. Those filters
+				// are appropriate for deciding what shows in the browse grid,
+				// not for whether a physically-scanned tag resolves. Every real
+				// barcode belongs to a specific variant, so Hide Variants Items
+				// in particular would silently break scanning almost entirely.
+				const barcodeResult = await itemService.getItemsFromBarcodeData({
+					selling_price_list: active_price_list.value,
+					currency: pos_profile.value?.currency || "",
+					barcode: searchCode,
 				});
 
-				if (res && res.message && res.message.length > 0) {
-					newItem = res.message[0];
+				if (barcodeResult) {
+					newItem = barcodeResult;
 				}
 			}
 

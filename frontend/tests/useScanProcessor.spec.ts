@@ -12,6 +12,16 @@ vi.mock("../src/posapp/stores/toastStore", () => ({
 	}),
 }));
 
+const itemServiceMocks = vi.hoisted(() => ({
+	getItemsFromBarcodeData: vi.fn(),
+}));
+
+vi.mock("../src/posapp/services/itemService", () => ({
+	default: {
+		getItemsFromBarcodeData: itemServiceMocks.getItemsFromBarcodeData,
+	},
+}));
+
 import { useScanProcessor } from "../src/posapp/composables/pos/items/useScanProcessor";
 
 const createScannableItem = (overrides: Record<string, any> = {}) => ({
@@ -112,6 +122,8 @@ describe("useScanProcessor serial scan handling", () => {
 			}),
 			show_alert: vi.fn(),
 		};
+		itemServiceMocks.getItemsFromBarcodeData.mockReset();
+		itemServiceMocks.getItemsFromBarcodeData.mockResolvedValue(null);
 	});
 
 	it("adds item and auto-sets serial when scanned code matches serial_no_data locally", async () => {
@@ -165,23 +177,28 @@ describe("useScanProcessor serial scan handling", () => {
 						},
 					};
 				}
-				if (method === "posawesome.posawesome.api.items.get_items") {
-					expect(args.search_value).toBe("ITEM-SERVER");
+				if (method === "posawesome.posawesome.api.items.get_item_detail") {
+					// Once search_serial_or_batch_or_barcode_number resolves a
+					// real item_code, searchCode is no longer a raw barcode --
+					// get_items_from_barcode() (an Item Barcode table lookup)
+					// would not find it by item_code, so this must go through
+					// get_item_detail() instead, same as the scale-barcode path.
+					expect(JSON.parse(args.item)).toEqual(
+						expect.objectContaining({ item_code: "ITEM-SERVER" }),
+					);
 					return {
-						message: [
-							{
-								item_code: "ITEM-SERVER",
-								item_name: "Server Item",
-								has_serial_no: 1,
-								has_batch_no: 0,
-								serial_no_data: [],
-								available_qty: 5,
-								rate: 20,
-								price_list_rate: 20,
-								base_rate: 20,
-								base_price_list_rate: 20,
-							},
-						],
+						message: {
+							item_code: "ITEM-SERVER",
+							item_name: "Server Item",
+							has_serial_no: 1,
+							has_batch_no: 0,
+							serial_no_data: [],
+							available_qty: 5,
+							rate: 20,
+							price_list_rate: 20,
+							base_rate: 20,
+							base_price_list_rate: 20,
+						},
 					};
 				}
 				return { message: null };
@@ -195,6 +212,48 @@ describe("useScanProcessor serial scan handling", () => {
 		const addedItem = ctx.itemAddition.addItem.mock.calls[0][0];
 		expect(addedItem.item_code).toBe("ITEM-SERVER");
 		expect(addedItem.to_set_serial_no).toBe("SER-SERVER-002");
+	});
+
+	it("resolves a plain scanned barcode via get_items_from_barcode, not the filtered catalog search", async () => {
+		// Regression test for the actual bug: a scanned barcode belonging to a
+		// variant item must resolve even when the POS Profile has Hide Variants
+		// Items on. get_items() would silently exclude it (that's the whole
+		// reason this endpoint exists); get_items_from_barcode() must not.
+		const ctx = makeContext();
+		itemServiceMocks.getItemsFromBarcodeData.mockResolvedValueOnce({
+			item_code: "35740232030014",
+			item_name: "HAT-CAP-BLACK-58",
+			barcode: "35740232030014",
+			rate: 48.6,
+			price_list_rate: 48.6,
+			uom: "Nos",
+			currency: "OMR",
+			has_variants: 0,
+			variant_of: "3574023203",
+			item_group: "ACCESSORIES",
+			is_stock_item: 1,
+			has_serial_no: 0,
+			has_batch_no: 0,
+		});
+
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("35740232030014");
+
+		expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledWith({
+			selling_price_list: "Standard Selling",
+			currency: "USD",
+			barcode: "35740232030014",
+		});
+		// The generic catalog search must never be reached for a plain barcode scan.
+		expect((globalThis as any).frappe.call).not.toHaveBeenCalledWith(
+			expect.objectContaining({
+				method: "posawesome.posawesome.api.items.get_items",
+			}),
+		);
+		expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
+		const addedItem = ctx.itemAddition.addItem.mock.calls[0][0];
+		expect(addedItem.item_code).toBe("35740232030014");
+		expect(addedItem.variant_of).toBe("3574023203");
 	});
 
 	it("blocks scanned items with insufficient stock for invoice flow", async () => {

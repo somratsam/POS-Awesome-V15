@@ -93,6 +93,64 @@ class TestBarcodeProcessing(unittest.TestCase):
         self.assertEqual(result["uom"], "Box")
         self.assertIn("uom", calls[0][2])
 
+    def test_returns_full_item_shape_for_a_variant_with_no_visibility_filtering(self):
+        # Regression guard: barcode scanning (useScanProcessor.ts) was switched
+        # to this endpoint specifically because get_items()'s search path
+        # applies catalog-visibility filters (Hide Variants Items, Hide
+        # Unavailable Items, item groups) that are appropriate for the browse
+        # grid but not for resolving a physically-scanned tag -- every real
+        # barcode belongs to a specific variant, so Hide Variants Items would
+        # otherwise make scanning fail almost entirely. This function must
+        # keep taking no pos_profile argument at all: that's what guarantees
+        # it can never grow a visibility filter by accident.
+        class Db:
+            def get_value(self, doctype, filters, fields=None, as_dict=False):
+                if doctype == "Item Barcode":
+                    return AttrDict(
+                        {"item_code": "35740232030014", "uom": None}
+                    )
+                if doctype == "Item Price":
+                    return 48.6
+                return None
+
+        self.module.frappe.db = Db()
+        self.module.frappe.get_cached_doc = lambda doctype, name: AttrDict(
+            {
+                "name": name,
+                "item_name": "HAT-CAP-BLACK-58",
+                "stock_uom": "Nos",
+                "is_stock_item": 1,
+                "has_variants": 0,
+                "variant_of": "3574023203",
+                "item_group": "ACCESSORIES",
+                "has_batch_no": 0,
+                "has_serial_no": 0,
+                "max_discount": 0,
+                "brand": None,
+                "allow_negative_stock": 0,
+                "idx": 3,
+            }
+        )
+        self.module._parse_scale_barcode_data = lambda barcode: None
+
+        result = self.module.get_items_from_barcode(
+            "Standard Selling",
+            "OMR",
+            "35740232030014",
+        )
+
+        self.assertEqual(result["item_code"], "35740232030014")
+        # variant_of being set is exactly what Hide Variants Items would have
+        # excluded via get_items() -- this endpoint must return it anyway.
+        self.assertEqual(result["variant_of"], "3574023203")
+        self.assertEqual(result["has_variants"], 0)
+        self.assertEqual(result["item_group"], "ACCESSORIES")
+        self.assertEqual(result["is_stock_item"], 1)
+        self.assertEqual(result["rate"], 48.6)
+        self.assertNotIn("pos_profile", self.module.get_items_from_barcode.__code__.co_varnames[
+            : self.module.get_items_from_barcode.__code__.co_argcount
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()
