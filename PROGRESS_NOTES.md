@@ -1,6 +1,6 @@
 # POS Awesome — develop-swan Fork Progress Notes
 
-Last updated: 2026-08-10
+Last updated: 2026-08-11
 
 This file exists so a future session (mine or another Claude Code session) can pick up
 context on this fork quickly without re-deriving it from scratch. If you're starting
@@ -23,6 +23,8 @@ currently up to date with `upstream/develop-swan`.
 
 Confirmed via `git log` — present on `upstream/develop-swan`, newest first:
 
+- `f3e794c` — fix: re-lock terminal on every return to POS Awesome, show
+  username instead of email, add Back to Desk escape
 - `4dfe2c8` — feat: enforce credit-only returns per POS Profile
   (posa_returns_credit_only)
 - `9c4c387` — feat: pull receipt address and phone dynamically per POS Profile
@@ -982,3 +984,139 @@ error, genuine-refund-attempt/blocked, genuine-credit-return/passes,
 normal-sale/unaffected). Live browser confirmation: cart-building no longer
 errors, Payments screen correctly enforces credit-only, normal sales
 unaffected.
+
+## 9. Terminal lock/PIN dialog: re-lock on return, username display, Back to Desk escape (2026-08-11, `f3e794c`)
+
+Three related fixes to the terminal lock/PIN feature, investigated and shipped
+as one commit in a single session.
+
+**Bug found: lock screen looked broken after leaving and returning to POS
+Awesome.** Reported flow: lock the terminal, enter the correct PIN, unlock
+works, navigate to Desk, navigate back into POS Awesome — the lock dialog
+visually appears again, but is already unlocked underneath, no PIN required,
+terminal instantly accessible.
+
+Root cause traced through two layers. Server-side, lock state
+(`terminal_state.py`) is a cache entry keyed by `(browser session, POS
+Profile)` with a flat 24-hour TTL, and it only ever flips back to
+`locked: True` via an explicit `lock_terminal` call — nothing anywhere calls
+it on navigation away, so a verified unlock silently stays valid for up to a
+day regardless of what the user does with the tab. Client-side,
+`Navbar.vue`'s `goDesk()` does a hard `window.location.href = "/app"`
+navigation, which fully tears down the Vue app and Pinia store; returning to
+`/app/posapp` is therefore always a genuine fresh page load (`posapp.js` has
+no `on_page_show` handler, so `on_page_load` reruns from scratch). The lock
+dialog's `lockDialogOpen` ref correctly defaults to `true` on that fresh
+mount, but the first authoritative `get_terminal_state` fetch then read the
+still-valid, still-unlocked 24h cache from before — flipping the dialog back
+to unlocked automatically, with no PIN ever entered. Not corrupted state;
+nothing in the system had ever re-engaged the lock.
+
+**Decision confirmed by the user (2026-08-11): Option A, no timeout,
+"simple, no exceptions."** Considered and presented three options: (1)
+re-require the PIN on every navigation regardless of elapsed time, (2) an
+idle/inactivity timeout, (3) stay unlocked until explicitly locked (today's
+de-facto behavior). Recommended the timeout approach as matching how most
+real POS systems (Square/Clover/Toast-style) balance security against
+cashier friction, but the user chose the simplest rule instead: every return
+to POS Awesome always re-locks, no exceptions — including a plain browser
+refresh or a background auto-update reload, since the client genuinely
+cannot distinguish those from a real Desk round-trip (`on_page_load` reruns
+identically in all three cases), and special-casing just Desk-navigation
+would require heuristics the user explicitly didn't want.
+
+**Fix**: `Navbar.vue`'s `fetchTerminalEmployees()` now calls `lock_terminal`
+(instead of the read-only `get_terminal_state`) on its *first* invocation per
+app instance only, gated by a new `hasForcedInitialTerminalLock` flag — this
+forces the server cache back to `locked: true` before it is ever read on a
+fresh mount, so there is no window in which a stale unlocked cache entry can
+be observed. Later calls within the same running instance (the dialog's
+"Retry" button after a failed cashier-list load, a POS Profile switch)
+continue to use the read-only `get_terminal_state`, so an unrelated network
+hiccup can never yank the terminal away from an active cashier mid-sale. No
+backend change was needed for this: `lock_terminal` already existed (it's the
+manual F8/lock-button path) and shares the exact same `get_authorized_pos_
+profile()` authorization chain as the endpoint it replaces at this one call
+site — calling it more often only narrows access, never grants it.
+
+Side effect noted and accepted, not a bug: lock state is keyed by browser
+session, not per-tab (matching the pre-existing cross-tab `BroadcastChannel`
+lock-intent design already in this file), so opening a second POS Awesome tab
+in the same browser will now also force-lock an already-unlocked first tab.
+
+**The flash/misleading-render symptom resolves as a consequence of the fix
+above, not as a separate change.** Traced every branch to confirm: `begin
+TerminalEmployeesLoad()` sets `lockDialogOpen = true` synchronously, before
+any network call even starts, and the first authoritative response can now
+only ever confirm `locked: true` (a request failure also falls through to
+`applyTerminalState(null)` → locked, unchanged fail-closed behavior). No code
+path can flip the dialog to unlocked without a real PIN verification on a
+fresh mount anymore — so no separate loading-state UI was needed; the dialog
+already shows the correct state (locked) from the first frame through
+confirmation.
+
+**Step 1 — username instead of email on the Unlock POS dialog.**
+`get_terminal_employees` (`employees.py`) now also selects and returns
+`username` (falling back to the User's `name`/email if blank — `User.
+username` is `unique` in Frappe's core doctype but not `reqd`, confirmed via
+the doctype JSON and by checking live data on `staging.local`). Threaded
+through `TerminalEmployee` in `employeeStore.ts` and the localStorage
+optimistic-cache normalizer in `terminalEmployeeCache.ts` (same fallback
+logic in all three places), so a cache-warm first paint — now common, since
+every return re-locks and re-shows this dialog — never flashes email before
+correcting to username once the live fetch resolves. Only the lock dialog's
+cashier row changed; the separate "Switch Cashier" dialog in the same file
+still shows email, deliberately left alone since the request was scoped to
+the Unlock POS dialog only.
+
+**Step 2 — "Back to Desk" escape button on the lock dialog.** Added next to
+"Unlock POS" in the dialog's action row (secondary-then-primary button order,
+mirroring the "Switch Cashier" dialog's existing Cancel-then-primary
+pattern), so a cashier who forgot their PIN isn't stuck with no way to reach
+a supervisor for a reset. Direct navigation
+(`window.location.href = "/app"`), no confirmation dialog — matches the
+existing unconfirmed `goDesk()` navigation used elsewhere in this app, and
+adding a confirmation step would just be friction for someone who's already
+stuck. Implemented as a local `goToDesk()` inside `EmployeeSwitchDialog.vue`
+rather than emitting an event up to `Navbar.vue`, since it's a one-line
+action with no dependency on any Navbar state. Does not touch lock state and
+makes no API call at all — verified via a new test
+(`employeeSwitchDialog.spec.ts`) asserting `employeeStore.isLocked` stays
+`true` after clicking it, so it's a pure UI escape hatch, not a security
+bypass. Combined with the re-lock-on-return fix, there is no way to chain
+"leave via this button" + "return" into a state that skips the PIN prompt.
+
+**Verified** (full 6-item regression check, run against the complete final
+state of all three changes together, immediately before commit): frontend
+`vitest run` **217/217 files, 1055/1055 tests** — one transient failure in
+`tests/performance/catalogLoad.spec.ts` was observed on a run that happened
+to overlap a concurrent `bench build` in the background; that spec asserts
+wall-clock timing thresholds, so re-ran it alone (9/9 pass) and then re-ran
+the full suite clean with nothing else competing for CPU (217/217, 0
+failures) to confirm it was resource contention, not a real regression, since
+none of the six changed files touch catalog loading in any way. Backend:
+`test_terminal_state` 5/5, `test_employees` 21/21 (including `test_get_
+terminal_employees_returns_profile_users_with_current_flag`, which directly
+exercises the changed function), `test_pos_access` 12/12 — 38/38 total.
+`bench build --app posawesome` clean exit 0. `bench migrate` **N/A** — no
+doctype, fixture, or print-format file was touched, only Python API logic and
+Vue/TS frontend files. Security review re-stated explicitly for all three
+changes combined: `lock_terminal` and `get_terminal_state` share the
+identical authorization chain, so calling the former more often only narrows
+access; the added `username` field is no more sensitive than the `full_name`/
+email already shown in the same pre-PIN-entry cashier list and is rendered
+via `{{ }}` text interpolation, never `v-html`, so no new XSS surface; the
+Back to Desk button's navigation target is a hardcoded literal, not
+attacker-influenceable, and the button issues no API call of any kind.
+Also checked `AGENTS.md`'s referenced `docs/ARCHITECTURE.md`, `docs/
+FEATURE_CONTRACTS.md`, `docs/CODEX_WORKFLOW.md`, `docs/TESTING_AND_
+VERIFICATION.md` before committing — all four define contracts for pricing/
+cart/offline/printing/customer/UOM/POS-Profile areas only; none define an
+authentication/terminal-lock contract, so none apply to this work.
+
+Files: `posawesome/posawesome/api/employees.py`,
+`frontend/src/posapp/components/Navbar.vue`,
+`frontend/src/posapp/components/pos/employee/EmployeeSwitchDialog.vue`,
+`frontend/src/posapp/stores/employeeStore.ts`,
+`frontend/src/posapp/utils/terminalEmployeeCache.ts`,
+`frontend/tests/employeeSwitchDialog.spec.ts`.
