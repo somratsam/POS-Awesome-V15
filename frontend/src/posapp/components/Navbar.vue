@@ -329,6 +329,7 @@ export default {
 			terminalLockRetryAttempt: 0,
 			terminalLockRequestInFlight: null,
 			terminalEmployeesRequestId: 0,
+			hasForcedInitialTerminalLock: false,
 		};
 	},
 	watch: {
@@ -620,10 +621,23 @@ export default {
 				TERMINAL_SECURITY_REQUEST_TIMEOUT_MS,
 				"Timed out loading authorized cashiers.",
 			);
+			// The first terminal-state check after this app instance mounts must force
+			// the terminal back to locked, not just read whatever was cached. A full
+			// browser navigation away from POS Awesome (Desk, refresh, an auto-update
+			// reload) tears down this component entirely; returning always re-mounts
+			// it fresh, so "first call in this instance" reliably means "just arrived
+			// at POS Awesome" without needing a separate unload/visibility signal.
+			// Later calls (retry-after-error, POS profile switch) must stay read-only
+			// so they don't lock out a cashier mid-sale over an unrelated hiccup.
+			const shouldForceInitialLock = !this.hasForcedInitialTerminalLock;
+			this.hasForcedInitialTerminalLock = true;
+			const stateMethod = shouldForceInitialLock
+				? "posawesome.posawesome.api.employees.lock_terminal"
+				: "posawesome.posawesome.api.employees.get_terminal_state";
 			const stateRequest = withRequestTimeout(
 				Promise.resolve().then(() =>
 					frappe.call({
-						method: "posawesome.posawesome.api.employees.get_terminal_state",
+						method: stateMethod,
 						args: {
 							pos_profile: profileName,
 						},

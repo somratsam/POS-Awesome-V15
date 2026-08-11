@@ -452,4 +452,46 @@ describe("EmployeeSwitchDialog", () => {
 			wrapper.find('[data-test="terminal-cashier-error"]').exists(),
 		).toBe(false);
 	});
+
+	it("offers a Back to Desk escape hatch on the lock dialog that navigates without requiring a PIN", async () => {
+		const store = useEmployeeStore();
+		expect(store.isLocked).toBe(true);
+
+		const originalLocation = window.location;
+		Object.defineProperty(window, "location", {
+			configurable: true,
+			value: { href: "" },
+		});
+
+		try {
+			const wrapper = mount(EmployeeSwitchDialog, {
+				global: {
+					components: {
+						VDialog: VDialogStub,
+						VCard: BoxStub,
+						VCardTitle: BoxStub,
+						VCardText: BoxStub,
+						VCardActions: BoxStub,
+						VBtn: VBtnStub,
+						VIcon: BoxStub,
+						VAlert: BoxStub,
+						VTextField: VTextFieldStub,
+						VProgressCircular: BoxStub,
+					},
+				},
+			});
+
+			const backButton = wrapper.get('[data-test="terminal-back-to-desk"]');
+			expect(backButton.attributes("disabled")).toBeUndefined();
+			await backButton.trigger("click");
+
+			expect(window.location.href).toBe("/app");
+			expect(store.isLocked).toBe(true);
+		} finally {
+			Object.defineProperty(window, "location", {
+				configurable: true,
+				value: originalLocation,
+			});
+		}
+	});
 });

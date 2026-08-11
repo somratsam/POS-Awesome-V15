@@ -307,7 +307,7 @@ def get_terminal_employees(pos_profile=None):
     if not users:
         return []
 
-    fields = ["name", "full_name", "enabled"]
+    fields = ["name", "full_name", "username", "enabled"]
     if _has_legacy_supervisor_field():
         fields.append("posa_is_pos_supervisor")
 
@@ -331,6 +331,7 @@ def get_terminal_employees(pos_profile=None):
             {
                 "user": row.get("name"),
                 "full_name": row.get("full_name") or row.get("name"),
+                "username": row.get("username") or row.get("name"),
                 "enabled": row.get("enabled", 1),
                 "is_current": row.get("name") == current_user,
                 "is_supervisor": user in supervisor_users

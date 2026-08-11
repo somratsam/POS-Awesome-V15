@@ -27,6 +27,7 @@ const normalizeCachedEmployees = (value: unknown): TerminalEmployee[] => {
 		.map((employee) => ({
 			user: normalizeIdentity(employee.user),
 			full_name: normalizeIdentity(employee.full_name) || normalizeIdentity(employee.user),
+			username: normalizeIdentity(employee.username) || normalizeIdentity(employee.user),
 			enabled: Number(employee.enabled ?? 1),
 			// Cached identities only make the selector available. Privileged flags
 			// are restored exclusively from the live API/PIN verification response.

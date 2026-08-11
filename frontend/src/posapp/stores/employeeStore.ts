@@ -4,6 +4,7 @@ import { defineStore } from "pinia";
 export interface TerminalEmployee {
 	user: string;
 	full_name: string;
+	username?: string;
 	enabled?: number;
 	is_current?: boolean;
 	is_supervisor?: boolean;
@@ -27,6 +28,7 @@ export type TerminalEmployeesLoadStatus =
 const normalizeEmployee = (cashier: TerminalEmployee): TerminalEmployee => ({
 	user: String(cashier.user),
 	full_name: String(cashier.full_name || cashier.user),
+	username: String(cashier.username || cashier.user),
 	enabled: Number(cashier.enabled ?? 1),
 	is_current: Boolean(cashier.is_current),
 	is_supervisor: Boolean(cashier.is_supervisor),

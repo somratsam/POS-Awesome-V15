@@ -221,7 +221,7 @@
 					>
 						<div>
 							<strong>{{ employee.full_name }}</strong>
-							<div class="employee-switch-dialog__meta">{{ employee.user }}</div>
+							<div class="employee-switch-dialog__meta">{{ employee.username }}</div>
 						</div>
 						<v-icon icon="mdi-lock-open-outline" color="primary" />
 					</button>
@@ -271,6 +271,9 @@
 				</v-alert>
 			</v-card-text>
 			<v-card-actions class="employee-switch-dialog__actions">
+				<v-btn variant="text" data-test="terminal-back-to-desk" @click="goToDesk">
+					{{ __("Back to Desk") }}
+				</v-btn>
 				<v-btn color="primary" :disabled="!canSubmit" :loading="isSubmitting" @click="submitUnlock">
 					{{ __("Unlock POS") }}
 				</v-btn>
@@ -383,6 +386,10 @@ const handleSwitchDialog = (value) => {
 	if (!value) {
 		employeeStore.closeEmployeeSwitch();
 	}
+};
+
+const goToDesk = () => {
+	window.location.href = "/app";
 };
 
 const verifySelection = async () => {
