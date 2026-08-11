@@ -581,12 +581,31 @@ found.
   ~6000-item catalog. Root cause confirmed, not yet fixed. Low impact: staff
   primarily use the barcode scanner and search instead of manual sort, so this is
   deferred.
-- **250ms cold-start cache race in `itemsStore.ts`.** `runInitialization()` races
-  the IndexedDB cache read against a 250ms timeout (`COLD_START_CACHE_GRACE_MS`);
-  the loser keeps running detached and can desync `itemsLoaded` from actual grid
-  contents. Can occasionally cause an empty/stale item grid on POS mount, most
-  likely on cold/slow IndexedDB (first load, cleared cache, new browser profile).
-  Not yet fixed.
+- ~~**250ms cold-start cache race in `itemsStore.ts`.**~~ Addressed 2026-08-11 —
+  widened to 700ms and the fallback fetch is now failure-safe. See section 10.
+- **`get_items_from_barcode()` has no POS Profile / warehouse scoping.**
+  Added 2026-08-11 while fixing the barcode scan bug (section 11): the
+  function takes no `pos_profile` argument at all, so any authenticated
+  session can resolve any barcode's full item detail (rate, stock flags,
+  variant/group info) without it being scoped to a specific store's warehouse
+  or price list the way `get_items()` is. Not currently known to be
+  exploitable for cross-store stock/pricing leakage in practice (the item
+  data itself isn't warehouse-specific; `rate`/`price_list_rate` come from
+  whatever price list is passed in as a plain argument, same as
+  `get_item_detail()`), but it's the same category of gap as the
+  `_ensure_pos_profile()` finding below — worth a deliberate look together
+  rather than assuming it's fine because nothing has gone wrong yet.
+- **`_ensure_pos_profile()` trusts client-supplied POS Profile JSON verbatim
+  (multi-store isolation gap).** Found while verifying warehouse isolation
+  for `actual_qty` stock data: `actual_qty` is always read from the current
+  POS Profile's own warehouse in the normal flow, confirmed by tracing the
+  actual code path — but `_ensure_pos_profile()` (`posawesome/posawesome/
+  api/utils.py`) accepts a POS Profile as raw JSON from the client and does
+  not re-verify server-side that the requesting user is actually assigned to
+  that profile before using its warehouse/company for the query. A crafted
+  request naming a different store's POS Profile could plausibly read that
+  store's stock data. Reported to the user as a finding; not yet fixed —
+  no fix has been requested.
 - **Redis empty-result caching bug in `get_items`.** The `@redis_cache` wrapper
   around `get_items` (gated by `posa_use_server_cache`) has no negative-result
   protection — a transient empty response can get cached and replayed for the full
@@ -1120,3 +1139,164 @@ Files: `posawesome/posawesome/api/employees.py`,
 `frontend/src/posapp/stores/employeeStore.ts`,
 `frontend/src/posapp/utils/terminalEmployeeCache.ts`,
 `frontend/tests/employeeSwitchDialog.spec.ts`.
+
+## 10. Item catalog load reliability + empty-by-default browsing + fashion-retail empty state (2026-08-11, `d360a0f`)
+
+**Investigation.** Traced the full cold-start item-load sequence end to end
+(what's fetched, in what order, parallel vs. sequential, the IndexedDB-vs-
+server cache race) to answer a general "what actually happens on POS
+mount" question, then found two concrete reliability gaps while doing so:
+`runInitialization()`'s fallback fetch had no error handling, so a genuine
+network failure on cold start silently left the grid empty with no error
+shown and no way to recover short of a full page reload; and the empty grid
+looked identical whether the catalog had genuinely failed to load or a
+search had zero matches, giving cashiers no signal to tell the two apart.
+
+**Fix, three parts, each confirmed with the user individually before
+applying:**
+1. Wrapped the fallback fetch in `runInitialization()` (`itemsStore.ts`) in
+   try/catch: on failure, `finishStartupPhase(phase, "error", {...})` fires
+   (so it's traceable in startup diagnostics) and the error is re-thrown
+   instead of swallowed. `useItemsSelectorInitialization.ts` was refactored
+   to extract `runInitializationAttempt()` and return
+   `{ stop, retry }` instead of just the watcher's stop handle.
+   `ItemsSelector.vue` now shows a distinct "Catalog failed to load" state
+   (`showCatalogLoadFailure`) with a Retry button wired to the new
+   `retry()`, instead of an indistinguishable blank grid.
+2. `COLD_START_CACHE_GRACE_MS` widened from 250ms to 700ms (see the retired
+   deferred item in section 4) — real cold IndexedDB opens (first-ever load,
+   cleared storage, a new browser profile) can run past 250ms, which threw
+   away a nearly-finished local read and forced an unnecessary live server
+   round-trip. 700ms gives cold storage realistic room to win without
+   meaningfully delaying the genuinely-missing case.
+3. Separately, investigated why setting POS Profile "Search Limit" to 0
+   (intending an empty grid until the cashier searches or scans) worked for
+   the initial load but not for "Reload Items" — root cause was a
+   falsy-zero bug repeated in three places across FE/BE, all treating
+   `0` as "not set" rather than "no limit." Decided, with the user, **not**
+   to fix by patching those falsy-zero checks (that would keep Search
+   Limit=0 as an overloaded, easy-to-regress signal for two unrelated
+   things: a real fetch cap, and "start empty"). Instead built a dedicated,
+   reversible toggle: `BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY` (`itemsStore.ts`),
+   checked once inside `loadItems()` so it applies uniformly to every
+   caller — initial load, Reload Items, price-list changes, background
+   warmup — without touching any of them individually. When `true` and
+   there's no search/scan term, `loadItems()` returns immediately with an
+   empty result; the fetch/population logic it guards is otherwise
+   untouched, so flipping the constant back to `false` fully restores the
+   original populate-on-load behavior with nothing else to rebuild.
+   Paired with a fashion-retail-appropriate empty state in
+   `ItemsSelector.vue` (`showBrowsePrompt`) — "Scan a tag or search to
+   begin" / "Find any item by name, style code, barcode or brand — search
+   above or scan the tag." — using the app's real `--pos-*` design tokens
+   (mocked up and approved as an Artifact before implementation), distinct
+   from the normal zero-result "No items found" state.
+4. Removed a dead `void startupInitPromise;` reference (and its now-unused
+   import) left over from an earlier refactor, in both
+   `useItemsSelectorInitialization.ts` and `DefaultLayout.vue`.
+
+**Verified** (full 6-item regression check, run against the complete final
+state of this fix together with the barcode fix in section 11, immediately
+before committing both): frontend `vitest run` **218/218 files, 1061/1061
+tests**. Backend: **N/A** — this piece touches no Python files (backend
+coverage for the sibling barcode fix is reported separately in section 11).
+`bench build --app posawesome`: clean exit 0, "built in 21.17s", Chrome 109
+CSS audit passed. `bench migrate`: **N/A** — no doctype, fixture, or
+print-format file touched. Security review: no new user input surface —
+the gate is a pure client-side boolean check with no new inputs, and the
+retry button re-runs the exact same already-authorized initialization call.
+Explicitly confirmed unaffected: normal typed search still returns and
+displays results, scanning still adds items to cart, and every current
+`loadItems()` caller (`runInitialization`, `recoverItemCatalog`/Reload
+Items, `updatePriceList`, `refreshItems`/background warmup, the pagination-
+reset path in `useItemsLoader.ts`) was enumerated via grep and confirmed to
+route through the same single gate — `itemsStoreLoadItems.spec.ts` (27/27),
+`useItemsSelectorInitialization.spec.ts` (4/4, new file),
+`itemsStartupNonBlocking.spec.ts`, `useItemsSelectorSearch.spec.ts` (9/9).
+Also confirmed live in the browser per the user's own testing before this
+commit.
+
+Files: `frontend/src/posapp/stores/itemsStore.ts`,
+`frontend/src/posapp/composables/pos/items/useItemsSelectorInitialization.ts`,
+`frontend/src/posapp/components/pos/items/ItemsSelector.vue`,
+`frontend/src/posapp/layouts/DefaultLayout.vue`,
+`frontend/tests/itemsStartupNonBlocking.spec.ts`,
+`frontend/tests/itemsStoreLoadItems.spec.ts`,
+`frontend/tests/useItemsSelectorInitialization.spec.ts` (new).
+
+## 11. Barcode scan "Item not found" fix (2026-08-11, `31854d7`)
+
+**Bug report.** Scanning barcode `35740232030014` returned "Item not found"
+despite the item (`HAT-CAP-BLACK-58`, a variant, 50 in stock) genuinely
+existing. Investigated whether this was a regression from the section 10
+work (disabled background pre-loading, the new browse gate) — proved
+empirically, not by assumption, that it was neither: forced
+`posa_hide_variants_items = 0` in-memory via `bench console` as the sole
+changed variable and the scan started resolving correctly, isolating the
+real cause to that one setting. Also proved background sync is not a
+factor — `backgroundSyncItemsUnlocked` calls the same filtered `get_items()`
+endpoint, so it was never going to help regardless of section 10.
+
+**Root cause.** The scan handler's "not found locally" fallback in
+`useScanProcessor.ts` called `get_items()` — the same filtered search
+endpoint the browse grid uses, which applies `posa_hide_variants_items` and
+other catalog-visibility filters meant for browsing. Every real barcode
+belongs to a specific variant item, so Hide Variants Items excludes almost
+every legitimate scan target — this was very likely misfiring for any store
+with that setting on, independent of anything else in this session.
+
+**Fix.** `useScanProcessor.ts`'s fallback now calls
+`itemService.getItemsFromBarcodeData()` (`get_items_from_barcode()`) for a
+plain scanned barcode — a dedicated Item Barcode table lookup with no
+`pos_profile` argument and therefore no visibility filtering at all. One
+subtlety caught before shipping: after serial/batch resolution,
+`searchCode` is already a resolved `item_code`, not a raw barcode, which
+`get_items_from_barcode()`'s barcode-table lookup would never match — a new
+`resolvedToItemCode` flag routes that case through `get_item_detail()`
+instead (same endpoint already used for scale barcodes, which takes an
+item_code directly). On the backend, `get_items_from_barcode()`
+(`barcode.py`) now also returns `has_variants`, `variant_of`, `item_group`,
+`has_batch_no`, `has_serial_no`, `max_discount`, `brand`,
+`allow_negative_stock`, and `idx` — all read off the `Item` doc it already
+loads via `frappe.get_cached_doc`, zero extra queries — so the scan handler
+gets the same complete item shape `get_items()` provides.
+
+**Verified** (full 6-item regression check, same combined run as section 10):
+frontend `vitest run` **218/218 files, 1061/1061 tests**, including the new
+`useScanProcessor.spec.ts` test proving a plain scan calls
+`getItemsFromBarcodeData` and never `get_items`. Backend, run in isolation:
+`test_barcode` **2/2** (includes a new regression test using the actual
+reported item's real data, asserting the full field shape and asserting the
+function signature still takes no `pos_profile` parameter, as a guard
+against ever reintroducing visibility filtering here), `test_item_fetchers`
+**5/5**. Three unrelated modules (`test_details`, `test_item_search_
+serialization`, `test_items_numeric_code`) failed but were rigorously
+confirmed **pre-existing** via `git stash`/`git stash pop` A/B comparison —
+identical failures reproduce on the unmodified codebase (a framework-level
+`frappe.clear_cache()` cleanup crash for the first two, an ERPNext test-
+data-seeding `DuplicateEntryError` for the third), unrelated to this change.
+`bench build --app posawesome`: clean exit 0 (shared build with section 10).
+`bench migrate`: **N/A** — `barcode.py`/`test_barcode.py` are plain API
+logic, not doctype/fixture/print-format files. Security review: the backend
+change only adds fields already loaded on the in-memory `Item` doc (no new
+query, no new data exposure beyond what `get_items()` already exposes for
+the same item); no permission check was added or removed — `get_items_from_
+barcode()`'s pre-existing lack of a `pos_profile`/authorization scope was
+identified as a separate, deliberately out-of-scope finding (see section 4).
+Explicitly confirmed: regular typed search still respects Hide Variants
+Items — re-ran the live `get_items(search_value="35740232030014")` call
+against the current profile with Hide Variants Items still on and got 0
+results, identical to before this fix; and the actual reported bug is fixed
+— re-ran `get_items_from_barcode()` live against the same barcode and got
+the full correct item. Named tests: `useScanProcessor.spec.ts` (7/7),
+`scanProcessorAssignment.spec.ts` (3/3), `scannerInputPaste.spec.ts` (3/3),
+`useScannerInput.spec.ts` (3/3), `useBarcodeIndexing.spec.ts` (2/2),
+`useItemsSelectorSearch.spec.ts` (9/9), `itemsStoreLoadItems.spec.ts`
+(27/27), `useItemAddition.spec.ts` (15/15), `itemAdditionSerials.spec.ts`
+(3/3) — 72/72 across 9 files. Also confirmed live in the browser per the
+user's own testing before this commit.
+
+Files: `posawesome/posawesome/api/item_processing/barcode.py`,
+`posawesome/posawesome/api/item_processing/test_barcode.py`,
+`frontend/src/posapp/composables/pos/items/useScanProcessor.ts`,
+`frontend/tests/useScanProcessor.spec.ts`.
