@@ -66,6 +66,11 @@ def _install_stubs():
     closing_data_module.get_payments_entries = lambda *args, **kwargs: []
     closing_data_module.get_pos_invoices = lambda *args, **kwargs: []
 
+    pos_access_module = types.ModuleType("posawesome.posawesome.api.pos_access")
+    pos_access_module.get_authorized_pos_profile = lambda pos_profile=None, company=None: AttrDict(
+        {"name": pos_profile or "POS-PROFILE-1", "company": company or "My Co"}
+    )
+
     sys.modules["frappe"] = frappe_module
     sys.modules["frappe.utils"] = frappe_utils_module
     sys.modules[
@@ -74,6 +79,7 @@ def _install_stubs():
     sys.modules[
         "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data"
     ] = closing_data_module
+    sys.modules["posawesome.posawesome.api.pos_access"] = pos_access_module
 
 
 def _load_module():
@@ -183,6 +189,44 @@ class TestClosingOverviewLoyalty(unittest.TestCase):
                 },
             ],
         )
+
+
+class TestClosingOverviewAuthorization(unittest.TestCase):
+    """get_closing_shift_overview() must re-resolve and re-authorize the POS
+    Profile server-side via get_authorized_pos_profile(), not trust the
+    opening shift's stored pos_profile/company without checking the caller
+    actually has access to it -- otherwise any authenticated user could read
+    another store's pre-close overview by passing a different opening shift
+    name."""
+
+    def setUp(self):
+        _install_stubs()
+        self.module = _load_module()
+
+    def test_authorizes_using_the_resolved_shifts_profile_and_company(self):
+        recorded_calls = []
+
+        def fake_get_authorized_pos_profile(pos_profile=None, company=None):
+            recorded_calls.append((pos_profile, company))
+            return AttrDict({"name": pos_profile, "company": company})
+
+        self.module.get_authorized_pos_profile = fake_get_authorized_pos_profile
+
+        self.module.get_closing_shift_overview("POS-OPEN-1")
+
+        self.assertEqual(recorded_calls, [("POS-PROFILE-1", "My Co")])
+
+    def test_propagates_a_permission_error_from_an_unauthorized_profile(self):
+        class Denied(Exception):
+            pass
+
+        def deny(pos_profile=None, company=None):
+            raise Denied("not authorized")
+
+        self.module.get_authorized_pos_profile = deny
+
+        with self.assertRaises(Denied):
+            self.module.get_closing_shift_overview("POS-OPEN-1")
 
 
 if __name__ == "__main__":

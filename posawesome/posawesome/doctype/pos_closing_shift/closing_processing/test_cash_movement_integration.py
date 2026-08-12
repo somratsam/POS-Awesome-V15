@@ -68,6 +68,7 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         self.assertEqual(row.opening_amount, 50)
         self.assertEqual(row.expected_amount, 30)
 
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_all")
@@ -82,6 +83,7 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         mock_get_all,
         mock_get_pos_invoices,
         mock_get_payments_entries,
+        mock_get_authorized_pos_profile,
     ):
         mock_get_pos_invoices.return_value = []
         mock_get_payments_entries.return_value = []

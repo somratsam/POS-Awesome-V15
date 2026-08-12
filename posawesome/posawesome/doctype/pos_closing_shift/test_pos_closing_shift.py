@@ -235,6 +235,7 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result[0].invoice, "SINV-RET-0001")
         self.assertEqual(result[0].return_against, "ACC-SINV-2026-00222")
 
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
@@ -243,6 +244,7 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_frappe,
         mock_get_pos_invoices,
         mock_get_payments_entries,
+        mock_get_authorized_pos_profile,
     ):
         mock_frappe.get_doc.return_value = SimpleNamespace(
             doctype="POS Opening Shift",
@@ -269,6 +271,7 @@ class TestPOSClosingShift(unittest.TestCase):
             submit_printed=0,
         )
 
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
@@ -277,6 +280,7 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_frappe,
         mock_get_pos_invoices,
         mock_get_payments_entries,
+        mock_get_authorized_pos_profile,
     ):
         mock_frappe.get_doc.return_value = SimpleNamespace(
             doctype="POS Opening Shift",
@@ -324,6 +328,7 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result["loyalty_redemption"]["count"], 1)
         self.assertEqual(result["payments_by_mode"][0]["company_currency_total"], 90)
 
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
@@ -332,6 +337,7 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_frappe,
         mock_get_pos_invoices,
         mock_get_payments_entries,
+        mock_get_authorized_pos_profile,
     ):
         mock_frappe.get_doc.return_value = SimpleNamespace(
             doctype="POS Opening Shift",

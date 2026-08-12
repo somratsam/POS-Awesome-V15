@@ -16,14 +16,30 @@ import mimetypes
 import frappe
 from frappe.utils.file_manager import get_file
 
+from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
+
 
 @frappe.whitelist()
 def get_receipt_logo_data_uri(pos_profile: str) -> str:
-    """Return the given POS Profile's receipt logo as a data: URI, or "" if unset."""
-    if not pos_profile or not frappe.db.exists("POS Profile", pos_profile):
+    """Return the given POS Profile's receipt logo as a data: URI, or "" if unset
+    or the caller isn't authorized for that profile.
+
+    Directly-callable whitelisted endpoint, so get_authorized_pos_profile()
+    re-validates the requesting user actually has access to pos_profile before
+    reading its logo -- otherwise any authenticated user could read another
+    store's logo by passing a different profile name. Failure returns "" (not
+    a thrown error) to match this function's existing fail-open design: a
+    missing/unauthorized logo should never break receipt printing.
+    """
+    if not pos_profile:
         return ""
 
-    file_url = frappe.db.get_value("POS Profile", pos_profile, "posa_receipt_logo")
+    try:
+        profile_doc = get_authorized_pos_profile(pos_profile)
+    except Exception:
+        return ""
+
+    file_url = profile_doc.get("posa_receipt_logo")
     if not file_url:
         return ""
 

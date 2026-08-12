@@ -2,6 +2,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
     get_shift_invoice_rows,
     get_payment_mode_counts,
@@ -51,8 +52,16 @@ def get_z_report_data(pos_closing_shift):
     total_taxes_and_charges (not back-calculated from total_sales via a
     hardcoded rate), so it stays correct regardless of tax rate changes or
     future per-item/per-customer tax exceptions.
+
+    This is a directly-callable whitelisted endpoint (the print format's own
+    permission check on the POS Closing Shift doc does not protect it), so
+    get_authorized_pos_profile() re-validates the requesting user actually
+    has access to this shift's POS Profile before any report data is built --
+    otherwise any authenticated user could read another store's full Z
+    Report by passing a different closing shift name.
     """
     doc = frappe.get_doc("POS Closing Shift", pos_closing_shift)
+    get_authorized_pos_profile(doc.pos_profile, company=doc.company)
     if doc.docstatus != 1:
         frappe.throw(_("Z Report can only be generated for a submitted POS Closing Shift."))
 

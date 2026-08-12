@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import flt, json
 from collections import defaultdict
 from frappe import _
+from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
     get_pos_invoices,
@@ -11,7 +12,14 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
 
 @frappe.whitelist()
 def get_closing_shift_overview(pos_opening_shift):
-    """Return invoice and payment totals for the provided POS Opening Shift."""
+    """Return invoice and payment totals for the provided POS Opening Shift.
+
+    Directly-callable whitelisted endpoint, so get_authorized_pos_profile()
+    re-validates the requesting user actually has access to this shift's POS
+    Profile before any totals are computed -- otherwise any authenticated
+    user could read another store's pre-close overview by passing a
+    different opening shift name.
+    """
 
     if not pos_opening_shift:
         frappe.throw(_("POS Opening Shift is required to compute the overview."))
@@ -46,6 +54,7 @@ def get_closing_shift_overview(pos_opening_shift):
 
     pos_profile = opening_shift_doc.pos_profile
     company = opening_shift_doc.company
+    get_authorized_pos_profile(pos_profile, company=company)
     company_currency = frappe.get_cached_value("Company", company, "default_currency")
 
     use_pos_invoice = frappe.db.get_value(
