@@ -599,19 +599,61 @@ found.
   leaving "Use Server Cache" OFF in POS Profile settings (see baseline below).
   Proper code fix (e.g. skip-caching empty results, or a dedicated cache-bust hook
   on POS Profile save) still pending.
-- **Known issue (2026-08-09): rare "Deadlock Occurred" / HTTP 508 error can appear
-  during invoice submission** (confirmed root cause: a pre-existing race condition
-  in the Submission Ledger's optimistic-locking, most likely triggered by
-  offline-sync retry logic combined with hourly scheduler job bursts — NOT caused
-  by the credit redemption validation added today, though that validation's extra
-  DB call may slightly widen the timing window). Observed specifically on a
-  full-credit + Visa + Cash 3-way split; a simpler full-credit + Visa case worked
-  without issue. IMPORTANT: in the observed case, the sale actually SUBMITTED
-  SUCCESSFULLY despite the error being shown — real risk is cashier
-  confusion/possible accidental duplicate retry, not actual transaction failure.
-  Needs investigation: (1) whether the existing duplicate-submission guard would
-  actually catch a retry in this scenario, (2) whether the submission-ledger's
-  locking can be hardened. Deferred for a future session.
+- **Known issue (2026-08-09, re-investigated 2026-08-12): rare "Deadlock
+  Occurred" / HTTP 508 error can appear during invoice submission.** The
+  2026-08-09 note's root cause was corrected on re-investigation: HTTP 508 is
+  Frappe's dedicated signal for a *genuine* MySQL deadlock/timeout
+  (`frappe.db.is_deadlocked`, `app.py:371-376`), not the `TimestampMismatchError`
+  optimistic-lock conflict originally assumed — a different exception class
+  entirely. Traced precisely to `_save_submission_ledger()`
+  (`invoice_processing/creation.py`): every OTHER doc save on this path
+  (`_save_draft_with_latest_timestamp`) retries on conflict; the ledger's own
+  `ledger_doc.save()` does not, so a lock conflict here (most likely from
+  offline-sync retry racing an online attempt, or scheduler-job overlap) can
+  surface as a hard failure to the cashier even after the invoice itself
+  already committed. **Duplicate-submission guard confirmed sound** — traced
+  end to end: the frontend correctly reuses the same `posa_client_request_id`
+  on a manual retry (nothing clears it on a generic failure), and the backend's
+  `find_invoice_by_client_request_id`/`_wait_for_submission_ledger_result` are
+  lock-free reads that correctly detect an already-submitted invoice before
+  attempting to create anything new. So this is a cashier-confusion/reliability
+  issue, not a duplicate-invoice risk. Two small, scoped fixes recommended, not
+  yet applied: (1) frontend — `classifyBusinessCode()` (`api.ts`) doesn't
+  recognize deadlock/508 text, so the *existing* graceful "check if it actually
+  succeeded" recovery path (`usePaymentSubmission.ts:1410`) never fires for
+  this specific error; extending its detection would close that. (2) backend —
+  wrap `_save_submission_ledger()` in the same bounded-retry pattern already
+  used for the invoice doc's own save, catching both `TimestampMismatchError`
+  and `frappe.QueryDeadlockError` (the existing invoice-save retry only catches
+  the former, so it has the same narrower gap). Deliberately not touching the
+  ledger claim-gate/wait logic itself — that part is subtle and already
+  correct. Deferred for a future session; not urgent given no duplicate-invoice
+  risk.
+
+- **Dependency CVEs, from the 2026-08-12 security review (section 13).**
+  `yarn audit` flags several packages with known CVEs. Deferred, not urgent:
+  `html2pdf.js` → `jspdf@4.0.0` (one CVE rated critical upstream: "HTML
+  Injection in New Window paths"; several high, patched jspdf ≥4.1.0–4.2.1)
+  and its bundled `dompurify@3.3.1` (many moderate sanitizer-bypass CVEs,
+  patched cumulatively through ≥3.4.13) — both real production dependencies
+  (ship to the browser, used by `useBarcodePrintOutput.ts`/`exportService.ts`),
+  but the app has **zero `v-html` usage anywhere**, so nothing in this app's
+  own code feeds untrusted raw HTML into them. `lodash@4.17.21` (high CVE in
+  `_.template`, moderate in `_.unset`/`_.omit`, patched 4.18.0) — confirmed
+  the app never calls any of those three functions. `socket.io-client` →
+  `socket.io-parser@4.2.4` (two high DoS CVEs, patched ≥4.2.6/4.2.7) — lower
+  risk since this app's client only ever connects to its own trusted Frappe
+  backend. All worth bumping as routine maintenance; none assessed as
+  practically exploitable through this app's own code paths today. (A larger
+  batch of vite/esbuild/vitest/rollup/postcss/minimatch/eslint findings are
+  build-tooling-only — never ship to the production bundle — and were not
+  prioritized.)
+- **`posawesome/posawesome/api/qz.py`'s `sign_message()` has no POS-specific
+  scoping.** Pre-existing/baseline code (not touched by any commit in this
+  fork), found during the 2026-08-12 security review. Any authenticated user
+  (not just POS cashiers) can get the site's QZ Tray private key to sign an
+  arbitrary message — narrow impact (print-trust identity, not financial/
+  customer data). Deferred, not urgent.
 
 (Z Report lookup/reprint, the same-shift exchange distinction, and the VAT
 section are all done now — see section 2 above. Still genuinely open: "Credit
@@ -1380,3 +1422,93 @@ Files: `posawesome/posawesome/api/item_processing/search.py`,
 `frontend/src/posapp/composables/pos/items/useScanProcessor.ts`,
 `frontend/src/posapp/services/itemService.ts`,
 `frontend/tests/useScanProcessor.spec.ts`.
+
+## 13. Full security review before staff rollout (2026-08-12, `3f8a2d4`)
+
+Comprehensive pass across secrets, dependencies, and every fix/feature built
+on this fork so far, ahead of rolling out to staff. Four parts:
+
+**1. Secrets scan — clean.** Full available git history (this is a shallow
+clone, so all 36 commits present locally = the fork's entire own history) plus
+the current working tree, checked for API keys/tokens/passwords/private keys.
+Nothing found. The one genuinely sensitive artifact in this app — the QZ Tray
+signing private key — is correctly generated at runtime into Frappe's
+`private` files directory (`posawesome/posawesome/api/qz.py`), never
+committed. Only `.env.example` (placeholder values) is tracked; real `.env`
+is gitignored.
+
+**2. Dependency scan.** `yarn audit` findings recorded in section 4 above
+(deferred, not urgent). `posawesome` itself declares zero direct Python
+dependencies (`pyproject.toml`); Frappe/ERPNext framework versions and core
+libraries (cryptography, requests, Werkzeug, PyJWT) all spot-checked as
+current. No Python dependency action needed for this fork specifically.
+
+**3. Cumulative cross-feature review — found and fixed 3 real gaps.**
+Reviewed every file this fork's own commits actually touched (not the full
+inherited codebase) for authorization, input validation, and interaction
+risk between separate fixes. Found the same missing-authorization shape in
+three whitelisted endpoints — each trusted a client-supplied record name to
+decide whose store's data to return, with no `get_authorized_pos_profile()`
+call, unlike everywhere else this pattern is used:
+
+- `get_z_report_data()` (`closing_processing/z_report.py`) — full Z Report
+  (sales, VAT, discounts, payment reconciliation, customer credit) for any
+  closing shift name.
+- `get_closing_shift_overview()` (`closing_processing/overview.py`) — had
+  `.check_permission("read")` deeper in the function on individual invoice/
+  payment rows, but no check at the top-level entry point deciding whose
+  shift the caller could even look at.
+- `get_receipt_logo_data_uri()` (`api/print_assets.py`) — another store's
+  logo image, for any POS Profile name.
+
+All three now call `get_authorized_pos_profile()`. The first two throw on
+failure, matching every other call site; the logo endpoint fails open
+(returns `""`) instead, matching its own pre-existing "never break receipt
+printing" design. Three existing tests (`test_pos_closing_shift.py` x3,
+`test_cash_movement_integration.py` x1) needed a
+`get_authorized_pos_profile` mock added — they used a fake POS Profile name
+that was never a real DB record, which the new check correctly rejects; not
+a bug in the fix, a pre-existing test-fixture gap the fix exposed.
+
+`list_closing_shifts()` (same feature family, added later) already had this
+exact pattern correctly applied with an explanatory docstring — these three
+gaps read as things that predated that pattern being established and were
+never retrofitted, not a deliberate choice. Two more findings from this pass
+recorded as deferred, not fixed (see section 4): the dependency CVE batch,
+and `qz.py`'s `sign_message()` scoping (pre-existing/baseline code, not part
+of this fork's own changes).
+
+**4. Code hygiene — clean.** No `console.log`/`debugger`/`print()`/
+`pdb.set_trace()`, no TODO/FIXME/HACK markers, no commented-out code blocks
+anywhere in the fork's own diff. Confirmed the earlier same-session Sales
+Person feature (fully discarded via `git restore` — see the discard turn
+in this session) and its temporary diagnostic logging left zero trace in any
+commit.
+
+**Verified** (full 6-item regression check for the 3 fixes in part 3):
+backend, in isolation — `closing_processing.test_z_report` (new) 3/3,
+`closing_processing.test_overview_loyalty` 4/4, `api.test_print_assets`
+(new) 4/4, `test_pos_closing_shift` 9/9, `closing_processing.
+test_cash_movement_integration` 2/2, `closing_processing.
+test_same_shift_exchange` 5/5 (sanity check, untouched by this fix) —
+27/27 across 6 modules. Frontend: **N/A** — no frontend files touched.
+`bench build`: **N/A**. `bench migrate`: **N/A** — no doctype/fixture/
+print-format touched. Security review: this task *is* the security review,
+restated per-function above. Explicit confirmation, live on `staging.local`,
+with a real unauthorized user (not just reasoned about): as `Administrator`
+(assigned to "Test Pos"), all three endpoints return correct data unchanged
+from before. As `mathias@abc.com` (confirmed via `POS Profile User` to have
+zero assignment to "Test Pos", and via `frappe.get_roles` to hold no
+manager/supervisor role): Z Report and overview both correctly raised and
+blocked; the logo call correctly returned `""`. Confirmed in the browser by
+the user: Z Report, pre-close summary, and receipt logo all work normally
+for single-store use.
+
+Files: `posawesome/posawesome/api/print_assets.py`,
+`posawesome/posawesome/api/test_print_assets.py` (new),
+`posawesome/posawesome/doctype/pos_closing_shift/closing_processing/overview.py`,
+`posawesome/posawesome/doctype/pos_closing_shift/closing_processing/z_report.py`,
+`posawesome/posawesome/doctype/pos_closing_shift/closing_processing/test_z_report.py` (new),
+`posawesome/posawesome/doctype/pos_closing_shift/closing_processing/test_overview_loyalty.py`,
+`posawesome/posawesome/doctype/pos_closing_shift/closing_processing/test_cash_movement_integration.py`,
+`posawesome/posawesome/doctype/pos_closing_shift/test_pos_closing_shift.py`.
