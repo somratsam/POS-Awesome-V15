@@ -26,6 +26,28 @@ const CERT_READY_STORAGE_KEY = "posa_qz_cert_ready";
 const MANUAL_DISCONNECT_STORAGE_KEY = "posa_qz_manual_disconnect";
 const DEFAULT_PRINT_FORMAT = "Standard";
 const PROFILE_PRINTER_FIELD = "posa_qz_printer_name";
+// qz.websocket.connect() has no built-in timeout: if the QZ Tray desktop
+// app isn't reachable (not running, unresponsive, origin not yet trusted),
+// the connection attempt can hang for a long, browser/OS-dependent time
+// instead of rejecting -- silently blocking the whole print flow. Bound it
+// so a QZ Tray hiccup fails fast into the existing browser-print fallback.
+const QZ_CONNECT_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(message)), ms);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+	});
+}
 
 export const qzConnected = ref(false);
 export const qzConnecting = ref(false);
@@ -282,7 +304,11 @@ export async function connectQzTray(options: { userInitiated?: boolean } = {}): 
 		});
 
 		try {
-			await qz.websocket.connect();
+			await withTimeout(
+				qz.websocket.connect(),
+				QZ_CONNECT_TIMEOUT_MS,
+				translate("QZ Tray connection timed out."),
+			);
 			qzConnected.value = true;
 			qz.printers.find().catch(() => undefined);
 			return true;
