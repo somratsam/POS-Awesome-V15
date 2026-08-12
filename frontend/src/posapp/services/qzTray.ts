@@ -18,6 +18,7 @@ export interface QzPrintDocumentOptions extends QzPrintHtmlOptions {
 	printFormat?: string;
 	letterhead?: string | null;
 	noLetterhead?: string | number | null;
+	settings?: Record<string, any> | string | null;
 }
 
 const PRINTER_STORAGE_KEY = "posa_qz_printer_name";
@@ -502,6 +503,7 @@ export async function printDocumentViaQz(options: QzPrintDocumentOptions) {
 			print_format: printFormat,
 			no_letterhead: noLetterhead,
 			letterhead: options.letterhead || undefined,
+			settings: options.settings || undefined,
 		},
 	});
 

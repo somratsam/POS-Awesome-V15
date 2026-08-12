@@ -1901,6 +1901,7 @@ import {
 } from "../../../services/documentPrint";
 import { isOffline } from "../../../../offline/index";
 import { buildInvoicePdfUrl, shouldDownloadPdfForShareError } from "../../../utils/invoiceSharing";
+import { resolvePaymentPrintFormat } from "../../../utils/paymentPrintFormat";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
 import {
 	canDeleteDocumentSourceRecord,
@@ -3792,15 +3793,36 @@ export default {
 			this.uiStore.closeInvoiceManagement();
 			this.router.push("/payments");
 		},
+		async resolveReprintPrintFormat(doctype, profile) {
+			try {
+				const response = await frappe.call({
+					method: "posawesome.posawesome.api.print_formats.get_print_formats",
+					args: { doctype },
+				});
+				const availableFormats = (response?.message || [])
+					.map((pf) => (typeof pf === "object" && pf.name ? pf.name : pf))
+					.filter(Boolean);
+				return (
+					resolvePaymentPrintFormat({ profile, customerInfo: null, availableFormats }) ||
+					profile.print_format_for_online ||
+					profile.print_format ||
+					"Standard"
+				);
+			} catch (error) {
+				console.error("Failed to resolve reprint print format", error);
+				return profile.print_format_for_online || profile.print_format || "Standard";
+			}
+		},
 		async printInvoice(invoice) {
 			const profile = this.posProfile;
 			if (!invoice?.name || !profile) return;
 			const doctype = invoice.doctype || this.currentInvoiceDoctype;
-			const printFormat = profile.print_format_for_online || profile.print_format || "Standard";
+			const printFormat = await this.resolveReprintPrintFormat(doctype, profile);
 			const letterHead = profile.letter_head || 0;
 			const debugPrint = isDebugPrintEnabled();
 			const useConfiguredQzPrint = shouldUseConfiguredQzDocumentPrinting(profile);
 			const useRawPrint = shouldUseRawDocumentPrinting(profile);
+			const reprintSettings = JSON.stringify({ is_reprint: 1 });
 			let url =
 				frappe.urllib.get_base_url() +
 				"/printview?doctype=" +
@@ -3810,7 +3832,9 @@ export default {
 				"&trigger_print=1&format=" +
 				encodeURIComponent(printFormat) +
 				"&no_letterhead=" +
-				(letterHead ? "0" : "1");
+				(letterHead ? "0" : "1") +
+				"&settings=" +
+				encodeURIComponent(reprintSettings);
 			if (letterHead) url += "&letterhead=" + encodeURIComponent(letterHead);
 			url = appendDebugPrintParam(url, debugPrint);
 			const printOptions = { allowOfflineFallback: isOffline(), triggerPrint: "1", debugPrint };
@@ -3824,6 +3848,7 @@ export default {
 						printFormat,
 						letterhead: letterHead || null,
 						noLetterhead: letterHead ? "0" : "1",
+						settings: reprintSettings,
 					});
 					return;
 				} catch (error) {
