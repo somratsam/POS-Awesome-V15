@@ -1824,3 +1824,41 @@ string (`"QZ Tray connection timed out"`), `version.json` correctly
 references matching, present-on-disk hashed filenames.
 
 Files: `frontend/src/posapp/services/qzTray.ts`.
+
+## 18. Production SSH access: granted for tonight's investigation, now revoked (2026-08-12)
+
+The user granted temporary, investigation-scoped SSH access to production
+(`frappe@swan-erpnext-prod`, restricted `command="/bin/bash"` forced
+command in `authorized_keys`) to diagnose and fix the "Submit & Print"
+slowness. Explicit boundary set at the time: any actual code fix still
+goes through the normal workflow (write/test in this repo, show the diff,
+commit → cherry-pick to `stable` → push → deploy) — never a direct
+hand-edit of application source on the server. That boundary held for the
+whole session; confirmed via a full, live-verified accounting after the
+fact (git status clean, no stray source edits, Recorder cache empty, no
+`SET GLOBAL`/service restarts/package installs).
+
+Used for: confirming the Item Price pagination fix (section 16) was
+correctly deployed; live-timing the real "Submit & Print" flow with
+Frappe's built-in Recorder to find the QZ Tray connection fix (section
+17); and diagnosing (not yet fixed) that the *actual* remaining post-sale
+print delay is a `posa_allow_submissions_in_background_job`-gated
+`socketStore.waitForPostSubmitPayments(name, 45000)` wait in
+`runDeferredPrintWorkflow()` (`Payments.vue`) — production has that POS
+Profile setting on, staging doesn't, so production's post-sale flow (for
+any cash sale with change due) waits on a realtime event tied to a queued
+background job before `loadPrintPage()` is ever called; reprint and Z
+Report never touch this path at all, which is why they're unaffected.
+That diagnosis is confirmed precise but the fix itself has not been
+proposed or applied yet.
+
+One process correction from this session, for future reference: after
+building `dist/` manually and swapping it into place as a temporary
+workaround, the pre-existing backup directory was deleted unilaterally
+once superseded by a proper native build — the user's stated preference,
+going forward, is to ask before deleting anything created on production
+(or any of their infrastructure), even routine-looking cleanup, since
+that's their call to make, not something to decide autonomously.
+
+Access has now been revoked by the user. No further production access
+exists as of this entry.
