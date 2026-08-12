@@ -667,6 +667,15 @@ found.
   full serialized profile object, never a bare name, so this branch never
   fires in production today. Small, low-risk follow-up when convenient: swap
   `json.dumps` for `frappe.as_json` at that call site.
+- **`offline_sync/pricing_rules.py` has the same unbounded-offset clamp bug
+  fixed in `offline_sync/item_prices.py` (section 16).** `_coerce_int(offset,
+  0)` at `pricing_rules.py:172` also has no `maximum` override, so it
+  inherits the same default `maximum=2000` meant for `limit` — silently
+  clamping the pagination cursor once a profile's pricing-rule sync needs to
+  page past offset 2000. Same class of bug, same fix shape (`maximum=None`
+  on the offset call only), not yet applied — found while fixing the Item
+  Price sibling, deferred since it wasn't the confirmed cause of the
+  production incident being investigated at the time.
 
 (Z Report lookup/reprint, the same-shift exchange distinction, and the VAT
 section are all done now — see section 2 above. Still genuinely open: "Credit
@@ -1674,3 +1683,69 @@ gap in `offline_sync/items.py` — see section 4.
 
 Files: `posawesome/posawesome/api/items.py`,
 `posawesome/posawesome/api/test_items_delta.py`.
+
+## 16. Item Price offline sync: unbounded-offset clamp caused an infinite pagination loop on production (2026-08-12)
+
+**Incident.** Investigated as a possible cause of a 10-15s "Submit & Print"
+delay reported on production but not staging. Browser console on production
+showed repeated `"Item Price sync received an invalid pagination cursor"`
+errors, page numbers climbing indefinitely (66, 67, 68... 81+), `next_offset`
+always reported as `2500` regardless of the actual offset requested.
+
+**Root cause.** `offline_sync/item_prices.py`'s `_coerce_int(value, default,
+minimum=0, maximum=2000)` has a default `maximum=2000` clearly intended as a
+sanity cap on **page size** (`limit`). `resolved_offset = _coerce_int(offset,
+0)` never overrode that default, so the **pagination cursor itself** was
+silently clamped to 2000 too. Once a profile's Item Price sync needed to page
+past offset 2000 (i.e. more than 2500 matching rows: production's ~6,000+
+items across 9 brands, multiple price lists each), every request from then on
+got clamped back down to `start=2000`, always returning the same 500 rows and
+always reporting `next_offset = 2000 + 500 = 2500` — regardless of what
+offset the client actually sent. The frontend
+(`offline/sync/adapters/itemPrices.ts`) has a self-healing fallback for a
+non-advancing `next_offset` (infers `offset + changesCount` and continues
+rather than aborting), which is why the loop never crashed — it just ran
+forever, logging an error and re-fetching the same window on an infinite
+loop, in the same browser tab and JS thread as the rest of the POS UI
+(`SyncCoordinator`, `concurrency: 1`, instantiated in `DefaultLayout.vue`
+which wraps the entire POS interface) — real, continuous network/IndexedDB
+load competing with whatever else the cashier was doing, including invoice
+submission. Staging's Item Price table (1,414 rows at the time of
+investigation) never reaches a 5th page, so it never triggered the clamp —
+this is why the bug was invisible there.
+
+**Fix.** `_coerce_int` now treats `maximum=None` as "no upper bound";
+`resolved_offset` passes `maximum=None` explicitly so the cursor is never
+clamped. `resolved_limit` is untouched — still defaults to the `maximum=2000`
+cap, which is the correct/intended target for that parameter.
+
+**Verified.** Staging's real dataset (1,414 rows) can't naturally reproduce
+the bug (below the 2,500-row trigger), so rather than injecting bulk test
+data into a shared site, `frappe.get_all` was monkey-patched in an isolated
+console process to simulate a 3,200-row dataset and the real
+`sync_item_prices()` function was driven through the exact loop the frontend
+uses: offset correctly progressed 0→500→1000→1500→2000→2500→3000 (page 6 is
+the exact page that previously clamped back to 2000 forever), terminating
+cleanly at `has_more=False` with exactly 3,200/3,200 rows fetched across 7
+pages — no stall, no repeat. Two new permanent regression tests added to
+`test_offline_sync_item_prices.py`: one asserting offset 2500 isn't clamped
+and returns the correct window/`next_offset`, one that paginates a full
+synthetic 3,200-row dataset with a 20-page safety cap so a reintroduced bug
+fails the test suite loudly instead of hanging it.
+
+Full 6-item regression check: frontend **218/218 files, 1061/1061 tests**.
+Backend, in isolation: `api.test_offline_sync_item_prices` **4/4** (2
+pre-existing + 2 new). `bench build`: **N/A** — no frontend files touched.
+`bench migrate`: **N/A** — no doctype/fixture/print-format touched. Security
+review: removing the offset cap lets an authenticated client request an
+arbitrarily large `OFFSET` (mildly more expensive for MariaDB to skip past),
+but this endpoint already requires login, carries the same tradeoff the
+identical unfixed `pricing_rules.py` sibling function already has (see
+section 4), and is a clear net risk reduction versus the unbounded-request
+loop it replaces. Adjacent flows: `resolved_limit`'s cap and behavior are
+byte-for-byte unchanged; the two pre-existing tests in this file (small
+dataset, watermark handling, buying/selling price-list scoping) still pass
+unmodified.
+
+Files: `posawesome/posawesome/api/offline_sync/item_prices.py`,
+`posawesome/posawesome/api/test_offline_sync_item_prices.py`.
