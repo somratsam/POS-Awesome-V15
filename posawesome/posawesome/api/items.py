@@ -17,7 +17,6 @@ from posawesome.posawesome.api.utils import (
     HAS_VARIANTS_EXCLUSION,
     expand_item_groups,
     get_item_groups,
-    _ensure_pos_profile,
 )
 from posawesome.posawesome.api.item_processing.stock import (
     get_stock_availability,
@@ -101,7 +100,11 @@ def get_delta_items(
     limit=500,
 ):
     """Return only items changed since ``modified_after`` for price/stock updates."""
-    profile, profile_json = _ensure_pos_profile(pos_profile)
+    # get_authorized_pos_profile(), not _ensure_pos_profile(): _collect_delta_item_codes()
+    # below queries Bin directly by profile.warehouse, so the profile must be
+    # re-resolved and re-authorized server-side rather than trusted verbatim
+    # from client-supplied JSON.
+    profile = get_authorized_pos_profile(pos_profile).as_dict()
 
     if not modified_after:
         return []
@@ -117,7 +120,7 @@ def get_delta_items(
     effective_price_list = price_list or profile.get("selling_price_list")
     base_items = (
         get_items(
-            profile_json,
+            profile.get("name"),
             price_list=effective_price_list,
             item_group="",
             search_value="",

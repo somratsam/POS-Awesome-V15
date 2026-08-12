@@ -13,6 +13,9 @@ class AttrDict(dict):
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
 
+    def as_dict(self):
+        return dict(self)
+
 
 def _install_framework_stubs():
     frappe_module = types.ModuleType("frappe")
@@ -31,6 +34,12 @@ def _install_framework_stubs():
     frappe_module.db = types.SimpleNamespace(
         get_value=lambda *args, **kwargs: None,
     )
+    frappe_module.PermissionError = PermissionError
+
+    def _throw(msg, exc_class=None):
+        raise (exc_class or Exception)(msg)
+
+    frappe_module.throw = _throw
 
     sys.modules["frappe"] = frappe_module
     sys.modules["frappe.utils"] = frappe_utils
@@ -51,6 +60,12 @@ def _install_dependency_stubs():
     utils_module._ensure_pos_profile = lambda pos_profile: (pos_profile, pos_profile)
     utils_module.log_perf_event = lambda *args, **kwargs: None
     sys.modules["posawesome.posawesome.api.utils"] = utils_module
+
+    pos_access_module = types.ModuleType("posawesome.posawesome.api.pos_access")
+    pos_access_module.get_authorized_pos_profile = lambda pos_profile=None, company=None: AttrDict(
+        {"name": "Test Pos", "company": company or "Test Company"}
+    )
+    sys.modules["posawesome.posawesome.api.pos_access"] = pos_access_module
 
     erpnext_stock_module = types.ModuleType("erpnext.stock.get_item_details")
     erpnext_stock_module.get_item_details = lambda *args, **kwargs: {}
@@ -173,6 +188,176 @@ class TestGetItemDetailNormalization(unittest.TestCase):
 
         self.assertIs(captured["item"], item)
         self.assertIsInstance(captured["doc"], self.frappe._dict)
+
+
+class TestGetItemDetailWarehouseAuthorization(unittest.TestCase):
+    """get_item_detail() re-authorizes the caller's POS Profile server-side,
+    then verifies a client-supplied `warehouse` belongs to that profile's
+    company -- a company match, not an exact-warehouse match, since a
+    caller may legitimately request a *different* warehouse within the
+    same company (the cross-warehouse "alternate item" stock-check flow).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.frappe = _install_framework_stubs()
+        _install_dependency_stubs()
+        _install_package_stubs()
+        cls.details = _load_module()
+
+    @staticmethod
+    def _get_value_stub(warehouse_company):
+        def get_value(doctype, name, field=None, as_dict=False):
+            if doctype == "Warehouse":
+                return warehouse_company
+            if doctype == "Item" and as_dict:
+                return {"max_discount": 0, "allow_negative_stock": 0, "stock_uom": "Nos"}
+            return "USD"
+
+        return get_value
+
+    def test_allows_a_warehouse_belonging_to_the_authorized_profiles_company(self):
+        with (
+            patch.object(
+                self.details,
+                "get_authorized_pos_profile",
+                return_value=AttrDict({"name": "Test Pos", "company": "Swan"}),
+            ),
+            patch.object(self.details, "get_stock_availability", return_value=5),
+            patch.object(self.details, "get_batches", return_value=[]),
+            patch.object(self.details.frappe, "get_all", return_value=[]),
+            patch.object(
+                self.details.frappe.db,
+                "get_value",
+                side_effect=self._get_value_stub("Swan"),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "erpnext.stock.get_item_details": types.SimpleNamespace(
+                        get_item_details=lambda item, doc, overwrite_warehouse=False: {}
+                    )
+                },
+            ),
+        ):
+            result = self.details.get_item_detail(
+                {"item_code": "ITEM-003", "is_stock_item": 1},
+                warehouse="Main - Swan",
+                company="Swan",
+            )
+
+        self.assertEqual(result["actual_qty"], 5)
+
+    def test_rejects_a_warehouse_belonging_to_a_different_company(self):
+        with (
+            patch.object(
+                self.details,
+                "get_authorized_pos_profile",
+                return_value=AttrDict({"name": "Test Pos", "company": "Swan"}),
+            ),
+            patch.object(
+                self.details.frappe.db,
+                "get_value",
+                side_effect=self._get_value_stub("Some Other Company"),
+            ),
+        ):
+            with self.assertRaises(self.frappe.PermissionError):
+                self.details.get_item_detail(
+                    {"item_code": "ITEM-003", "is_stock_item": 1},
+                    warehouse="Other Companys Warehouse",
+                    company="Swan",
+                )
+
+    def test_skips_the_warehouse_check_entirely_when_no_warehouse_is_requested(self):
+        doctypes_queried = []
+
+        def get_value(doctype, name, field=None, as_dict=False):
+            doctypes_queried.append(doctype)
+            if doctype == "Item" and as_dict:
+                return {"max_discount": 0, "allow_negative_stock": 0, "stock_uom": "Nos"}
+            return "USD"
+
+        with (
+            patch.object(
+                self.details,
+                "get_authorized_pos_profile",
+                return_value=AttrDict({"name": "Test Pos", "company": "Swan"}),
+            ),
+            patch.object(self.details, "get_stock_availability", return_value=0),
+            patch.object(self.details, "get_batches", return_value=[]),
+            patch.object(self.details.frappe, "get_all", return_value=[]),
+            patch.object(self.details.frappe.db, "get_value", side_effect=get_value),
+            patch.dict(
+                sys.modules,
+                {
+                    "erpnext.stock.get_item_details": types.SimpleNamespace(
+                        get_item_details=lambda item, doc, overwrite_warehouse=False: {}
+                    )
+                },
+            ),
+        ):
+            self.details.get_item_detail(
+                {"item_code": "ITEM-004", "is_stock_item": 0},
+                company="Swan",
+            )
+
+        self.assertNotIn("Warehouse", doctypes_queried)
+
+
+class TestGetItemsDetailsAuthorization(unittest.TestCase):
+    """get_items_details() must re-resolve and re-authorize the POS Profile
+    server-side via get_authorized_pos_profile(), not trust a client-supplied
+    dict verbatim -- ItemDetailAggregator.warehouse (used for every
+    actual_qty in the batch) is read straight off whatever profile dict it's
+    handed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.frappe = _install_framework_stubs()
+        _install_dependency_stubs()
+        _install_package_stubs()
+        cls.details = _load_module()
+
+    def test_uses_the_authorized_profiles_warehouse_not_the_clients_claim(self):
+        recorded_profiles = []
+
+        class FakeAggregator:
+            def __init__(self, pos_profile, price_list=None, customer=None):
+                recorded_profiles.append(pos_profile)
+
+            def build_details(self, items_data):
+                return []
+
+        with (
+            patch.object(
+                self.details,
+                "get_authorized_pos_profile",
+                return_value=AttrDict(
+                    {"name": "Authorized-Profile", "warehouse": "Authorized Warehouse"}
+                ),
+            ),
+            patch.object(self.details, "ItemDetailAggregator", FakeAggregator),
+        ):
+            self.details.get_items_details(
+                json.dumps(
+                    {"name": "Client-Claimed-Profile", "warehouse": "Client-Claimed-Warehouse"}
+                ),
+                json.dumps([{"item_code": "ITEM-001"}]),
+            )
+
+        self.assertEqual(len(recorded_profiles), 1)
+        self.assertEqual(recorded_profiles[0].get("warehouse"), "Authorized Warehouse")
+
+    def test_propagates_a_permission_error_from_an_unauthorized_profile(self):
+        class Denied(Exception):
+            pass
+
+        with patch.object(self.details, "get_authorized_pos_profile", side_effect=Denied("nope")):
+            with self.assertRaises(Denied):
+                self.details.get_items_details(
+                    "Someone Elses Profile",
+                    json.dumps([{"item_code": "ITEM-001"}]),
+                )
 
 
 if __name__ == "__main__":

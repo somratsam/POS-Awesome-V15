@@ -40,6 +40,7 @@ export interface BarcodeLookupArgs {
 	selling_price_list: string;
 	currency: string;
 	barcode: string;
+	pos_profile?: string;
 }
 
 export interface ItemQuickEditArgs {

@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import nowdate
 from posawesome.posawesome.api.item_fetchers import ItemDetailAggregator, get_batches
 from posawesome.posawesome.api.item_processing.stock import get_stock_availability
+from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.api.utils import _ensure_pos_profile, log_perf_event
 from frappe import _, as_json
 import json
@@ -14,7 +15,11 @@ def get_items_details(pos_profile, items_data, price_list=None, customer=None):
 
     started_at = time.perf_counter()
 
-    pos_profile, _ = _ensure_pos_profile(pos_profile)
+    # get_authorized_pos_profile(), not _ensure_pos_profile(): warehouse (via
+    # ItemDetailAggregator.warehouse below) drives actual_qty for every item
+    # in this batch, so the profile must be re-resolved and re-authorized
+    # server-side rather than trusted verbatim from client-supplied JSON.
+    pos_profile = get_authorized_pos_profile(pos_profile).as_dict()
     items_data = json.loads(items_data)
 
     if not items_data:
@@ -53,6 +58,25 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 
     item = normalize_mapping(item)
     doc = normalize_mapping(doc) if doc is not None else doc
+
+    # Re-resolve and re-authorize the caller's POS Profile server-side, then
+    # verify `warehouse` (a raw client-supplied value used directly for the
+    # batch/serial/stock lookups below) actually belongs to that profile's
+    # company. This is intentionally a company match, not an exact-warehouse
+    # match: callers legitimately request a *different* warehouse within the
+    # same company for the cross-warehouse "alternate item" stock-check flow
+    # (Variants.vue / item_updates.ts both send `item.warehouse` overrides).
+    # `item.get("pos_profile")` falls back to the session user's own active
+    # profile via get_authorized_pos_profile() when absent, which every
+    # current caller of this endpoint already resolves to correctly.
+    authorized_profile = get_authorized_pos_profile(item.get("pos_profile"), company=company)
+    if warehouse:
+        warehouse_company = frappe.db.get_value("Warehouse", warehouse, "company")
+        if warehouse_company != authorized_profile.company:
+            frappe.throw(
+                _("Warehouse {0} is not available for this POS Profile.").format(warehouse),
+                frappe.PermissionError,
+            )
 
     today = nowdate()
     item_code = item.get("item_code")

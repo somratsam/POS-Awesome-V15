@@ -650,6 +650,7 @@ export function useScanProcessor(context: ScanProcessorContext) {
 					selling_price_list: active_price_list.value,
 					currency: pos_profile.value?.currency || "",
 					barcode: searchCode,
+					pos_profile: pos_profile.value?.name,
 				});
 
 				if (barcodeResult) {

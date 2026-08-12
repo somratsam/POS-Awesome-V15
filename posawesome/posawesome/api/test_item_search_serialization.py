@@ -9,6 +9,17 @@ from datetime import datetime
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
+class _FakeProfileDoc(dict):
+    """Minimal stand-in for the frappe.get_doc("POS Profile", ...) result
+    get_authorized_pos_profile() returns -- dict-like `.get()` access plus
+    `.as_dict()`, matching what _normalize_profile_context() now relies on."""
+
+    __getattr__ = dict.get
+
+    def as_dict(self):
+        return dict(self)
+
+
 def _install_stubs():
     frappe_module = types.ModuleType("frappe")
     frappe_module._ = lambda value: value
@@ -57,6 +68,15 @@ def _install_stubs():
     utils._ensure_pos_profile = lambda value: value
     utils.log_perf_event = lambda *args, **kwargs: None
     sys.modules["posawesome.posawesome.api.utils"] = utils
+
+    def _fake_get_authorized_pos_profile(pos_profile=None, company=None):
+        if isinstance(pos_profile, str):
+            pos_profile = json.loads(pos_profile)
+        return _FakeProfileDoc(pos_profile or {})
+
+    pos_access = types.ModuleType("posawesome.posawesome.api.pos_access")
+    pos_access.get_authorized_pos_profile = _fake_get_authorized_pos_profile
+    sys.modules["posawesome.posawesome.api.pos_access"] = pos_access
 
     barcode = types.ModuleType("posawesome.posawesome.api.item_processing.barcode")
     barcode.search_serial_or_batch_or_barcode_number = lambda *args, **kwargs: {}
@@ -408,6 +428,61 @@ class TestItemSearchSerialization(unittest.TestCase):
             ("ITEM-HOT-IN", "ITEM-HOT-ZERO"),
         )
         self.assertEqual(sql_calls[1]["exclude_codes"], ("ITEM-HOT-IN",))
+
+
+class TestNormalizeProfileContext(unittest.TestCase):
+    """_normalize_profile_context() (used by get_items()) must re-resolve and
+    re-authorize the POS Profile server-side via get_authorized_pos_profile(),
+    not trust a client-supplied dict verbatim via _ensure_pos_profile() --
+    warehouse, read off this context, drives every actual_qty figure the
+    search endpoint returns."""
+
+    @classmethod
+    def setUpClass(cls):
+        _install_stubs()
+        cls.module = _load_module()
+
+    def test_derives_warehouse_and_profile_name_from_the_authorized_profile(self):
+        recorded_calls = []
+
+        def fake_get_authorized_pos_profile(pos_profile=None, company=None):
+            recorded_calls.append(pos_profile)
+            return _FakeProfileDoc(
+                {
+                    "name": "Authorized-Profile",
+                    "warehouse": "Authorized Warehouse",
+                    "selling_price_list": "Retail",
+                    "posa_use_server_cache": 0,
+                    "posa_server_cache_duration": None,
+                }
+            )
+
+        self.module.get_authorized_pos_profile = fake_get_authorized_pos_profile
+
+        ctx = self.module._normalize_profile_context(
+            {"name": "Client-Claimed-Profile", "warehouse": "Client-Claimed-Warehouse"}
+        )
+
+        # The client-supplied dict was passed through for identity resolution,
+        # but the resulting warehouse/profile_name come from what
+        # get_authorized_pos_profile() actually returned, not from the
+        # client's own claims about warehouse.
+        self.assertEqual(recorded_calls, [{"name": "Client-Claimed-Profile", "warehouse": "Client-Claimed-Warehouse"}])
+        self.assertEqual(ctx.warehouse, "Authorized Warehouse")
+        self.assertEqual(ctx.profile_name, "Authorized-Profile")
+        self.assertEqual(ctx.pos_profile.get("warehouse"), "Authorized Warehouse")
+
+    def test_propagates_a_permission_error_from_an_unauthorized_profile(self):
+        class Denied(Exception):
+            pass
+
+        def deny(pos_profile=None, company=None):
+            raise Denied("not authorized")
+
+        self.module.get_authorized_pos_profile = deny
+
+        with self.assertRaises(Denied):
+            self.module._normalize_profile_context("Someone Elses Profile")
 
 
 if __name__ == "__main__":

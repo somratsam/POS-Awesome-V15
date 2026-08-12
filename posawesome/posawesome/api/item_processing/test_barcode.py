@@ -19,9 +19,16 @@ def _install_stubs():
     frappe_module = types.ModuleType("frappe")
     frappe_module.whitelist = lambda *args, **kwargs: (lambda fn: fn)
     frappe_module.DoesNotExistError = Exception
+    frappe_module.PermissionError = PermissionError
     frappe_module.log_error = lambda *args, **kwargs: None
     frappe_module.get_cached_doc = lambda *args, **kwargs: None
     frappe_module.get_all = lambda *args, **kwargs: []
+    # get_items_from_barcode() now imports get_authorized_pos_profile from
+    # pos_access.py at module level (see barcode.py); pos_access.py's own
+    # top-level `from frappe import _` needs this to exist just to import
+    # cleanly. Individual tests still stub get_authorized_pos_profile itself
+    # rather than exercising its real DB-backed logic against this fake.
+    frappe_module._ = lambda text, *args, **kwargs: text
     sys.modules["frappe"] = frappe_module
 
     frappe_utils = types.ModuleType("frappe.utils")
@@ -83,6 +90,12 @@ class TestBarcodeProcessing(unittest.TestCase):
             {"name": name, "item_name": "Item 001", "stock_uom": "Nos"}
         )
         self.module._parse_scale_barcode_data = lambda barcode: None
+        # This test is about UOM/rate logic, not authorization -- stub the
+        # authorization call itself rather than reproducing its real
+        # session/DB-backed logic against this file's lightweight fake frappe.
+        self.module.get_authorized_pos_profile = lambda pos_profile=None: AttrDict(
+            {"name": "Test Pos", "company": "Test Co"}
+        )
 
         result = self.module.get_items_from_barcode(
             "Standard Selling",
@@ -100,9 +113,13 @@ class TestBarcodeProcessing(unittest.TestCase):
         # Unavailable Items, item groups) that are appropriate for the browse
         # grid but not for resolving a physically-scanned tag -- every real
         # barcode belongs to a specific variant, so Hide Variants Items would
-        # otherwise make scanning fail almost entirely. This function must
-        # keep taking no pos_profile argument at all: that's what guarantees
-        # it can never grow a visibility filter by accident.
+        # otherwise make scanning fail almost entirely. get_items_from_barcode()
+        # does take a pos_profile argument (added for authorization -- see
+        # test_requires_an_authorized_pos_profile below), but it must only ever
+        # use it to authorize the caller, never to filter the result: this test
+        # asserts a Hide-Variants-Items-shaped item (variant_of set, has_variants
+        # 0) still comes back with that data intact, proving no such filter is
+        # applied.
         class Db:
             def get_value(self, doctype, filters, fields=None, as_dict=False):
                 if doctype == "Item Barcode":
@@ -132,11 +149,17 @@ class TestBarcodeProcessing(unittest.TestCase):
             }
         )
         self.module._parse_scale_barcode_data = lambda barcode: None
+        recorded_profile_calls = []
+        self.module.get_authorized_pos_profile = lambda pos_profile=None: (
+            recorded_profile_calls.append(pos_profile)
+            or AttrDict({"name": "Test Pos", "company": "Test Co"})
+        )
 
         result = self.module.get_items_from_barcode(
             "Standard Selling",
             "OMR",
             "35740232030014",
+            pos_profile="Test Pos",
         )
 
         self.assertEqual(result["item_code"], "35740232030014")
@@ -147,9 +170,36 @@ class TestBarcodeProcessing(unittest.TestCase):
         self.assertEqual(result["item_group"], "ACCESSORIES")
         self.assertEqual(result["is_stock_item"], 1)
         self.assertEqual(result["rate"], 48.6)
-        self.assertNotIn("pos_profile", self.module.get_items_from_barcode.__code__.co_varnames[
-            : self.module.get_items_from_barcode.__code__.co_argcount
-        ])
+        # get_authorized_pos_profile() was consulted (authorization happened)
+        # but its return value never touched any filtering above.
+        self.assertEqual(recorded_profile_calls, ["Test Pos"])
+
+    def test_requires_an_authorized_pos_profile(self):
+        # If the caller's session isn't authorized for any POS Profile,
+        # get_authorized_pos_profile() raises -- get_items_from_barcode()
+        # must propagate that, not swallow it and return item data anyway.
+        class Db:
+            def get_value(self, doctype, filters, fields=None, as_dict=False):
+                return AttrDict({"item_code": "ITEM-001", "uom": None})
+
+        self.module.frappe.db = Db()
+        self.module.frappe.get_cached_doc = lambda doctype, name: AttrDict(
+            {"name": name, "item_name": "Item 001", "stock_uom": "Nos"}
+        )
+        self.module._parse_scale_barcode_data = lambda barcode: None
+
+        def deny(pos_profile=None):
+            raise self.module.frappe.PermissionError("not authorized")
+
+        self.module.get_authorized_pos_profile = deny
+
+        with self.assertRaises(self.module.frappe.PermissionError):
+            self.module.get_items_from_barcode(
+                "Standard Selling",
+                "USD",
+                "BARCODE-001",
+                pos_profile="Someone Elses Profile",
+            )
 
 
 if __name__ == "__main__":

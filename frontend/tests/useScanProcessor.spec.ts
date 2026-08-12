@@ -52,6 +52,7 @@ const makeContext = (
 	return {
 		items: ref<any[]>([]),
 		pos_profile: ref({
+			name: "Test Pos",
 			currency: "USD",
 			warehouse: "Main Warehouse",
 			company: "Test Co",
@@ -243,6 +244,7 @@ describe("useScanProcessor serial scan handling", () => {
 			selling_price_list: "Standard Selling",
 			currency: "USD",
 			barcode: "35740232030014",
+			pos_profile: "Test Pos",
 		});
 		// The generic catalog search must never be reached for a plain barcode scan.
 		expect((globalThis as any).frappe.call).not.toHaveBeenCalledWith(

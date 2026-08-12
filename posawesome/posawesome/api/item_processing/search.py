@@ -20,6 +20,7 @@ from posawesome.posawesome.api.utils import (
     _ensure_pos_profile,
     log_perf_event,
 )
+from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.api.item_processing.barcode import search_serial_or_batch_or_barcode_number
 from posawesome.posawesome.api.item_processing.details import get_items_details
 from posawesome.posawesome.api.item_sale_controls import installed_item_search_fields
@@ -947,9 +948,17 @@ def _execute_item_search(
 
 
 def _normalize_profile_context(pos_profile) -> ProfileContext:
-    """Return the active profile metadata required by :func:`get_items`."""
+    """Return the active profile metadata required by :func:`get_items`.
 
-    profile_dict, profile_json = _ensure_pos_profile(pos_profile)
+    Uses `get_authorized_pos_profile()` (not `_ensure_pos_profile()`) so the
+    profile -- and critically its `warehouse`, which drives every `actual_qty`
+    figure this search returns -- is always re-resolved and re-authorized
+    server-side, never trusted verbatim from client-supplied JSON.
+    """
+
+    profile_doc = get_authorized_pos_profile(pos_profile)
+    profile_dict = profile_doc.as_dict()
+    profile_json = as_json(profile_dict)
     ttl = profile_dict.get("posa_server_cache_duration")
     try:
         ttl = int(ttl) * 60 if ttl else None
