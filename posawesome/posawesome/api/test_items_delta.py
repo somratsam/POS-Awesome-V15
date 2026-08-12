@@ -86,6 +86,51 @@ class TestGetDeltaItemsAuthorization(unittest.TestCase):
         # need to thread a client-derived JSON blob through it.
         self.assertEqual(recorded_get_items_calls, ["Authorized-Profile"])
 
+    def test_passes_the_authorized_profile_name_through_to_get_items_details(self):
+        """Regression test: get_delta_items() previously referenced a stale
+        `profile_json` variable when enriching delta item codes via
+        get_items_details(), raising NameError in production. That branch
+        only runs when base_items didn't already satisfy the limit and
+        _collect_delta_item_codes() found codes beyond them -- none of the
+        other tests in this file reach it, which is why the bug shipped."""
+        authorized_profile = _FakeProfileDoc(
+            {
+                "name": "Authorized-Profile",
+                "warehouse": "Authorized Warehouse",
+                "selling_price_list": "Retail",
+                "posa_show_template_items": 1,
+                "posa_hide_variants_items": 0,
+            }
+        )
+        recorded_get_items_details_calls = []
+
+        def fake_get_items_details(pos_profile, items_data, **kwargs):
+            recorded_get_items_details_calls.append(pos_profile)
+            return []
+
+        with (
+            patch.object(items, "get_authorized_pos_profile", return_value=authorized_profile),
+            patch.object(items, "get_items", return_value=[]),
+            patch.object(items, "_collect_delta_item_codes", return_value={"ITEM-001"}),
+            patch.object(items, "get_item_groups", return_value=[]),
+            patch.object(items, "expand_item_groups", return_value=[]),
+            patch.object(items, "installed_item_search_fields", return_value=[]),
+            patch.object(
+                items.frappe,
+                "get_all",
+                return_value=[{"item_code": "ITEM-001", "item_name": "Item 001"}],
+            ),
+            patch.object(items, "get_items_details", side_effect=fake_get_items_details),
+        ):
+            items.get_delta_items(
+                "Client-Claimed-Profile",
+                modified_after=datetime(2026, 1, 1).isoformat(),
+            )
+
+        # Must be the authorized profile's own name, not an undefined
+        # variable or the client's unverified claim.
+        self.assertEqual(recorded_get_items_details_calls, ["Authorized-Profile"])
+
     def test_propagates_a_permission_error_from_an_unauthorized_profile(self):
         class Denied(Exception):
             pass

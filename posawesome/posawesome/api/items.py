@@ -198,7 +198,7 @@ def get_delta_items(
         return base_items[:resolved_limit]
 
     details = get_items_details(
-        profile_json,
+        profile.get("name"),
         as_json(item_rows),
         price_list=effective_price_list,
         customer=customer,
