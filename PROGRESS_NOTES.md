@@ -1512,3 +1512,96 @@ Files: `posawesome/posawesome/api/print_assets.py`,
 `posawesome/posawesome/doctype/pos_closing_shift/closing_processing/test_overview_loyalty.py`,
 `posawesome/posawesome/doctype/pos_closing_shift/closing_processing/test_cash_movement_integration.py`,
 `posawesome/posawesome/doctype/pos_closing_shift/test_pos_closing_shift.py`.
+
+## 14. Invoice Management reprint: correct print format + DUPLICATE banner (2026-08-12)
+
+Invoice Management's reprint button (`InvoiceManagement.vue`'s `printInvoice()`)
+was hardcoding `profile.print_format_for_online || profile.print_format ||
+"Standard"` — a dead fallback chain never wired to the real print-format
+configuration (`print_format_for_online` isn't even a column on `POS
+Profile` in this site's DB; `print_format` is `NULL` on "Test Pos"). It never
+picked up "Swan Sales Invoice", the format the original post-sale print
+correctly uses via `Payments.vue`'s `get_print_formats()` +
+`resolvePaymentPrintFormat()`. Two fixes, both requested together:
+
+**1. Correct print format.** `printInvoice()` now calls a new
+`resolveReprintPrintFormat()` helper that reuses the exact same mechanism as
+the original print: `posawesome.posawesome.api.print_formats.get_print_formats`
+for the invoice's doctype, then `resolvePaymentPrintFormat()` (customer-group
+rule → profile default → first available format). No hardcoded format name,
+so the reprint button stays in sync with real print-format configuration
+going forward. `customerInfo` is passed as `null` (the invoice-list row
+doesn't carry `customer_group`), which is fine since that only affects the
+optional customer-group-rule branch — it falls through cleanly to the
+`formats[0]` default, same as today's live behavior.
+
+**2. Dynamic DUPLICATE banner, reprints only.** Reprints now pass
+`settings: JSON.stringify({is_reprint: 1})` through both print paths:
+
+- Browser path: appended as a `&settings=...` query param on the
+  `/printview` URL (Frappe's `frappe.www.printview.get_context()` already
+  reads `frappe.form_dict.settings` and merges it into `print_settings`).
+- QZ silent-print path: `qzTray.ts`'s `printDocumentViaQz()` did not
+  previously forward any `settings` argument to its
+  `frappe.www.printview.get_html_and_style` call at all — added a `settings`
+  field to `QzPrintDocumentOptions` and threaded it through. This was a real
+  gap: "Test Pos" uses `posa_silent_print: 1`, so the QZ path is what's
+  actually live, and the DUPLICATE flag would never have reached the print
+  format without this.
+
+The "Swan Sales Invoice" print format's Jinja (DB-only record, not tracked
+in git) already had an unused `.duplicate` CSS class sitting in its
+`<style>` block — reused it rather than adding a new one. New markup, right
+under the store name/logo as requested (not a diagonal watermark — hard to
+read cleanly on a thermal printer at this width):
+
+```
+{% if print_settings.get("is_reprint") %}
+<div class="duplicate">*** DUPLICATE ***</div>
+{% endif %}
+```
+
+Both paths funnel into the same Frappe core function
+(`frappe.www.printview.get_rendered_template`), which does
+`print_settings = frappe.get_single("Print Settings").as_dict();
+print_settings.update(settings or {})` and exposes `print_settings` directly
+in the Jinja context — so `is_reprint` reaches the template identically
+regardless of which path rendered it. The original post-sale print
+(`Payments.vue`) never sets this flag, so the banner stays hidden there.
+
+Scope boundary: only the Jinja/HTML print path is covered. Raw/ESC-POS
+printing (`posa_raw_printing`, currently off for "Test Pos") is a separate
+non-Jinja rendering system the `settings` flag doesn't reach — flagged in
+case raw printing is ever enabled for this store, not fixed here (not
+currently live).
+
+**Verified** (full 6-item regression check): Frontend — **218/218 files,
+1061/1061 tests**. Backend: **N/A** — no Python files touched (existing
+`print_formats.py` reused as-is). `bench build --app posawesome`: clean,
+exit 0. `bench migrate`: **N/A** — the print format is DB-only, updated via
+direct `frappe.db.set_value`, not a fixture/doctype file change. Security
+review: the `settings` parameter was already an accepted argument on the
+whitelisted `get_html_and_style`/`.printview` endpoints before this change;
+only a value is now passed into an existing parameter, and that value only
+drives a boolean template check with no user-controlled data rendered — no
+new injection/XSS surface, no change to `validate_print_permission()`
+gating. Live-verified directly against
+`frappe.www.printview.get_html_and_style` (the exact function both print
+paths call) using a real submitted invoice: original render (no `settings`)
+has no DUPLICATE banner; reprint render (`settings={"is_reprint": 1}`) has
+the banner; a real Z Report render is completely unaffected (separate print
+format, hardcoded `printFormat: "Z Report"` in `documentPrint.ts`'s
+`printZReport()`, untouched). Confirmed in the browser by the user: original
+print shows no DUPLICATE banner, reprint from Invoice Management shows Swan
+Sales Invoice format with the DUPLICATE banner.
+
+Minor pre-existing fragility noted, not introduced by this fix and not
+changed: `get_print_formats()` has no `ORDER BY`, so the `formats[0]`
+fallback (8 Sales Invoice print formats registered on this site, "Swan
+Sales Invoice" happens to sort first) isn't guaranteed stable — but this is
+the same mechanism `Payments.vue`'s already-working original print flow
+relies on today, not a new risk.
+
+Files: `frontend/src/posapp/components/pos/flows/InvoiceManagement.vue`,
+`frontend/src/posapp/services/qzTray.ts`, plus the DB-only "Swan Sales
+Invoice" Print Format record (not tracked in git).
