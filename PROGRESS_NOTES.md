@@ -654,6 +654,19 @@ found.
   (not just POS cashiers) can get the site's QZ Tray private key to sign an
   arbitrary message — narrow impact (print-trust identity, not financial/
   customer data). Deferred, not urgent.
+- **`_resolve_profile()` (`offline_sync/common.py`) can crash `sync_items()`
+  with `TypeError: Object of type datetime is not JSON serializable`.**
+  Found while verifying the 2026-08-12 `get_delta_items()` NameError fix
+  (section 15). If `sync_items`/`get_delta_items` are ever called with a bare
+  POS Profile *name* string (not the full profile object), `_resolve_profile()`
+  resolves it via `frappe.get_cached_doc("POS Profile", name).as_dict()`,
+  which carries real Python `datetime` objects (`creation`, `modified`), and
+  `sync_items()` then does plain `json.dumps(profile)` on that dict at
+  `offline_sync/items.py:105` instead of `frappe.as_json()`. Currently
+  **dormant** — the live frontend (`resourceRunner.ts:193`) always sends the
+  full serialized profile object, never a bare name, so this branch never
+  fires in production today. Small, low-risk follow-up when convenient: swap
+  `json.dumps` for `frappe.as_json` at that call site.
 
 (Z Report lookup/reprint, the same-shift exchange distinction, and the VAT
 section are all done now — see section 2 above. Still genuinely open: "Credit
@@ -1605,3 +1618,59 @@ relies on today, not a new risk.
 Files: `frontend/src/posapp/components/pos/flows/InvoiceManagement.vue`,
 `frontend/src/posapp/services/qzTray.ts`, plus the DB-only "Swan Sales
 Invoice" Print Format record (not tracked in git).
+
+## 15. URGENT production fix: `get_delta_items()` NameError breaking offline item sync (2026-08-12, `81996e3`)
+
+**Incident.** Live production error: `NameError: name 'profile_json' is not
+defined`, `posawesome/posawesome/api/items.py` inside `get_delta_items()`,
+breaking offline item sync. Direct regression from the 2026-08-12
+`get_authorized_pos_profile()` trust-gap refactor (section 12): that change
+updated two of the three profile-passing call sites in `get_delta_items()`
+to `profile.get("name")` (the `get_items()` call and the `get_item_groups()`
+call), but missed the third — the `get_items_details()` call — which still
+referenced the now-deleted `profile_json` variable. That call only executes
+when `_collect_delta_item_codes()` finds item codes beyond what the base
+fetch already returned, which is why it wasn't caught at the time: none of
+the existing tests exercised that branch.
+
+**Fix.** One-line change: `get_items_details(profile_json, ...)` →
+`get_items_details(profile.get("name"), ...)`, matching the pattern already
+used at the other two call sites. `get_items_details()` re-authorizes
+internally via `get_authorized_pos_profile()`, so only the name is needed.
+
+**Regression test added** (`test_items_delta.py`,
+`test_passes_the_authorized_profile_name_through_to_get_items_details`)
+specifically drives the `extra_codes`/`get_items_details` branch that the
+three pre-existing tests didn't reach, closing the coverage gap that let
+this ship.
+
+**Verified.** Fast targeted check first (given production urgency), then
+the full 6-item regression check before committing. Live, real data on
+`staging.local`: `get_delta_items()` called both with a plain profile name
+and with a serialized profile object (the shape `sync_items()` passes
+internally) — both return rows correctly. `sync_items()` itself — the
+actual offline-sync entry point that was breaking — called exactly the way
+the real frontend (`resourceRunner.ts:193`) calls it (full serialized
+profile object, with and without a watermark): both return correct
+`{changes, deleted, has_more, next_watermark, schema_version}` payloads.
+Full 6-item check: frontend **218/218 files, 1061/1061 tests**. Backend, in
+isolation: `api.test_items_delta` **4/4** (new regression test included),
+`api.test_offline_sync_items` **4/4** (the module's post-test
+`frappe.clear_cache()` teardown crash is the documented pre-existing
+environment issue — see section 6/13 — not related to this fix). `bench
+build`: **N/A** — only `items.py`/`test_items_delta.py` touched, no
+frontend files. `bench migrate`: **N/A** — no doctype/fixture/print-format
+touched. Security review: pure bugfix restoring an already-reviewed pattern
+(`profile.get("name")`, identical to the other two call sites in this same
+function) — no new input, no new authorization surface, no behavior change
+beyond removing the crash. Adjacent flows: the other three call sites in
+`get_delta_items()` (`get_items()`, `get_item_groups()`,
+`_collect_delta_item_codes()`) were untouched and remain covered by the
+pre-existing 3 tests, all still passing.
+
+**Deferred finding from verification, not fixed** (dormant, not the cause
+of this incident): `_resolve_profile()`'s `json.dumps` vs. `frappe.as_json`
+gap in `offline_sync/items.py` — see section 4.
+
+Files: `posawesome/posawesome/api/items.py`,
+`posawesome/posawesome/api/test_items_delta.py`.
