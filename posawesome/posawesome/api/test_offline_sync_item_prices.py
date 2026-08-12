@@ -202,5 +202,130 @@ class TestOfflineSyncItemPrices(unittest.TestCase):
         self.assertEqual(third["next_watermark"], "2026-06-01T10:02:00")
 
 
+def _install_large_dataset_stubs(total_rows):
+    install_offline_sync_package_stubs()
+
+    frappe_module = types.ModuleType("frappe")
+    frappe_module._ = lambda text: text
+    frappe_module.throw = lambda message: (_ for _ in ()).throw(Exception(message))
+    frappe_module.whitelist = lambda *args, **kwargs: (lambda fn: fn)
+    frappe_module.get_cached_doc = lambda doctype, name: AttrDict(
+        {
+            "name": name,
+            "company": "Test Co",
+            "selling_price_list": "Retail",
+        }
+    )
+
+    def fake_get_all(doctype, **kwargs):
+        if doctype == "Price List":
+            return [{"name": "Retail", "selling": 1}]
+        if doctype == "Item Price":
+            start = kwargs.get("start") or 0
+            limit = kwargs.get("limit_page_length") or total_rows
+            return [
+                AttrDict(
+                    {
+                        "name": f"IP-{i:05d}",
+                        "price_list": "Retail",
+                        "item_code": f"ITEM-{i:05d}",
+                        "uom": "Nos",
+                        "currency": "PKR",
+                        "customer": None,
+                        "supplier": None,
+                        "buying": 0,
+                        "selling": 1,
+                        "price_list_rate": 100,
+                        "valid_from": None,
+                        "valid_upto": None,
+                        "modified": f"2026-06-01T10:{i % 60:02d}:00",
+                    }
+                )
+                for i in range(start, min(start + limit, total_rows))
+            ]
+        if doctype == "Deleted Document":
+            return []
+        return []
+
+    frappe_module.get_all = fake_get_all
+    sys.modules["frappe"] = frappe_module
+
+    api_utils_module = types.ModuleType("posawesome.posawesome.api.utils")
+    api_utils_module.get_active_pos_profile = lambda user=None: {
+        "name": "POS-TEST",
+        "company": "Test Co",
+        "selling_price_list": "Retail",
+    }
+    sys.modules["posawesome.posawesome.api.utils"] = api_utils_module
+    sys.modules["posawesome.posawesome.api.offline_sync.common"] = load_offline_sync_common()
+
+    controls_module = types.ModuleType("posawesome.posawesome.api.item_sale_controls")
+    controls_module._resolve_buying_price_list = lambda profile: None
+    sys.modules["posawesome.posawesome.api.item_sale_controls"] = controls_module
+
+
+class TestOfflineSyncItemPricesLargeDatasetPagination(unittest.TestCase):
+    """Regression test: _coerce_int(offset, 0) previously inherited the 2000
+    maximum meant for `limit`, silently clamping any requested offset above
+    2000 back down to 2000. Once the real table has more than 2500 matching
+    rows (2000 + one 500-row page), every subsequent page replayed the same
+    rows 2000-2500 forever, with next_offset permanently stuck at 2500 --
+    an unbounded pagination loop in production, invisible on small test
+    datasets that never reach a 5th page."""
+
+    TOTAL_ROWS = 3200  # > 2500: crosses the old clamp threshold
+
+    @classmethod
+    def setUpClass(cls):
+        _install_large_dataset_stubs(cls.TOTAL_ROWS)
+        module_name = "test_offline_sync_item_prices_large_target"
+        file_path = REPO_ROOT / "posawesome" / "posawesome" / "api" / "offline_sync" / "item_prices.py"
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        cls.module = module
+
+    def test_offset_is_not_clamped_past_2000(self):
+        response = self.module.sync_item_prices(
+            pos_profile="POS-TEST",
+            offset=2500,
+            limit=500,
+        )
+
+        # Before the fix, an offset of 2500 was clamped to 2000, so the
+        # response would always describe the window [2000, 2500) and report
+        # next_offset=2500 regardless of the requested offset.
+        self.assertEqual(response["changes"][0]["data"]["name"], "IP-02500")
+        self.assertEqual(response["next_offset"], 3000)
+
+    def test_paginating_the_full_dataset_terminates_without_looping(self):
+        offset = 0
+        page = 0
+        total_fetched = 0
+        max_pages = 20  # generous safety cap; a still-broken implementation would exceed this
+
+        while True:
+            page += 1
+            self.assertLessEqual(
+                page, max_pages, "pagination did not terminate -- infinite loop regression"
+            )
+            response = self.module.sync_item_prices(
+                pos_profile="POS-TEST",
+                offset=offset,
+                limit=500,
+            )
+            total_fetched += len(response["changes"])
+            if not response["has_more"]:
+                break
+            next_offset = response["next_offset"]
+            self.assertIsNotNone(next_offset)
+            self.assertGreater(next_offset, offset)
+            offset = next_offset
+
+        self.assertEqual(total_fetched, self.TOTAL_ROWS)
+        self.assertEqual(page, 7)
+
+
 if __name__ == "__main__":
     unittest.main()

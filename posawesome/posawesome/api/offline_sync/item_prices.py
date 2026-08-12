@@ -37,7 +37,10 @@ def _coerce_int(value, default, minimum=0, maximum=2000):
         resolved = int(value if value is not None else default)
     except (TypeError, ValueError):
         resolved = default
-    return max(minimum, min(resolved, maximum))
+    resolved = max(minimum, resolved)
+    if maximum is not None:
+        resolved = min(resolved, maximum)
+    return resolved
 
 
 def _profile_price_lists(profile):
@@ -111,7 +114,7 @@ def sync_item_prices(
         }
         return response
 
-    resolved_offset = _coerce_int(offset, 0)
+    resolved_offset = _coerce_int(offset, 0, maximum=None)
     resolved_limit = _coerce_int(limit, 500, minimum=1)
     filters = {"price_list": ("in", price_lists)}
     if watermark:
