@@ -583,29 +583,15 @@ found.
   deferred.
 - ~~**250ms cold-start cache race in `itemsStore.ts`.**~~ Addressed 2026-08-11 —
   widened to 700ms and the fallback fetch is now failure-safe. See section 10.
-- **`get_items_from_barcode()` has no POS Profile / warehouse scoping.**
-  Added 2026-08-11 while fixing the barcode scan bug (section 11): the
-  function takes no `pos_profile` argument at all, so any authenticated
-  session can resolve any barcode's full item detail (rate, stock flags,
-  variant/group info) without it being scoped to a specific store's warehouse
-  or price list the way `get_items()` is. Not currently known to be
-  exploitable for cross-store stock/pricing leakage in practice (the item
-  data itself isn't warehouse-specific; `rate`/`price_list_rate` come from
-  whatever price list is passed in as a plain argument, same as
-  `get_item_detail()`), but it's the same category of gap as the
-  `_ensure_pos_profile()` finding below — worth a deliberate look together
-  rather than assuming it's fine because nothing has gone wrong yet.
-- **`_ensure_pos_profile()` trusts client-supplied POS Profile JSON verbatim
-  (multi-store isolation gap).** Found while verifying warehouse isolation
-  for `actual_qty` stock data: `actual_qty` is always read from the current
-  POS Profile's own warehouse in the normal flow, confirmed by tracing the
-  actual code path — but `_ensure_pos_profile()` (`posawesome/posawesome/
-  api/utils.py`) accepts a POS Profile as raw JSON from the client and does
-  not re-verify server-side that the requesting user is actually assigned to
-  that profile before using its warehouse/company for the query. A crafted
-  request naming a different store's POS Profile could plausibly read that
-  store's stock data. Reported to the user as a finding; not yet fixed —
-  no fix has been requested.
+- ~~**`get_items_from_barcode()` has no POS Profile / warehouse scoping.**~~
+  Fixed 2026-08-12 — now calls `get_authorized_pos_profile()`. See section 12.
+- ~~**`_ensure_pos_profile()` trusts client-supplied POS Profile JSON verbatim
+  (multi-store isolation gap).**~~ Fixed 2026-08-12 for the stock-sensitive
+  endpoints (`get_items`, `get_items_details`, `get_delta_items`,
+  `get_item_detail`) — each now calls `get_authorized_pos_profile()` instead.
+  `_ensure_pos_profile()` itself still exists and is still used by
+  `get_items_count()` and `get_item_variants()`, neither of which touches
+  warehouse/stock data. See section 12.
 - **Redis empty-result caching bug in `get_items`.** The `@redis_cache` wrapper
   around `get_items` (gated by `posa_use_server_cache`) has no negative-result
   protection — a transient empty response can get cached and replayed for the full
@@ -1299,4 +1285,98 @@ user's own testing before this commit.
 Files: `posawesome/posawesome/api/item_processing/barcode.py`,
 `posawesome/posawesome/api/item_processing/test_barcode.py`,
 `frontend/src/posapp/composables/pos/items/useScanProcessor.ts`,
+`frontend/tests/useScanProcessor.spec.ts`.
+
+## 12. Server-side re-authorization for item stock queries + barcode lookup (2026-08-12)
+
+**Both trust-gap findings from section 4 fixed together**, applying the
+same `get_authorized_pos_profile()` pattern already used for the terminal
+lock fix (`terminal_state.py`) and the item quick-edit fix
+(`item_quick_edit.py`): re-resolve the POS Profile fresh from the DB and
+re-authorize the session user server-side, instead of trusting a
+client-supplied POS Profile object/name verbatim.
+
+**Re-confirmed both gaps live before touching anything** (not from memory
+of the earlier finding): `_ensure_pos_profile()` (`utils.py`) still took a
+client-supplied dict verbatim with no `check_permission()`/disabled/
+assignment check when `pos_profile` arrived as a dict (the normal case,
+since the frontend always has the full profile object in memory) — traced
+into three whitelisted endpoints that feed `warehouse` from it into stock
+queries. `get_items_from_barcode()` still had no `pos_profile` parameter
+and no authorization at all.
+
+**1. Stock/warehouse trust gap — four endpoints fixed:**
+- `get_items()` (`item_processing/search.py`'s `_normalize_profile_context`)
+  — the main catalog/search endpoint; `warehouse` drives `actual_qty` for
+  every item in every search/browse result.
+- `get_items_details()` (`item_processing/details.py`) — bulk detail/stock
+  refresh; `warehouse` feeds `ItemDetailAggregator`.
+- `get_delta_items()` (`items.py`) — both its own direct `_collect_delta_item_codes()`
+  Bin query and its delegated `get_items()` call.
+- `get_item_detail()` (`item_processing/details.py`) — took a **raw**
+  `warehouse` string param (no POS Profile wrapper at all), fed straight
+  into `get_stock_availability()` with zero validation — the most directly
+  exploitable instance. Fixed with a **company match, not an exact-warehouse
+  match** (`frappe.db.get_value("Warehouse", warehouse, "company") ==
+  authorized_profile.company`), deliberately looser than the other three,
+  because `Variants.vue` and `item_updates.ts` both legitimately request a
+  *different* warehouse within the same company for the cross-warehouse
+  "alternate item" stock-check flow — an exact match would have broken
+  that. Live-verified both directions: same-company-different-warehouse
+  (`Stores - S` vs. the profile's own `Test - S`) correctly **allowed**;
+  a nonexistent/wrong-company warehouse correctly **rejected** with
+  `frappe.PermissionError`.
+
+  Each fix follows the same shape: `profile_doc = get_authorized_pos_profile(pos_profile)`
+  then `.as_dict()` where the rest of the function already expects a plain
+  dict — contained to the profile-resolution line, no changes to the
+  query-building logic itself. `_ensure_pos_profile()` itself is untouched
+  and still used by `get_items_count()` and `get_item_variants()`, neither
+  of which touches warehouse/stock data.
+
+**2. `get_items_from_barcode()` authorization gap.** Added an optional
+`pos_profile` parameter and a `get_authorized_pos_profile(pos_profile)`
+call, used **only for authorization, never for filtering** — the whole
+reason this endpoint exists (instead of routing scans through `get_items()`)
+is that a physically-scanned barcode always belongs to a specific variant,
+so applying Hide Variants Items-style visibility filtering here would
+reproduce section 11's bug. An existing regression-guard test asserted the
+function took *no* `pos_profile` parameter at all, written specifically to
+prevent that regression; updated it to assert the real invariant instead
+(no visibility filtering applied — a Hide-Variants-Items-shaped item still
+comes back with `variant_of` intact) rather than the blunter "no such
+parameter" proxy. Frontend: `useScanProcessor.ts` now passes
+`pos_profile: pos_profile.value?.name` through `itemService.ts`'s
+`BarcodeLookupArgs`.
+
+**Verified** (full 6-item regression check): frontend `vitest run`
+**218/218 files, 1061/1061 tests**. Backend, in isolation: `test_barcode`
+**3/3**, `item_processing.test_details` **7/7**, `test_item_search_serialization`
+**13/13**, `test_items_delta` (new file) **3/3** — **26/26** across 4
+modules, all directly exercising the changed functions. `bench build
+--app posawesome`: clean exit 0, Chrome 109 CSS audit passed (needed two
+retries — this environment hit real memory contention mid-task, resolved
+once the environment was resized; every reported result is from a run that
+actually completed, none guessed). `bench migrate`: **N/A** — only `.py`/
+`.ts` files touched. Security review: this task *is* the security fix;
+restated in-line above per function. Explicit confirmation, live on
+`staging.local`, not just reasoned about: `get_items("Test Pos", search_value="")`
+returns items correctly; `get_items_from_barcode()` for `35740232030014`
+returns the identical correct result with and without `pos_profile` passed
+(falls back to the session's active profile); `get_item_detail()` allows
+same-company/different-warehouse and rejects wrong-company warehouse as
+described above; `get_items_details()` and `get_delta_items()` both return
+correct live data. Confirmed in the browser by the user: search, scan, and
+variant lookup all work as expected.
+
+Files: `posawesome/posawesome/api/item_processing/search.py`,
+`posawesome/posawesome/api/item_processing/details.py`,
+`posawesome/posawesome/api/item_processing/barcode.py`,
+`posawesome/posawesome/api/items.py`,
+`posawesome/posawesome/api/item_processing/test_barcode.py`,
+`posawesome/posawesome/api/item_processing/test_details.py`,
+`posawesome/posawesome/api/test_item_search_serialization.py`,
+`posawesome/posawesome/api/test_items_delta.py` (new),
+`frontend/src/posapp/composables/pos/items/useScanProcessor.ts`,
+`frontend/src/posapp/services/itemService.ts`,
 `frontend/tests/useScanProcessor.spec.ts`.
