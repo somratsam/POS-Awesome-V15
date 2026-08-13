@@ -301,6 +301,8 @@ fixtures = [
                     "Customer-posa_referral_company",
                     "Customer-posa_referral_section",
                     "Customer-posa_birthday",
+                    "Customer-posa_loyalty_portal_code",
+                    "Customer-posa_is_generic_customer",
                     "Sales Order-posa_offers",
                     "Sales Order-posa_coupons",
                     "Sales Order Item-posa_row_id",

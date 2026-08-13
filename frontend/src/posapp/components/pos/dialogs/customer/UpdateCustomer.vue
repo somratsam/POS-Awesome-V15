@@ -180,6 +180,16 @@
 									class="pos-themed-input"
 								></v-text-field>
 							</v-col>
+							<v-col cols="6" v-if="portal_code">
+								<v-text-field
+									v-model="portal_code"
+									:label="frappe._('Loyalty Portal Code')"
+									density="compact"
+									readonly
+									hide-details
+									class="pos-themed-input"
+								></v-text-field>
+							</v-col>
 						</v-row>
 					</v-container>
 				</v-card-text>
@@ -265,6 +275,7 @@ export default {
 		gender: "",
 		loyalty_points: null,
 		loyalty_program: null,
+		portal_code: null,
 		hideNonEssential: false,
 		countries: [
 			"Afghanistan",
@@ -449,6 +460,7 @@ export default {
 			this.gender = "";
 			this.loyalty_points = null;
 			this.loyalty_program = null;
+			this.portal_code = null;
 		},
 		getCustomerGroups() {
 			if (this.groups.length > 0) return;
@@ -671,6 +683,7 @@ export default {
 				args: apiArgs,
 				callback: async (r) => {
 					if (!r.exc && r.message.name) {
+						const wasCreate = !vm.customer_id;
 						let text = __("Customer created successfully.");
 						if (vm.customer_id) {
 							text = __("Customer updated successfully.");
@@ -689,7 +702,20 @@ export default {
 							tax_id: args.tax_id,
 							primary_address: args.address_line1,
 						});
-						vm.close_dialog();
+						if (wasCreate) {
+							// Switch into "editing this now-existing customer" mode
+							// and show server-generated fields (loyalty portal code,
+							// any auto-assigned loyalty program) immediately, so
+							// staff don't need to close and reopen the dialog to
+							// see them. loyalty_points is deliberately not set here:
+							// it isn't a real Customer field, and a brand-new
+							// customer has none yet regardless.
+							vm.customer_id = r.message.name;
+							vm.loyalty_program = r.message.loyalty_program || null;
+							vm.portal_code = r.message.posa_loyalty_portal_code || null;
+						} else {
+							vm.close_dialog();
+						}
 					} else {
 						frappe.utils.play_sound("error");
 						vm.toastStore.show({
@@ -765,6 +791,7 @@ export default {
 						this.territory = data.territory;
 						this.loyalty_points = data.loyalty_points;
 						this.loyalty_program = data.loyalty_program;
+						this.portal_code = data.posa_loyalty_portal_code;
 						this.gender = data.gender;
 					} else {
 						// Setup for new customer

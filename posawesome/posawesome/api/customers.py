@@ -321,6 +321,7 @@ def get_customer_info(customer=None, company=None):
     res["mobile_no"] = customer.mobile_no
     res["image"] = customer.image
     res["loyalty_program"] = customer.loyalty_program
+    res["posa_loyalty_portal_code"] = customer.posa_loyalty_portal_code
     res["customer_price_list"] = customer.default_price_list
     res["customer_group"] = customer.customer_group
     res["customer_type"] = customer.customer_type
