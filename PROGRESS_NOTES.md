@@ -1862,3 +1862,135 @@ that's their call to make, not something to decide autonomously.
 
 Access has now been revoked by the user. No further production access
 exists as of this entry.
+
+## 19. Customer rewards portal, foundation phase (Steps 1-3 + generic-customer fix) (2026-08-13, `72fc12e`)
+
+Started building a customer-facing loyalty/rewards portal. After a full
+research phase (security options for guest-accessible balance lookup with
+no SMS/OTP available, display/UX patterns, embedded-vs-separate-service
+architecture), the approved direction is a **separate Frappe site**
+(`rewards.staging.local`, same bench as staging for now) that reads
+customer/points/receipt data via a **scheduled sync job**, not a live
+cross-site DB connection or a guest-accessible endpoint on the main site.
+The end goal is explicitly a complete, professional customer portal, not
+a minimal internal tool. A 9-step build order was confirmed and approved;
+this entry covers Steps 1-3 plus a live bug found and fixed along the
+way. Steps 4-9 (creating the second site, the sync job, the rewards
+site's own lookup endpoint, the portal UI, a digital receipt view, and
+cleanup of the old prototype) are still pending, resuming in a future
+session — nothing beyond this entry has touched `stable` or production.
+
+**Step 1 — `posa_loyalty_portal_code` Custom Field on Customer.** A
+`Data`, `read_only`, `no_copy` field, `insert_after: posa_birthday`.
+Collision-checked first (no existing Custom Field/DocField with that
+name). Hit and reverted a real `bench export-fixtures` corruption bug
+while adding it — see the new CLAUDE.md entry below; the field was
+hand-added to `custom_field.json` instead.
+
+**Step 2 — auto-generation hook.** `ensure_loyalty_portal_code()`,
+called from `customer.py`'s existing `validate()` (extended, not
+replaced — `hooks.py` already had `doc_events["Customer"]` entries for
+`validate`/`after_insert` that a naive new dict key would have silently
+overwritten). Generates a unique 8-character code from an alphabet that
+excludes visually-ambiguous characters (`0O1IL5S8B`), retries up to 5
+times on collision before falling back to a longer code, and is wrapped
+in `try/except` with `frappe.log_error` — this hook runs on *every*
+Customer save system-wide, so it must never raise and block a save.
+
+**Step 3 — print format.** The "Swan Sales Invoice" print format
+(DB-only, not git-tracked) now prints the code with a bilingual EN/AR
+hint, gated behind `{% if doc.customer %}` + a code lookup.
+
+**Data gap found and backfilled.** Customers created before Step 2 never
+ran the hook until their next save, so the code appeared to be "not
+generating" for pre-existing customers — root-caused via
+`creation == modified` on the affected records (confirmed with a
+freshly-created customer, which got its code immediately). One-time
+backfill: 19 customers backfilled, 0 failures, 21 unique codes total
+afterward.
+
+**UpdateCustomer.vue gap found and fixed.** The code was never actually
+wired into the dialog despite being planned — confirmed via a direct
+grep (zero matches) before fixing, not assumed. Added a read-only field
+mirroring the existing `loyalty_points`/`loyalty_program` display
+pattern exactly, plus `get_customer_info()` exposing the field. Also
+fixed a related gap: the create-success callback used to call
+`close_dialog()` immediately, so a newly generated code was invisible
+until the dialog was closed and reopened; it now switches into
+"editing the now-existing customer" mode instead and populates
+`loyalty_program`/`portal_code` from the create response.
+
+**Real bug found: shared "walk-in" customer pooling points and printing
+a meaningless shared code.** Raised as a live workflow concern before
+Step 4: does POS Awesome have a true "no customer" path, or does staff
+select/create a generic customer for walk-in sales — and if so, does
+that generic record get a loyalty code and loyalty_program like any
+other customer? Investigated directly against the database rather than
+reasoning from code alone:
+
+- Sales Invoice requires a customer link; there's no true null-customer
+  path. `POS Profile.customer` (the standard ERPNext default-customer
+  field) would provide an automatic default, but "Test Pos" (the only
+  profile on staging) has it set to `NULL` — so there's no automatic
+  mechanism currently active.
+- Despite that, a real customer named **"Anonymous"** has **35
+  invoices** — more than double the next customer — confirming staff
+  have been manually selecting/reusing it for walk-in sales.
+- "Anonymous" had `loyalty_program: "Swan Rewards"` assigned (a real,
+  separate points-pooling exposure — checked its actual balance/entries
+  directly: 0 points, 0 entries at the time, so not yet realized, but
+  live) and a generated `posa_loyalty_portal_code` (from the backfill).
+- Confirmed by an actual print-format render (not just code reading)
+  that the loyalty section rendered on Anonymous's real invoice,
+  showing the shared code as if it belonged to that specific person.
+
+**Fix.** New Custom Field `posa_is_generic_customer` (`Check`, on
+Customer) marks a record as a shared/anonymous bucket rather than an
+individually tracked person. `ensure_loyalty_portal_code()` extended: if
+this flag is set, it clears both `posa_loyalty_portal_code` and
+`loyalty_program` and skips generating a new code — self-healing on the
+next save of any flagged record. The print format's gating was also
+updated to check the flag directly (defense in depth — doesn't rely
+solely on the hook having already fired), combining the code and flag
+lookup into one `frappe.db.get_value(..., as_dict=True)` call. "Anonymous"
+was flagged via a real `doc.save()`, not a raw SQL update — confirmed the
+hook fired and cleared both fields correctly.
+
+**Other candidate found, not fixed.** `"anno"` — 3 invoices, no mobile
+number, `loyalty_program: "Swan Rewards"` assigned, has a generated
+code. Same shape as "Anonymous" before the fix. Flagged for the user to
+review and apply `posa_is_generic_customer` manually if confirmed to be
+another walk-in shorthand; deliberately not auto-fixed, since a false
+positive here would silently break a real customer's loyalty tracking.
+
+**Verified.** Full 6-item regression check: frontend **218/218 files,
+1061/1061 tests**; backend `test_customer.py` run in isolation, **12/12
+passed** (4 new tests cover the generic-customer branch); `bench build`
+N/A (no frontend files touched by the generic-customer piece, though
+UpdateCustomer.vue changes were covered by the frontend suite run);
+`bench migrate` run twice, both clean, second run idempotent; security
+review — no new user input/auth surface, the print format lookup is a
+trusted server-side field read keyed off the invoice's own `doc.customer`;
+confirmed unaffected: referral-code validation on Customer save (covered
+by the existing regression test in the same suite), and non-generic
+customers' receipts (live-rendered sanju's real invoice, which still
+shows their own correct code after the fix). Live-verified specifically:
+re-rendered Anonymous's real invoice — loyalty section no longer
+appears at all; re-rendered a real customer's invoice — section still
+renders with their own genuine code.
+
+Files: `posawesome/fixtures/custom_field.json`, `posawesome/hooks.py`,
+`posawesome/posawesome/api/customer.py`,
+`posawesome/posawesome/api/customers.py`,
+`posawesome/posawesome/api/test_customer.py` (new),
+`frontend/src/posapp/components/pos/dialogs/customer/UpdateCustomer.vue`.
+The "Swan Sales Invoice" Print Format and the `posa_is_generic_customer`
+flag on the "Anonymous" Customer record are DB-only changes on staging,
+outside git.
+
+**Deliberately not committed with this entry:**
+`posawesome/posawesome/api/loyalty_portal.py` and its test file — an
+earlier guest-accessible (`allow_guest=True`) mobile-lookup prototype
+built before the separate-site architecture was decided. It's superseded
+by the Step 4-9 plan and slated for removal in Step 9 cleanup, so it's
+left untracked on disk rather than committed and then deleted later.
