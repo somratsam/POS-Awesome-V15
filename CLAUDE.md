@@ -30,6 +30,26 @@ entirely on this site. `bench console` confirmed it in under a minute;
 guessing from the code alone would have produced a fix for a problem that
 didn't exist while missing the real one.
 
+## `bench export-fixtures` Can Silently Corrupt a Large Fixture File
+
+Before using `bench export-fixtures` to add a new entry to an existing
+fixture file (e.g. `custom_field.json`), know that it has been observed to
+silently truncate the file rather than append to it cleanly — even though
+the live DB records it's exporting from are fully intact. Always check the
+diff before trusting the result: a genuine new-field export should show a
+small, purely additive change (`git diff --stat`), not a large deletion. If
+it looks wrong, `git checkout` to revert immediately and hand-add the new
+entry instead — copy an existing entry's exact key set and formatting from
+a neighboring record in the file and insert it directly, rather than
+re-running the export.
+
+Concrete example that happened in this repo: adding a single new Custom
+Field (`Customer-posa_loyalty_portal_code`) via `bench export-fixtures`
+shrank `posawesome/fixtures/custom_field.json` from ~9000 lines to 139.
+Caught before committing by checking the diff; reverted and hand-added the
+one new JSON object instead. The same caution applied again shortly after
+for `Customer-posa_is_generic_customer`.
+
 ## Check for Name Collisions Before Creating Standard Docs
 
 Before creating any standard Print Format (or any standard doc — Page, Report,
