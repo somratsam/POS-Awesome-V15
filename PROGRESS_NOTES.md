@@ -2205,3 +2205,11 @@ Depended on `posa_is_generic_customer` already being on
 `stable`/production (it was, from this morning's `939edfb`) — no other
 dependency; self-contained relative to the still-`develop-swan`-only
 sync bridge and rewards portal work.
+
+**Follow-up, resolved:** the `posa_loyalty_portal_code` backfill gap
+flagged as open/unconfirmed right after this morning's promotion was
+checked directly on production — every pre-existing customer there
+predating today's deployment is test/dummy data, not a real customer.
+No backfill was needed and none was run; this was a deliberate,
+confirmed decision, not an oversight. Every real customer going forward
+gets a code automatically on save, which is what actually matters.
