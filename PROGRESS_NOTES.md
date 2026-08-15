@@ -2122,3 +2122,86 @@ same as the original catch.
 promotion was getting Steps 1-3 safely live first; the separate-site
 production deployment (DNS, SSL, dedicated worker pool, the private-first
 staged rollout) is a distinct, later piece of work, not started.
+
+## 21. "Walk-in / No Loyalty" button: build, two real bugs, and same-day promotion to production (2026-08-15)
+
+Built the previously-parked "Walk-in / No Loyalty" button (Option B from
+the earlier design research — a separate, visually muted button, not an
+auto-selected default, not wired to any keyboard shortcut, since both of
+those were assessed to erode the natural "ask every customer about
+loyalty" moment). Unlike everything else in section 20, this feature
+went from build to production the same day, since it's low-risk,
+opt-in, and staff-facing only.
+
+**What was built.** A new `posa_walkin_customer` field on POS Profile
+(Link to Customer, restricted via a native Frappe `link_filters`
+property to only show customers already flagged
+`posa_is_generic_customer` in the picker — an admin can't accidentally
+point it at a real individually-tracked customer). A button in
+`Customer.vue`, rendered below the search field and only visible when
+that POS Profile field is set, selecting the configured customer via
+the same `setSelectedCustomer()` path `selectFirstCustomer()` already
+uses — not a new mechanism.
+
+**Two real bugs found during the user's own manual testing** (not
+caught by the original 6-item regression check — worth remembering both
+for their own sake and for what they say about this component's test
+coverage gaps):
+
+- `pos_profile` was declared and used correctly inside `Customer.vue`,
+  but **no real caller in the app ever actually passed it down** —
+  `InvoiceCustomerSection.vue`'s `<Customer ref="customerComponent" />`
+  omitted the binding entirely (confirmed the *only* other usage,
+  `PayView.vue`, also omits it, but that one is a different flow —
+  selecting a customer as a payment party — where this button wouldn't
+  semantically belong, so left alone deliberately). The prop was
+  `undefined` at runtime in every real session, meaning the button could
+  never have rendered regardless of configuration. Root cause: the
+  original test (`walkinCustomerButton.spec.ts`) only asserted against
+  `Customer.vue`'s own source in isolation, the same way
+  `customerDropdownXss.spec.ts` already did for this same
+  hard-to-fully-mount component — a pattern that verifies a component's
+  *own* logic but is structurally blind to whether any real parent
+  actually wires it up correctly. Fixed by adding `:pos_profile="pos_profile"`
+  to `InvoiceCustomerSection.vue`, and added a new test asserting the
+  forwarding itself — verified the new test actually fails without the
+  fix (reverted it, confirmed red, restored it, confirmed green) before
+  trusting it as a real regression guard.
+- The new field's `insert_after` placed it inside POS Profile's
+  collapsed **"Campaign"** section — a generic ERPNext UTM/marketing
+  section with zero relation to this feature, because the field it was
+  inserted after happened to live there and that wasn't checked at the
+  time. Moved to "Sales and Purchase Flows", an existing,
+  correctly-labeled POS Awesome section. Worth remembering as its own
+  standing caution: `insert_after` on a new Custom Field determines
+  which section it's *placed in*, not just its position — always verify
+  the target section via `frappe.get_meta()` before trusting a
+  plausible-sounding neighbor field name.
+
+**Promotion sequence, same day:**
+1. `develop-swan`, commit `7ef94f4` — build, both bugs, and the new
+   regression test.
+2. Cherry-picked to `stable` as `1958834`. Conflicted in
+   `custom_field.json` — same shape as section 20's `PROGRESS_NOTES.md`
+   conflict: the incoming diff dragged along `posa_receipt_synced` (from
+   the sync-bridge commit, not part of this feature and not on `stable`)
+   because that's what the new field happened to be appended after on
+   `develop-swan`. Resolved by keeping only the actual
+   `posa_walkin_customer` entry; verified the resolved diff against
+   `upstream/stable` was byte-identical in shape to `7ef94f4`'s own diff
+   (same 5 files, same 156 insertions) before pushing.
+3. Deployed to production: pull, `bench migrate`, `bench build --app posawesome`
+   (required — frontend files changed), service restart. No print
+   format copy needed this time (this feature doesn't touch any print
+   format, unlike this morning's promotion).
+4. **Activated on production** — the user configured
+   `posa_walkin_customer` on production's real POS Profile(s), pointing
+   at production's designated walk-in customer (the one created and
+   flagged with `posa_is_generic_customer` during this morning's
+   promotion). The button is live and in use by staff as of today, not
+   just deployed-but-dormant.
+
+Depended on `posa_is_generic_customer` already being on
+`stable`/production (it was, from this morning's `939edfb`) — no other
+dependency; self-contained relative to the still-`develop-swan`-only
+sync bridge and rewards portal work.

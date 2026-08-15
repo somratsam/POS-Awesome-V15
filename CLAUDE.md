@@ -110,6 +110,53 @@ replaced it with the new one. `creation == modified` on the surviving record
 row and no filesystem backup to recover from. A pre-migrate name check would
 have caught this in seconds.
 
+## A New Custom Field's `insert_after` Determines Its Section, Not Just Its Position
+
+When adding a Custom Field, `insert_after` places it immediately after
+whatever field you name — but that also determines which *section* it
+lands in, since a field inherits the section of whatever it's inserted
+next to. A plausible-sounding neighbor field can silently belong to an
+unrelated, possibly-collapsed section. Always verify the actual landing
+section before trusting the field is discoverable — `frappe.get_meta(dt)`,
+walk backwards from the new field to the nearest preceding `Section
+Break`, and check both its label and whether `collapsible` is set.
+
+Concrete example that happened in this repo: `POS Profile.posa_walkin_customer`
+was inserted after `posa_apply_customer_discount`, which turned out to
+sit inside a collapsed **"Campaign"** section (generic ERPNext UTM/marketing
+fields) — a section with zero relation to the new field and not
+somewhere anyone would think to expand looking for it. Caught only
+because a user reported "I can't find the button" and the actual section
+was checked directly rather than assumed from the `insert_after` value
+looking reasonable. Moved to an existing, correctly-labeled POS Awesome
+section instead.
+
+## Adding a Prop to a Shared Component? Verify Every Real Caller Forwards It
+
+A prop declared and used correctly inside a component (e.g. gating a
+`v-if` in its own template) proves nothing about whether the app actually
+supplies it at runtime. Frappe/Vue won't error on a missing prop binding
+by default — it just silently resolves to `undefined`. Before trusting a
+new prop-gated feature works, grep for every real usage site of the
+component (`<ComponentName\b`) and confirm each one actually forwards the
+prop, not just that the component itself looks correct in isolation.
+
+Concrete example that happened in this repo: `Customer.vue` declared and
+used a `pos_profile` prop correctly (gating the new Walk-in button's
+`v-if`), but neither of its two real usage sites in the whole app
+(`InvoiceCustomerSection.vue`, `PayView.vue`) actually passed it down —
+so the prop was `undefined` in every real session, and the button could
+never have rendered regardless of database configuration. The original
+test suite didn't catch this because it followed this same component's
+established testing convention (source-string assertions against
+`Customer.vue` in isolation, the same pattern `customerDropdownXss.spec.ts`
+already used) — a pattern that verifies a component's own logic but is
+structurally blind to caller-side wiring bugs. A user's live manual test
+caught it; a targeted "does the parent actually forward this prop" test
+was added afterward and its own effectiveness was verified by reverting
+the fix and confirming the test failed before trusting it as a real
+regression guard.
+
 ## Every Change Needs a Full, Professional-Standard Check Before It's "Done"
 
 Don't treat a change as complete once it merely works. Every implementation —
