@@ -6,6 +6,21 @@ POSAwesome is a Frappe application - a Point of Sale (POS) system built on the F
 
 **Enhanced Camera Scanner**: Features advanced OpenCV-based image processing for superior barcode and QR code scanning with real-time image enhancement.
 
+**Companion app — the customer rewards portal.** This app has a
+customer-facing counterpart, `swan_rewards`, living in its own separate
+repo (`github.com/somratsam/swan-rewards-portal`, `main` branch) and its
+own separate Frappe site (`rewards.staging.local` in this dev
+environment). It is *not* a subfolder or module of this repo, and it has
+no ERPNext/POS Awesome installed — deliberately bare Frappe, decoupled
+from this site's data model. The only connection between the two is a
+one-way scheduled sync job that lives *here*, in
+`posawesome/posawesome/api/rewards_sync.py`: it computes loyalty
+summaries/recent invoices/receipt PDFs on this site and pushes them over
+an authenticated HTTP call every 15 minutes (plus a daily full refresh).
+The rewards site never queries this site's database directly. See
+`PROGRESS_NOTES.md` section 20 for the full build history; see
+`swan-rewards-portal`'s own `README.md` for that app's architecture.
+
 ## Verify Against Live State Before Fixing Permissions/Settings/Roles
 
 Before proposing a fix involving permissions, roles, POS Profile settings, or any
@@ -47,8 +62,26 @@ Concrete example that happened in this repo: adding a single new Custom
 Field (`Customer-posa_loyalty_portal_code`) via `bench export-fixtures`
 shrank `posawesome/fixtures/custom_field.json` from ~9000 lines to 139.
 Caught before committing by checking the diff; reverted and hand-added the
-one new JSON object instead. The same caution applied again shortly after
-for `Customer-posa_is_generic_customer`.
+one new JSON object instead. The same caution was applied preemptively
+(hand-adding directly, never re-running the export) for every Custom
+Field added since — `Customer-posa_is_generic_customer` and
+`Sales Invoice-posa_receipt_synced`.
+
+## WSL2 Dev Environment: `bench start` / Redis Can Silently Be Down
+
+If `bench` commands in this environment start failing with Redis
+connection-refused errors, or an otherwise-working `curl` against a site
+suddenly connection-refuses, check whether the whole `bench start`
+process stack (web server, redis_cache, redis_queue, scheduler, worker)
+is actually still running — `bench doctor` or `ps aux | grep -E
+"redis-server|gunicorn"` — before assuming a code change caused it. It
+has gone down mid-session in this WSL2 setup with no code-related cause;
+restarting cleanly resolves it. One thing to watch when restarting
+manually: don't leave a bare `redis-server <config>` process running
+outside of `bench start`'s own management — it'll hold the port and
+make `bench start` itself fail to bind, looking like a second, different
+failure. Kill any manually-started redis processes by PID first, then
+let `bench start` launch its own.
 
 ## Check for Name Collisions Before Creating Standard Docs
 

@@ -1994,3 +1994,131 @@ earlier guest-accessible (`allow_guest=True`) mobile-lookup prototype
 built before the separate-site architecture was decided. It's superseded
 by the Step 4-9 plan and slated for removal in Step 9 cleanup, so it's
 left untracked on disk rather than committed and then deleted later.
+
+## 20. Customer rewards portal: full build (Steps 4-9), repo split, and production promotion (2026-08-15)
+
+Completed the rewards portal end to end: the separate site, the sync
+job, both guest-facing endpoints, the portal page itself, digital
+receipts, store info, then cleanup and code review split across three
+repos/branches. Section 19 (above) covers Steps 1-3 + the
+generic-customer fix; this entry covers everything after that,
+including those earlier pieces going live on production.
+
+**Where the code actually lives now — three separate places:**
+1. `posawesome`, `develop-swan` branch, commit `3585fbc` — the
+   main-site half: `posawesome/posawesome/api/rewards_sync.py` (the
+   sync job), the new `Rewards Sync Settings` singleton doctype, and
+   the `posa_receipt_synced` Custom Field on Sales Invoice. Not on
+   `stable` — this stays on `develop-swan` only until the whole portal
+   is proven in production, per the standing rollout plan.
+2. `posawesome`, `stable` branch, commit `939edfb` — Steps 1-3 + the
+   generic-customer fix (section 19's `72fc12e`/`113c229`), cherry-picked
+   and pushed. **Now live on production**, deployed by the user directly
+   (outside this session's access — no production SSH this time,
+   reported back rather than independently verified by the agent): git
+   pull, `bench migrate` (verified both new fields exist via direct
+   query before proceeding), `bench build --app posawesome` (required —
+   this promotion touches `UpdateCustomer.vue`), a full service restart,
+   then two manual DB-only steps done in the correct order (fields must
+   exist first): the "Swan Sales Invoice" print format's loyalty-code
+   Jinja block copied over by hand (same DB-only artifact pattern as
+   staging — never git-tracked), and a dedicated walk-in/generic
+   customer created and flagged with `posa_is_generic_customer=1` on
+   production directly in Desk, mirroring staging's "Anonymous" fix
+   proactively rather than waiting for contamination to happen first —
+   production had no pre-existing shared walk-in customer at all when
+   checked, a genuinely clean starting point unlike staging's.
+3. **New repo**: `github.com/somratsam/swan-rewards-portal` (private),
+   `main` branch, commit `9a8c2ac` — the entire `swan_rewards` app
+   (Steps 4-9's separate-site code: doctypes, sync-ingest endpoint,
+   guest lookup/receipt/store-info endpoints, the portal page). This
+   app had **no git repository at all** until this commit — it was
+   scaffolded with `bench new-app --no-git` back in Step 4 and stayed
+   that way through the whole build. Single `main` branch chosen
+   deliberately over posawesome's `develop-swan`/`stable` split: this
+   app has no upstream fork to reconcile against and isn't
+   transaction-critical (a bug here degrades a nice-to-have customer
+   feature, not live checkout) — that risk-profile split doesn't apply,
+   so the ongoing-cherry-pick overhead wasn't worth it. Deployment tags
+   per environment recommended instead, when that's needed.
+
+**Steps 4-9, briefly** (full narrative detail lives in commit messages
+and this session's own record; here's what a future reader needs to
+know they exist):
+- **Step 4**: `rewards.staging.local` — bare Frappe only, deliberately
+  no ERPNext/POS Awesome, same bench as staging via host-header routing.
+- **Step 5**: the sync job. 15-minute incremental (only rows changed
+  since a watermark) + daily full-refresh (every non-generic customer
+  regardless of change, since loyalty-point *expiry* shifts a balance
+  with no corresponding "modified" timestamp for a watermark to ever
+  catch). Generic/walk-in customers excluded at the source query —
+  never computed, never sent, not just hidden from display. Pushes over
+  authenticated HTTP (API key/secret, role-gated, rate-limited,
+  batch-capped), never a live cross-site DB connection.
+- **Step 6**: guest-facing lookup (`swan_rewards.api.lookup.lookup`) —
+  mobile number **and** loyalty portal code required together as one
+  combined match, never accepted on either alone; confirmed live that
+  wrong-code and wrong-mobile responses are byte-identical, no
+  partial-match leak. Rate-limited 10/hr/IP, verified live (10 succeed,
+  11th returns 429).
+- **Step 7**: the portal page itself, `swan_rewards/www/index.html` —
+  single static file, no build step, bilingual EN/AR with RTL, hero
+  balance section, activity timeline, expiry-awareness card. Went
+  through a real design-critique pass after initial review flagged it
+  as "functional but generic" — store cards specifically called out as
+  "a database dump" — reworked into elevated cards with a Google Maps
+  "get directions" link per store, plus a fade-in/count-up reveal on
+  the hero, all guarded to only play on a genuine fresh lookup, never
+  replayed on re-renders (e.g. a language toggle).
+- **Step 8**: digital receipts. PDFs pre-rendered on the main site
+  during incremental sync only, gated by `posa_receipt_synced` so an
+  already-synced receipt is never regenerated. View (inline) and
+  Download modes share the identical two-factor-match-plus-ownership-check
+  security path — view is not a lighter-weight route to the file.
+- **Step 9**: cleanup. Removed the old `loyalty_portal.py` prototype
+  (verified nothing else referenced it first) and staging's "My
+  Account" Web Page (a DB-only record, confirmed by its actual content
+  before deleting). Production's copy was unpublished by the user
+  themselves.
+- **Store info** (built alongside Step 7): "Visit Us" section + website/phone
+  footer, sourced from real ERPNext data (`Address` records with
+  `address_type = "Shop"`, `Company.website`/`.phone_no`) rather than
+  hardcoded — the user entered Swan's actual store/contact data
+  directly in Desk once shown exactly where it needed to live.
+
+**Two real technical blockers hit and solved during Step 8**, worth
+remembering if PDF generation from a background job comes up again in
+this codebase:
+- `frappe.get_print()` raises a bare `AttributeError('request')` when
+  called outside an HTTP request (Werkzeug's context-local proxy has
+  nothing to read) — the scheduler has no request. Fixed with
+  `frappe.utils.set_request()`, Frappe's own official helper for this
+  exact scenario, with an explicit `base_url` built from
+  `frappe.local.site` + `frappe.local.conf.webserver_port` (the default
+  fallback omits the port, which caused wkhtmltopdf's own asset-fetch
+  to connection-refuse against the wrong port).
+- "Swan Sales Invoice" is a genuine 76mm thermal-receipt format, but PDF
+  generation defaults to A4 — silently split every receipt across a
+  mostly-blank 2nd page. Fixed with a custom 76mm×400mm page size plus
+  `pypdf`-based stripping of any trailing page with no extractable text.
+
+**Environment note, not code-related:** partway through Step 5 testing,
+`bench` commands started failing with Redis connection errors and the
+whole `bench start` process stack turned out to be down (unrelated to
+any change made this session — likely stopped earlier in the session
+without being noticed). Restarted cleanly; worth checking `bench doctor`
+/ whether `bench start` is actually running if a fresh session in this
+WSL2 environment hits unexplained connection-refused errors on
+otherwise-working commands.
+
+**Also still true, carried over from section 19:** the
+`bench export-fixtures` corruption caution (see CLAUDE.md) applied
+again for the `posa_is_generic_customer` and `posa_receipt_synced`
+fields — both hand-added to `custom_field.json` rather than exported,
+same as the original catch.
+
+**Not done, explicitly deferred:** production's rewards site itself
+(`rewards.swan-intl.com` or equivalent) — the whole point of tonight's
+promotion was getting Steps 1-3 safely live first; the separate-site
+production deployment (DNS, SSL, dedicated worker pool, the private-first
+staged rollout) is a distinct, later piece of work, not started.
