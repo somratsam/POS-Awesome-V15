@@ -151,6 +151,17 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
+scheduler_events = {
+    "cron": {
+        # Rewards portal sync: frequent incremental delta, plus a daily full
+        # refresh to catch loyalty-point *expiry* drift (a customer's
+        # balance can shift with no corresponding row change for a
+        # watermark to ever catch -- see rewards_sync.py's module docstring).
+        "*/15 * * * *": ["posawesome.posawesome.api.rewards_sync.run_incremental_sync"],
+        "0 2 * * *": ["posawesome.posawesome.api.rewards_sync.run_full_refresh"],
+    },
+}
+
 # scheduler_events = {
 # 	"all": [
 # 		"posawesome.tasks.all"
@@ -238,6 +249,7 @@ fixtures = [
                     "POS Profile-create_pos_invoice_instead_of_sales_invoice",
                     "POS Invoice-posa_is_printed",
                     "Sales Invoice-posa_is_printed",
+                    "Sales Invoice-posa_receipt_synced",
                     "Sales Invoice Reference-pos_invoice",
                     "POS Profile-posa_local_storage",
                     "POS Profile-posa_force_server_items",
