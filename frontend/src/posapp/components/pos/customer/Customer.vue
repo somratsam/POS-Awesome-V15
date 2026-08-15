@@ -123,6 +123,16 @@
 				</span>
 				<span class="customer-load-status__percent"> {{ customerLoadPercent }}% </span>
 			</div>
+			<v-btn
+				v-if="pos_profile?.posa_walkin_customer"
+				class="walkin-customer-btn"
+				variant="text"
+				size="small"
+				:disabled="effectiveReadonly || isCustomerSearchLocked"
+				@click="select_walkin_customer"
+			>
+				{{ __("Walk-in / No Loyalty") }}
+			</v-btn>
 		</div>
 		<!-- Update customer modal -->
 		<div class="mt-4">
@@ -224,6 +234,28 @@
 	opacity: 0.3 !important;
 	pointer-events: none;
 	cursor: not-allowed;
+}
+
+/* Deliberately muted/secondary -- this is a distinct, considered action
+   (staff asked about loyalty, customer declined), not a fast default, so
+   it must never carry the same visual weight as the search field above it. */
+.walkin-customer-btn {
+	align-self: flex-start;
+	margin-top: 4px;
+	padding-inline: 6px;
+	min-width: 0;
+	height: auto;
+	font-size: 0.72rem;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	text-transform: none;
+	color: var(--pos-text-secondary);
+	opacity: 0.75;
+}
+
+.walkin-customer-btn:hover,
+.walkin-customer-btn:focus-visible {
+	opacity: 1;
 }
 
 @media (max-width: 768px) {
@@ -538,6 +570,17 @@ export default {
 			closeCustomerMenu();
 		};
 
+		const select_walkin_customer = () => {
+			const walkinCustomer = props.pos_profile?.posa_walkin_customer;
+			if (!walkinCustomer) {
+				return;
+			}
+			tempSelectedCustomer.value = walkinCustomer;
+			internalCustomer.value = walkinCustomer;
+			customersStore.setSelectedCustomer(walkinCustomer);
+			closeCustomerMenu();
+		};
+
 		const openNewCustomer = () => {
 			new_customer();
 		};
@@ -639,6 +682,7 @@ export default {
 			handleEnter,
 			new_customer,
 			edit_customer,
+			select_walkin_customer,
 			selectFirstCustomer,
 			openNewCustomer,
 			focusCustomerSearch,
