@@ -251,6 +251,7 @@ fixtures = [
                     "POS Profile-posa_hide_closing_shift",
                     "Customer-posa_discount",
                     "POS Profile-posa_apply_customer_discount",
+                    "POS Profile-posa_walkin_customer",
                     "Sales Invoice-posa_offers",
                     "POS Invoice-posa_offers",
                     "Sales Invoice-posa_coupons",
