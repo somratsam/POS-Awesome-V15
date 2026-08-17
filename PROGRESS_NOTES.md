@@ -2404,3 +2404,86 @@ Committed to `develop-swan` only — staying staging-only until reviewed,
 same as the standing workflow for anything not yet proven in
 production. Production-side application (once approved) is manual, same
 process as every other promotion this session.
+
+## 24. Receipt PDF, round two: a real network fetch the previous fix didn't cover (2026-08-17)
+
+After section 23's `127.0.0.1` fix (`261c6f3`) went to production, receipt
+PDF generation hit a *new*, different error on the same function:
+`OSError: wkhtmltopdf ... ContentNotFoundError`, distinct from the DNS
+`HostNotFoundError` the earlier fix actually resolved (confirmed
+resolved, no longer occurring).
+
+**Root cause, found and confirmed live:** Frappe's own printview wrapper
+unconditionally injects `<link rel="stylesheet"
+href="/assets/frappe/dist/css/print.bundle.HASH.css">` into every
+`frappe.get_print()` page's `<head>` — outside the print format's own
+content entirely, so section 22/23's earlier scan (which only checked
+the print format's own HTML for `<img>`/`url()`/`background-image`)
+never covered it. wkhtmltopdf fetches that `<link>` as a real
+self-referencing HTTP request back to this same process. Under batch
+load (many receipts processed back-to-back against a busy production
+webserver) that self-request intermittently fails.
+
+**A specific proposed fix was tested and disproven before committing
+to it:** `pdf_options["load-error-handling"] = "ignore"` /
+`"load-media-error-handling"] = "ignore"`, intended to make wkhtmltopdf
+tolerate a failed resource load rather than abort. Reproduced the exact
+failure class reliably with a small local TCP server that accepts a
+connection and closes it without responding (matching wkhtmltopdf's own
+`RemoteHostClosedError`, which is in Frappe's `PDF_CONTENT_ERRORS` list)
+— then ran 15 attempts through the real `get_pdf()` path both without
+and with those two options set. **15/15 failed either way.** Those
+options don't cover a failed `<link rel="stylesheet">` fetch; they
+appear to be scoped to main-page navigation and `<img>`/media
+specifically. Worth remembering: a plausible-sounding wkhtmltopdf option
+name is not proof it covers the failure mode it's being reached for —
+verify against a reproducible failure before trusting it.
+
+**Actual fix**: `_generate_receipt_pdf()` now runs the rendered HTML
+through a new `_inline_stylesheet_links()` before handing it to
+`get_pdf()` — every `<link rel="stylesheet">` is replaced with its
+actual CSS content, read straight off local disk
+(`frappe.local.sites_path` + the link's own href), the same technique
+`frappe/utils/pdf.py`'s own `prepare_header_footer()` already uses for
+header/footer HTML. This removes the network fetch as a failure mode
+entirely rather than trying to make it tolerable. Fails safe (drops the
+link rather than leaving a dead reference) if the local file can't be
+read for any reason.
+
+A simpler first attempt — stripping the `<link>` outright instead of
+inlining it — was tried and rejected: it's *unsafe*. The external
+stylesheet is the only thing hiding Frappe's own print-preview toolbar
+("Print" / "Get PDF" button text); stripping it leaked that text
+directly into the rendered receipt, plus subtly different tax-table text
+wrapping. Confirmed by diffing extracted PDF text between the stripped
+and original versions before ruling it out.
+
+**Verified**, all against real staging data (not synthetic HTML) except
+where noted:
+- Inlined vs. original rendering, same real invoice: **byte-identical**
+  PDF output (44079 bytes both ways, identical extracted text) —
+  confirms no visual regression.
+- 30 most recent real invoices, full batch through the actual
+  `_generate_receipt_pdf()`: **30/30 succeeded**.
+- The same 15-attempt dropped-connection reproduction that broke the
+  rejected `load-error-handling` fix, re-run against the actual applied
+  fix: **0/15 failed** (the `<link>` is gone before `get_pdf()` ever
+  sees it, so there's structurally nothing left for that resource to
+  fail on).
+- New regression tests, `test_rewards_sync.py`'s
+  `TestInlineStylesheetLinks` (2 tests: correct replacement, and
+  fail-safe drop on a missing asset) — verified both fail with the
+  expected `AttributeError` against the pre-fix code (reverted via
+  `git stash`, confirmed red, restored via `git stash pop`, confirmed
+  green).
+- Full 6-item regression check: frontend `vitest run` **219/219 files,
+  1069/1069 tests**; `bench build`/`bench migrate` N/A (pure Python
+  logic, no frontend/doctype/fixture/print-format file touched);
+  security review N/A — `_inline_stylesheet_links()`'s local path comes
+  entirely from Frappe's own internally-generated `<link>` tag, never
+  from invoice/customer/user-controlled data, same trust model as the
+  Frappe core code it mirrors; `_generate_receipt_pdf()`'s reachability
+  (scheduler-only, non-whitelisted) is unchanged by this diff.
+
+Committed to `develop-swan` only, same standing workflow — not yet
+promoted to `stable`/production.
