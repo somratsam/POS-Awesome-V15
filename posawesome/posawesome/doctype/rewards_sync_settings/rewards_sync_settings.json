@@ -1,0 +1,74 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-15 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "rewards_site_url",
+  "api_key",
+  "api_secret",
+  "column_break_1",
+  "last_incremental_sync",
+  "last_full_refresh"
+ ],
+ "fields": [
+  {
+   "description": "Base URL of the rewards site, e.g. http://rewards.staging.local:8000",
+   "fieldname": "rewards_site_url",
+   "fieldtype": "Data",
+   "label": "Rewards Site URL"
+  },
+  {
+   "description": "API key of the rewards site's dedicated Rewards Sync Agent user.",
+   "fieldname": "api_key",
+   "fieldtype": "Data",
+   "label": "API Key"
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "API Secret"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Watermark for the incremental sync job. Not editable by hand -- updated automatically after each successful run.",
+   "fieldname": "last_incremental_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Incremental Sync",
+   "read_only": 1
+  },
+  {
+   "description": "Date of the last successful full-refresh pass (catches points-expiry drift that no watermarked row change would otherwise surface).",
+   "fieldname": "last_full_refresh",
+   "fieldtype": "Date",
+   "label": "Last Full Refresh",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-15 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "POSAwesome",
+ "name": "Rewards Sync Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}
