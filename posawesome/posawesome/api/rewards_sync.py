@@ -39,6 +39,7 @@ split every receipt across a mostly-blank 2nd page).
 
 import base64
 import io
+import re
 
 import frappe
 import requests
@@ -52,6 +53,8 @@ RECEIPT_BATCH_SIZE = 20
 REQUEST_TIMEOUT = 30
 RECEIPT_PAGE_WIDTH = "76mm"
 RECEIPT_PAGE_HEIGHT = "400mm"
+
+STYLESHEET_LINK_PATTERN = re.compile(r'<link[^>]*rel=["\']stylesheet["\'][^>]*href=["\']([^"\']+)["\'][^>]*>')
 
 
 def run_incremental_sync():
@@ -247,6 +250,7 @@ def _generate_receipt_pdf(invoice_name):
 		set_request(method="GET", path="/", base_url=f"http://127.0.0.1:{port}")
 
 	html = frappe.get_print("Sales Invoice", invoice_name, print_format="Swan Sales Invoice", no_letterhead=True)
+	html = _inline_stylesheet_links(html)
 
 	pdf_options = {
 		"page-width": RECEIPT_PAGE_WIDTH,
@@ -258,6 +262,38 @@ def _generate_receipt_pdf(invoice_name):
 	}
 	pdf_bytes = get_pdf(html, options=pdf_options)
 	return _strip_blank_trailing_pages(pdf_bytes)
+
+
+def _inline_stylesheet_links(html):
+	"""Replace every <link rel="stylesheet"> with its actual CSS content,
+	read straight off local disk, instead of a network reference.
+
+	Frappe's printview wrapper always links its own bundled print.bundle.css
+	(e.g. /assets/frappe/dist/css/print.bundle.HASH.css), on top of whatever
+	the print format itself declares. wkhtmltopdf fetches that <link> as a
+	real self-referencing HTTP request back to this process -- under batch
+	load that request can fail (observed: ContentNotFoundError,
+	RemoteHostClosedError) and abort the whole PDF. Tried tolerating the
+	failure first (wkhtmltopdf's load-error-handling/load-media-error-handling
+	options); neither actually covers a failed stylesheet <link> fetch --
+	confirmed empirically (15/15 failures either way against a simulated
+	dropped connection). Reading the file directly removes the network
+	fetch as a failure mode entirely, the same way pdf.py's own
+	prepare_header_footer() already avoids it for header/footer HTML.
+	Verified byte-identical PDF output vs. the original working <link>.
+	"""
+
+	def _replace(match):
+		href = match.group(1)
+		local_path = f"{frappe.local.sites_path}/{href.lstrip('/')}"
+		try:
+			return f"<style>{frappe.read_file(local_path)}</style>"
+		except Exception:
+			# Fail-safe: drop the link rather than leave a dead network
+			# reference in the HTML wkhtmltopdf will still try to fetch.
+			return ""
+
+	return STYLESHEET_LINK_PATTERN.sub(_replace, html)
 
 
 def _strip_blank_trailing_pages(pdf_bytes):

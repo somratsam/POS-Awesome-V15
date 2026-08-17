@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -50,3 +52,55 @@ class TestGenerateReceiptPdfBaseUrl(unittest.TestCase):
 			captured["base_url"].startswith("http://127.0.0.1:"),
 			f"expected loopback base_url, got {captured['base_url']!r}",
 		)
+
+
+class TestInlineStylesheetLinks(unittest.TestCase):
+	"""Regression guard for a second, distinct production bug that surfaced
+	after the base_url fix above: Frappe's printview wrapper always links
+	its own print.bundle.css, and wkhtmltopdf fetches that <link> as a real
+	self-referencing HTTP request -- one that intermittently failed under
+	real batch load (ContentNotFoundError / RemoteHostClosedError), even
+	though the receipt's own inline <style> block doesn't need it.
+	wkhtmltopdf's load-error-handling/load-media-error-handling options do
+	NOT cover a failed stylesheet <link> fetch -- confirmed empirically
+	before this fix (15/15 failures either way). Reading the file directly
+	off disk removes the network fetch as a failure mode entirely.
+	"""
+
+	def setUp(self):
+		self.tmpdir = tempfile.mkdtemp()
+		self.original_sites_path = frappe.local.sites_path
+		frappe.local.sites_path = self.tmpdir
+		asset_dir = os.path.join(self.tmpdir, "assets", "frappe", "dist", "css")
+		os.makedirs(asset_dir)
+		with open(os.path.join(asset_dir, "print.bundle.ABC123.css"), "w") as f:
+			f.write(".print-format-gutter { background: red; }")
+
+	def tearDown(self):
+		frappe.local.sites_path = self.original_sites_path
+
+	def test_stylesheet_link_replaced_with_inline_style(self):
+		html = (
+			'<head><link type="text/css" rel="stylesheet" '
+			'href="/assets/frappe/dist/css/print.bundle.ABC123.css">'
+			"<style>body { font-size: 14px; }</style></head>"
+		)
+
+		result = rewards_sync._inline_stylesheet_links(html)
+
+		self.assertNotIn("rel=\"stylesheet\"", result)
+		self.assertNotIn("<link", result)
+		self.assertIn(".print-format-gutter { background: red; }", result)
+		# The receipt's own inline style must survive untouched.
+		self.assertIn("body { font-size: 14px; }", result)
+
+	def test_missing_asset_drops_the_link_instead_of_raising(self):
+		html = (
+			'<link rel="stylesheet" href="/assets/frappe/dist/css/'
+			'does-not-exist.css"><style>body {}</style>'
+		)
+
+		result = rewards_sync._inline_stylesheet_links(html)
+
+		self.assertNotIn("<link", result)
+		self.assertIn("<style>body {}</style>", result)
