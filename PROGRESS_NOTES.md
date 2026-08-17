@@ -1737,3 +1737,113 @@ earlier guest-accessible (`allow_guest=True`) mobile-lookup prototype
 built before the separate-site architecture was decided. It's superseded
 by the Step 4-9 plan and slated for removal in Step 9 cleanup, so it's
 left untracked on disk rather than committed and then deleted later.
+
+
+## 16. Rewards sync bridge live on production: two incomplete sub-features diagnosed (2026-08-17)
+
+Core sync (customers, loyalty points, activity feed) confirmed working
+on production. Two sub-features weren't: Store Locations empty, and
+every receipt PDF failing to generate. No production access this
+session (revoked after an earlier investigation, same as every session
+since) — diagnosed both against `staging.local`/code, with a live
+reproduction for the second.
+
+**Issue 1 — Store Locations empty.** Read `_get_store_locations()` and
+`swan_rewards`'s `_upsert_store_location()` end to end: both are
+correct. The push query has no company filter at all (any Shop-type
+`Address` linked to any `Company` via `Dynamic Link` qualifies, not
+hardcoded to `Swan`), and `store_locations` is unconditionally attached
+to `requests_to_send[0]` on every run (the empty-batch fallback
+guarantees there's always a `[0]` to attach to) — so if any batch
+succeeds in a run, as confirmed happening on production, store
+locations would have gone out in that same run. Confirmed on
+`staging.local`: 2 real Shop-type `Address` records, correctly linked to
+Company `Swan`, would be picked up by this exact query. **No code bug
+found in either the push or ingest side.** Most likely explanation,
+matching the original hypothesis: production's `Address` table simply
+has no Shop-type records yet — never created there. **Needs a live
+check against production** (this session still has no access): does
+`site1.local` have any `Address` with `address_type = "Shop"` linked to
+a `Company` via `Dynamic Link`? A one-line `bench console` check would
+confirm either way.
+
+**Issue 2 — receipt PDF generation failing
+(`wkhtmltopdf ... HostNotFoundError`).** Reproduced directly, not just
+read: called `_generate_receipt_pdf()` against a real staging invoice —
+succeeded (valid PDF, no error). The print format itself ("Swan Sales
+Invoice", still DB-only/not git-tracked) was read in full: its only
+dynamic image reference is `{{ logo_data_uri }}`, populated via
+`frappe.call("...print_assets.get_receipt_logo_data_uri", ...)` inside
+the Jinja template — a real, synchronous server-side Python call (not a
+client-side AJAX request), returning either `""` or an inline `data:`
+URI. `frappe.utils.data.expand_relative_urls()` (called by
+`get_pdf()`'s `scrub_urls()`) explicitly skips `data:` URIs, and no
+other `src`/`href` exists in the template — so the print format's own
+content carries no hostname dependency at all.
+
+The actual bug: `_generate_receipt_pdf()` builds a synthetic request
+context for `frappe.get_print()` via
+`set_request(base_url=f"http://{frappe.local.site}:{port}")`. Proved
+the mechanism directly — same HTML, same everything, changing only this
+one `base_url` argument: `http://staging.local:8000` succeeds,
+`http://site1.local:8000` (production's actual internal site name)
+reproduces the *exact* reported error
+(`OSError: wkhtmltopdf reported an error: ... HostNotFoundError`).
+`wkhtmltopdf` runs as its own OS subprocess with its own network/DNS
+resolution, separate from the Frappe app's own request handling — it
+needs to resolve whatever `base_url` it's given to establish the page's
+origin, even though this receipt has zero externally-hosted assets.
+`staging.local` only ever worked by coincidence, because this dev box's
+own `/etc/hosts` happens to map it to `127.0.0.1`; production's
+`site1.local` has no reason to be DNS-resolvable from anywhere, and
+isn't. Same class of problem as fix #11 (locally-embedded logos) —
+an environment-specific hostname where a local/relative reference
+belongs.
+
+**Fix**: `posawesome/posawesome/api/rewards_sync.py`,
+`_generate_receipt_pdf()` — `base_url` now hardcodes `127.0.0.1`
+instead of `frappe.local.site`. The loopback IP needs zero DNS
+resolution, so it's correct in any environment regardless of what the
+site is actually named. Re-verified the real fix end to end via
+`_generate_receipt_pdf()` itself (not just the isolated repro): succeeds
+identically to before. New regression test,
+`test_rewards_sync.py::test_base_url_uses_loopback_not_site_name`,
+mocks `set_request`/`get_pdf`/`frappe.get_print` and asserts the
+captured `base_url` is loopback-based, not site-name-based — verified
+it actually catches the bug (reverted the fix via `git stash`, confirmed
+red, restored via `git stash pop`, confirmed green) before trusting it.
+
+**Rewards Invoice's real receipt field** (the user's guess of
+`receipt_pdf` was wrong, confirmed live on `rewards.staging.local`):
+there is no such field. `Rewards Invoice`'s only receipt-related field
+is `has_receipt` (Check, boolean flag only). The PDF itself is a
+standard private Frappe `File` record, attached via
+`attached_to_doctype="Rewards Invoice"` / `attached_to_name=<name>` by
+`swan_rewards`'s `_attach_receipt()` (`save_file(...)`) — not stored as
+any doctype field value. Confirmed on a real synced record
+(`ACC-SINV-2026-00001`): `file_url` = `/private/files/ACC-SINV-2026-
+0000186eb20.pdf`, `is_private` = 1.
+
+**Verified** (full 6-item regression check): frontend `vitest run`
+**219/219 files, 1069/1069 tests** (this change touches no frontend
+files, but the rule applies regardless). Backend: new
+`test_rewards_sync.py` **1/1** passing, verified as a genuine regression
+guard (see above). `test_print_assets.py` hit the same pre-existing
+`run-tests` environment `AttributeError`/`ImportError` crash documented
+elsewhere in this file (section 13's era) and confirmed independently
+earlier this session (identical on a clean checkout with none of this
+session's changes present) — confirmed environmental and unrelated to
+any change here, not re-verified a third time.
+`bench build`/`bench migrate`: N/A — no frontend, doctype, fixture, or
+print-format file touched, only one function's internal logic. Security
+review: N/A — `_generate_receipt_pdf()` remains reachable only from the
+two non-whitelisted scheduler entry points (unchanged by this diff), no
+user input or new data-access path introduced; the change only swaps
+which fixed string is used as a purely-local rendering context.
+Confirmed nothing else disturbed: the diff is 7 lines in one function of
+one file.
+
+Committed to `develop-swan` only — staying staging-only until reviewed,
+same as the standing workflow for anything not yet proven in
+production. Production-side application (once approved) is manual, same
+process as every other promotion this session.
