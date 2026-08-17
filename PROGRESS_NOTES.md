@@ -2298,6 +2298,9 @@ anything to production's rewards site until configured. Once set, the
 first `run_incremental_sync` tick (within 15 minutes) will push every
 non-generic customer's current state as its baseline.
 
+**Follow-up, resolved:** done as part of tonight's full production
+rollout of the rewards site itself — see section 25.
+
 ## 23. Rewards sync bridge live on production: two incomplete sub-features diagnosed (2026-08-17)
 
 Core sync (customers, loyalty points, activity feed) confirmed working
@@ -2485,5 +2488,68 @@ where noted:
   Frappe core code it mirrors; `_generate_receipt_pdf()`'s reachability
   (scheduler-only, non-whitelisted) is unchanged by this diff.
 
-Committed to `develop-swan` only, same standing workflow — not yet
-promoted to `stable`/production.
+**Follow-up, resolved:** reviewed and cherry-picked to `stable` as
+`07fe8f9`, deployed to production the same night as part of the full
+rewards-site rollout — see section 25.
+
+## 25. Rewards portal live on production: full rollout, both PDF fixes deployed, end-to-end verified (2026-08-17)
+
+The separate-site production deployment explicitly deferred back in
+section 20 ("not started") happened tonight, start to finish: the
+rewards site is now live at `rewards.swan-intl.com`, the sync bridge and
+both receipt-PDF fixes are deployed, and every piece of the portal has
+been confirmed working against real production data.
+
+**Site stood up.** `swan_rewards` deployed to production as its own new
+site (`rewards.swan-intl.com`) on the same bench as `site1.local` —
+bare Frappe, no ERPNext/POS Awesome installed, same decoupled shape as
+staging. DNS, SSL (Let's Encrypt), and nginx multi-domain config all set
+up for the new site alongside the existing `e.swan-intl.com`.
+
+**Incident, same night, no lasting impact:** regenerating nginx's config
+for the new site briefly broke `e.swan-intl.com`'s own SSL certificate.
+Caught and fixed the same night. Worth remembering as its own standing
+caution: adding a new site's nginx/SSL config on a shared bench can
+affect *existing* sites' certs, not just the new one — always verify
+every existing domain still serves correctly (not just the new one)
+after a bench-wide nginx regeneration, e.g. `bench setup nginx` /
+`bench setup lets-encrypt`. See CLAUDE.md.
+
+**Sync bridge promoted and deployed.** Section 22's `375635e` (already
+on `stable`) pulled and deployed to production: `bench pull`,
+`bench migrate`, service restart. `Rewards Sync Settings` on production
+configured with real credentials (`rewards_site_url`, `api_key`,
+`api_secret`) via the Desk UI — resolving section 22's open item.
+
+**Both receipt-PDF fixes deployed same night**, each following the
+established cherry-pick-to-stable-then-deploy sequence used all session:
+- Fix 1 (section 23 → `160db7d`/`261c6f3`): `frappe.local.site` →
+  `127.0.0.1` for wkhtmltopdf's `base_url`. Resolved the DNS
+  `HostNotFoundError` completely — confirmed no longer occurring on
+  production after deploy.
+- Fix 2 (section 24 → `7237bd4`/`07fe8f9`): eliminated the live
+  self-referencing fetch of Frappe's own `print.bundle.css` during PDF
+  generation, inlining its content from local disk instead. Resolved the
+  `ContentNotFoundError` that surfaced under real production batch load
+  after Fix 1 went live.
+
+**End-to-end verified live on production**, not just deployed-and-hoped:
+customer sync, loyalty points balance, activity feed, store locations
+("Visit Us" section — resolving section 23's Issue 1, confirming it
+really was the suspected data gap rather than a code bug once real Shop
+`Address` records existed on production), and receipt PDF view/download
+all confirmed working against real production data.
+
+**Known open items for next session** (both real, both non-blocking —
+the portal is fully functional, these are polish):
+- **Mobile UX bug:** the "View" and "Download" receipt buttons both
+  trigger a download on mobile Chrome, instead of "View" opening the PDF
+  inline in-browser. Works correctly on desktop Chrome. Likely cause:
+  `swan_rewards.swan_rewards.api.receipt.get_receipt`'s `mode="view"`
+  path missing a `Content-Disposition: inline` response header (or
+  mobile Chrome ignoring/handling it differently from desktop) —
+  unconfirmed, not yet investigated.
+- **Portal reload UX bug:** reloading the page after a successful
+  lookup resets to an empty login form instead of persisting the last
+  successful lookup. A brief is already drafted (not yet sent) — no
+  root-cause investigation done yet.

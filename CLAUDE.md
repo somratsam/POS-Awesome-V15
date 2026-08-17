@@ -10,15 +10,16 @@ POSAwesome is a Frappe application - a Point of Sale (POS) system built on the F
 customer-facing counterpart, `swan_rewards`, living in its own separate
 repo (`github.com/somratsam/swan-rewards-portal`, `main` branch) and its
 own separate Frappe site (`rewards.staging.local` in this dev
-environment). It is *not* a subfolder or module of this repo, and it has
-no ERPNext/POS Awesome installed — deliberately bare Frappe, decoupled
-from this site's data model. The only connection between the two is a
-one-way scheduled sync job that lives *here*, in
-`posawesome/posawesome/api/rewards_sync.py`: it computes loyalty
-summaries/recent invoices/receipt PDFs on this site and pushes them over
-an authenticated HTTP call every 15 minutes (plus a daily full refresh).
-The rewards site never queries this site's database directly. See
-`PROGRESS_NOTES.md` section 20 for the full build history; see
+environment; `rewards.swan-intl.com` in production). It is *not* a
+subfolder or module of this repo, and it has no ERPNext/POS Awesome
+installed — deliberately bare Frappe, decoupled from this site's data
+model. The only connection between the two is a one-way scheduled sync
+job that lives *here*, in `posawesome/posawesome/api/rewards_sync.py`:
+it computes loyalty summaries/recent invoices/receipt PDFs on this site
+and pushes them over an authenticated HTTP call every 15 minutes (plus a
+daily full refresh). The rewards site never queries this site's database
+directly. See `PROGRESS_NOTES.md` section 20 for the original build
+history and section 25 for the production rollout; see
 `swan-rewards-portal`'s own `README.md` for that app's architecture.
 
 ## Verify Against Live State Before Fixing Permissions/Settings/Roles
@@ -156,6 +157,53 @@ caught it; a targeted "does the parent actually forward this prop" test
 was added afterward and its own effectiveness was verified by reverting
 the fix and confirming the test failed before trusting it as a real
 regression guard.
+
+## Regenerating nginx/SSL Config for a New Site Can Break an Existing Site's Cert
+
+On a shared bench serving multiple production domains, adding a new
+site's nginx/SSL config (`bench setup nginx`, `bench setup
+lets-encrypt`) regenerates config for the *whole* bench, not just the
+new site being added. Don't assume a clean deploy just because the new
+site's own cert comes up correctly — verify every existing domain still
+serves over HTTPS afterward too, not only the one just added.
+
+Concrete example that happened in this repo: adding
+`rewards.swan-intl.com`'s nginx/SSL config briefly broke
+`e.swan-intl.com`'s own certificate the same night. Caught and fixed
+immediately, no lasting impact, but it would have gone unnoticed longer
+without a deliberate post-deploy check of the *other* domain, since
+nothing about adding the new site's config looked wrong in isolation.
+
+## wkhtmltopdf's `load-error-handling` Options Don't Cover Every Failed Resource Fetch
+
+A plausible-sounding wkhtmltopdf option name is not proof it covers the
+failure mode it's being reached for. `load-error-handling` and
+`load-media-error-handling` sound like they should make PDF generation
+tolerate any failed resource load, but neither actually covers a failed
+`<link rel="stylesheet">` fetch — confirmed empirically (15/15 failures
+either way against a reproducible dropped-connection failure) before
+trusting either option. They appear scoped to main-page navigation and
+`<img>`/media specifically.
+
+More generally: `frappe.get_print()`'s output isn't just the print
+format's own HTML — Frappe's printview wrapper unconditionally injects
+its own `<link>` to a bundled `print.bundle.css` in `<head>`, outside
+whatever the print format itself declares. A scan for broken resource
+references that only checks the print format's own content (`<img>`,
+CSS `url()`, `background-image`) will miss this. When generating a PDF
+server-side (no real browser/user session, e.g. from a scheduled job),
+that stylesheet is a real self-referencing HTTP fetch back to the same
+process — which can fail under real load in a way a single manual test
+during development won't reproduce. If the print format has its own
+complete inline `<style>` block (true for POS Awesome's thermal-receipt
+formats), that fetch is usually unnecessary; read the file directly off
+local disk instead (`frappe.local.sites_path` + the link's own href),
+the same technique `frappe/utils/pdf.py`'s own `prepare_header_footer()`
+already uses for header/footer HTML, rather than trying to make the
+fetch's failure tolerable. Don't just strip the `<link>` either — verify
+first that nothing it provides is actually load-bearing (in this repo,
+it was the only thing hiding Frappe's own print-preview toolbar button
+text from leaking into the rendered output).
 
 ## Every Change Needs a Full, Professional-Standard Check Before It's "Done"
 
