@@ -237,8 +237,14 @@ def _generate_receipt_pdf(invoice_name):
 	from frappe.utils.pdf import get_pdf
 
 	if not getattr(frappe.local, "request", None):
+		# 127.0.0.1, not frappe.local.site: wkhtmltopdf resolves this base_url
+		# itself (a separate OS subprocess, not routed through the app's own
+		# request handling), and a site's configured name (e.g. site1.local)
+		# has no reason to be DNS-resolvable from wherever that subprocess
+		# runs. The loopback IP needs no resolution at all, so it works
+		# identically regardless of the site's name or environment.
 		port = frappe.local.conf.webserver_port or 80
-		set_request(method="GET", path="/", base_url=f"http://{frappe.local.site}:{port}")
+		set_request(method="GET", path="/", base_url=f"http://127.0.0.1:{port}")
 
 	html = frappe.get_print("Sales Invoice", invoice_name, print_format="Swan Sales Invoice", no_letterhead=True)
 
