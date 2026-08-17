@@ -2213,3 +2213,87 @@ predating today's deployment is test/dummy data, not a real customer.
 No backfill was needed and none was run; this was a deliberate,
 confirmed decision, not an oversight. Every real customer going forward
 gets a code automatically on save, which is what actually matters.
+
+## 22. Rewards sync bridge promoted to `stable`/production (2026-08-17, `375635e`)
+
+The sync-bridge commit (`3585fbc`, section 20 — `rewards_sync.py`, the
+`Rewards Sync Settings` singleton, `posa_receipt_synced`, and the
+scheduler wiring in `hooks.py`) was deliberately held back from `stable`
+in section 20, since the rewards portal itself wasn't deployed to
+production yet at the time. It now is (`rewards.swan-intl.com`), so the
+bridge that feeds it was promoted.
+
+**Promotion sequence:**
+1. Confirmed both `develop-swan` and `stable` were clean and fully synced
+   with `upstream` before touching anything — no uncommitted state on
+   either.
+2. Cherry-picked `3585fbc` onto `stable` in an isolated worktree (same
+   pattern as sections 19 and 21), landing as `375635e`. Conflicted in
+   `custom_field.json` — same recurring shape as the last two
+   promotions: `stable` already had `posa_walkin_customer` (from
+   section 21's `1958834`) sitting at the same append point
+   `posa_receipt_synced` needed. Resolved by keeping both entries, in
+   the same order they already existed in on `develop-swan`
+   (`posa_receipt_synced` immediately before `posa_walkin_customer`);
+   verified the resolved file byte-identical to `develop-swan`'s own
+   copy before committing. `hooks.py` merged cleanly on its own — purely
+   additive in both hunks (a new `scheduler_events["cron"]` block, one
+   new fixture list entry), no existing entry touched.
+3. Full 6-item regression check, run against the actual promoted
+   `375635e` state (checked out live on `staging.local`, not just
+   diffed):
+   - Frontend `vitest run`: **219/219 files, 1069/1069 tests** passing.
+     This commit touches no frontend files, but the rule applies
+     regardless.
+   - Backend: no dedicated test module exists for `rewards_sync.py`
+     (same as when it was first built — verified live, not via
+     automated tests, both then and now). `test_offline_sync_invoices`
+     4/4 passing. `test_offline_sync_customers` hit the pre-existing
+     `run-tests` environment `AttributeError` crash (`frappe` module
+     missing an attribute mid-teardown) documented in section 13/14's
+     era of this file — confirmed identical on unmodified
+     `develop-swan` with none of this change present, so pre-existing
+     and unrelated, not a regression from this promotion.
+   - `bench build --app posawesome`: N/A — no frontend/`.vue`/`.ts`
+     file touched.
+   - `bench --site staging.local migrate`: clean exit 0, run twice for
+     idempotency, no drift on the second run. Confirmed via
+     `frappe.get_meta()` that `posa_receipt_synced` landed on
+     `Sales Invoice` (`insert_after: posa_is_printed`, hidden) and
+     `Rewards Sync Settings` landed as a singleton with all 6 expected
+     fields.
+   - Security review: traced `rewards_sync.py` end to end. Neither
+     `run_incremental_sync` nor `run_full_refresh` carries
+     `@frappe.whitelist` — both are reachable only via
+     `scheduler_events["cron"]`, never as a directly callable API
+     method, so there is no external request surface here at all. All
+     DB access is either `frappe.get_all`/`frappe.db.get_value`
+     (ORM-parameterized) or one raw `frappe.db.sql` call
+     (`_build_customer_payload`'s loyalty-expiry lookup) using `%s`
+     placeholders with a bound params tuple, not string interpolation.
+     The outbound push authenticates with `settings.get_password(
+     "api_secret")` (decrypted only in-process, never logged) against
+     `settings.rewards_site_url`, both admin-configured values, not
+     anything client-supplied.
+   - Confirmed nothing adjacent was disturbed: `hooks.py`'s diff is
+     purely additive (verified via `git diff` against the prior
+     `stable` tip), `custom_field.json`'s resolved merge is
+     byte-identical to `develop-swan`'s, and the new doctype/field are
+     additive-only — no existing doctype, field, or scheduled job was
+     modified.
+4. No secrets present in what was promoted: `api_secret` is
+   schema-only (`Password` fieldtype, no `default`, no stored value in
+   git — same confirmation done before this doctype first shipped in
+   section 20); grepped the full diff for key/secret/password/token
+   patterns, no matches.
+5. Pushed `stable` to `upstream` (`1958834..375635e`).
+
+**Manual configuration still needed on production** (data, not code —
+won't arrive via git): production's own `Rewards Sync Settings` record
+needs its real `rewards_site_url` and `api_key`/`api_secret` filled in
+via the Desk UI before the scheduler jobs will do anything. Until that's
+set, `_run_sync()` logs a `"Rewards sync not configured"` error and
+returns early on every tick — inert, not broken, but won't actually sync
+anything to production's rewards site until configured. Once set, the
+first `run_incremental_sync` tick (within 15 minutes) will push every
+non-generic customer's current state as its baseline.
