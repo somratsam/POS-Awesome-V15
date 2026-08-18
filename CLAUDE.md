@@ -19,7 +19,8 @@ it computes loyalty summaries/recent invoices/receipt PDFs on this site
 and pushes them over an authenticated HTTP call every 15 minutes (plus a
 daily full refresh). The rewards site never queries this site's database
 directly. See `PROGRESS_NOTES.md` section 20 for the original build
-history and section 25 for the production rollout; see
+history, section 25 for the production rollout, and section 27 for
+post-launch fixes (mobile View/Download, reload persistence); see
 `swan-rewards-portal`'s own `README.md` for that app's architecture.
 
 ## Verify Against Live State Before Fixing Permissions/Settings/Roles
@@ -204,6 +205,64 @@ fetch's failure tolerable. Don't just strip the `<link>` either — verify
 first that nothing it provides is actually load-bearing (in this repo,
 it was the only thing hiding Frappe's own print-preview toolbar button
 text from leaking into the rendered output).
+
+## Frappe's `request.js` Can Intercept an Error Before Your Own `frappe.call()` Error Handling Ever Runs
+
+If a frontend fix isn't behaving as expected for a specific Frappe
+exception type reached via `frappe.call()`, check `request.js`'s own
+`exception_handlers` map before assuming your own error-classification
+code is even in the call path. It's declared as a `var` *local to*
+`frappe.request.call()`'s own function body (not exposed for external
+override), keyed by exception class name (`data.exception.split(".")
+.at(-1).split(":").at(0)`), and its `.fail()` handler checks it
+*before* falling through to `opts.error_callback` — for a matching
+entry (`QueryDeadlockError`, `QueryTimeoutError`), it shows Frappe's own
+native `msgprint` dialog and `return`s immediately, so custom
+`error:`/`error_callback` handling for that exact exception type never
+runs at all. Confirm this by reading `request.js`'s `.fail()` handler
+line by line for the specific exception type in question, not by
+assuming a generic "extend the error classifier" fix will reach every
+call path — it won't reach this one.
+
+Concrete example that happened in this repo: a fix intended to make a
+deadlock-related error show a calmer message extended
+`classifyBusinessCode()` (`api.ts`) to recognize deadlock text, feeding
+an existing recovery path in `usePaymentSubmission.ts`. Traced
+precisely (not assumed) that this specific dialog is Frappe's own
+native one, shown before that classification code ever runs — the
+frontend change was still worth keeping as low-risk defense-in-depth
+for other call paths, but the actual fix that mattered was a backend
+retry that prevents the deadlock from reaching the client at all.
+
+## Mobile Chrome Doesn't Reliably Render a `blob:` URL PDF Inline — Use a Real Navigation Instead
+
+Desktop Chrome renders any `blob:` URL typed `application/pdf` inline
+when a tab is navigated to it, regardless of any HTTP header (there's
+no real HTTP response involved at all for a `blob:` URL — it's an
+in-memory object). Chrome for Android does not reliably do this,
+falling back to a download instead — a platform gap, not something
+fixable by changing what the *server* sends, since a `blob:`-URL
+navigation never involves the server's response headers in the first
+place.
+
+If a `fetch()` + `.blob()` + `URL.createObjectURL()` pattern is being
+used specifically to achieve inline PDF viewing (a common reason: the
+endpoint needs a POST body carrying auth credentials that can't go in a
+bare `<a href>` GET), and mobile behaves differently from desktop,
+suspect this exact platform gap first. The fix is a real top-level
+navigation — e.g. a hidden `<form method="POST" target="_blank">`
+submission — so the browser's native inline-PDF handling can act on the
+server's *actual* `Content-Disposition: inline` header, which is
+meaningless to a `blob:`-URL-based approach no matter how correctly the
+server sets it.
+
+Concrete example that happened in this repo (`swan_rewards`'s receipt
+"View" button): confirmed via `curl` that the server was already
+sending the correct, different `Content-Disposition` header for view
+vs. download — the header was never the problem. The actual client-side
+code discarded the server's response entirely and rebuilt a fresh
+`Blob` before deciding view-vs-download purely in JS, meaning no HTTP
+header from either mode ever reached the browser's own decision logic.
 
 ## Every Change Needs a Full, Professional-Standard Check Before It's "Done"
 

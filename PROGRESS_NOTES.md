@@ -2554,17 +2554,11 @@ all confirmed working against real production data.
 
 **Known open items for next session** (both real, both non-blocking —
 the portal is fully functional, these are polish):
-- **Mobile UX bug:** the "View" and "Download" receipt buttons both
-  trigger a download on mobile Chrome, instead of "View" opening the PDF
-  inline in-browser. Works correctly on desktop Chrome. Likely cause:
-  `swan_rewards.swan_rewards.api.receipt.get_receipt`'s `mode="view"`
-  path missing a `Content-Disposition: inline` response header (or
-  mobile Chrome ignoring/handling it differently from desktop) —
-  unconfirmed, not yet investigated.
-- **Portal reload UX bug:** reloading the page after a successful
-  lookup resets to an empty login form instead of persisting the last
-  successful lookup. A brief is already drafted (not yet sent) — no
-  root-cause investigation done yet.
+- **Mobile UX bug — resolved, see section 27.** The guessed cause here
+  (a missing `Content-Disposition: inline` header) turned out to be
+  wrong — that header was already being sent correctly; the real cause
+  was that the frontend never let the browser see it at all.
+- **Portal reload UX bug — resolved, see section 27.**
 
 ## 26. "Deadlock Occurred" warning fixed: backend retry + frontend defense-in-depth (2026-08-18)
 
@@ -2692,5 +2686,116 @@ exceptions; the frontend change is pure error-message classification
 `fetchSubmittedDocstatus` verification call, scoped to the same
 invoice already in flight for this submission, not a new query surface.
 
-Committed to `develop-swan` only — reported back with findings before
-promoting to `stable`, same standing workflow.
+**Follow-up, resolved:** reviewed and cherry-picked to `stable` as
+`2dd1589`, deployed to production the same day — a genuine,
+staff-reported production issue, low-risk (retry-only on the happy
+path, purely additive on the frontend) and fully covered by tests that
+directly simulate the failure condition.
+
+## 27. `swan_rewards`: mobile View/Download bug fixed, reload persistence added (2026-08-18)
+
+Both of section 25's "known open items" resolved this session. Both
+changes are entirely within `swan_rewards`' own repo (`swan-rewards-portal`,
+`main` branch) — no `posawesome` code touched — documented here per this
+project's standing convention of keeping the companion app's history
+with the main site's docs.
+
+**Mobile View/Download bug (`c463002`).** Diagnosed against real
+production behavior first, not assumed: "View" and "Download" both
+worked correctly on desktop Chrome but both downloaded on mobile
+Chrome. Confirmed via `curl` that the server was already sending the
+*correct*, different `Content-Disposition` header for each mode
+(`inline` vs `attachment`) — the section 25 guess (a missing header)
+was wrong. The real cause: `viewReceipt()`/`downloadReceipt()` both
+fetched the PDF via `fetch()` + `.blob()`, then reconstructed a *fresh*
+`Blob` client-side and either triggered `<a download>` or navigated a
+new tab's `.location` to a `blob:` URL — meaning the server's
+`Content-Disposition` header was never actually consulted by the
+browser at all, on either platform. Desktop Chrome reliably renders a
+`blob:` URL PDF inline regardless; Chrome for Android does not — a
+platform gap, not a header bug.
+
+Fixed by switching `viewReceipt()` to a real hidden
+`<form method="POST" target="_blank">` submission instead of
+`fetch()`+blob, so a genuine top-level browser navigation lets the
+browser's native inline-PDF handling take over using the server's
+*actual* `Content-Disposition: inline` header — the standard mechanism
+every browser already supports for real navigations, unlike `blob:`
+URLs. `downloadReceipt()` untouched, already worked correctly on both
+platforms.
+
+Since `mode="view"` now reaches the server via a real navigation rather
+than `fetch()`, a failure (bad credentials, no receipt, rate limited)
+would otherwise show Frappe's raw JSON/stack-trace error page in the
+new tab. `receipt.py`'s `get_receipt()` restructured (rate-limited
+logic split into `_fetch_receipt()`) so `mode="view"` catches
+`DoesNotExistError`/`TooManyRequestsError` and returns a small on-brand
+HTML page instead (same palette as `index.html`) — generic about which
+check failed, preserving the endpoint's existing non-disclosure
+property (wrong-mobile, wrong-code, and wrong-invoice-ownership all
+render identically; verified with a dedicated test). `mode="download"`
+re-raises unchanged, still handled by the existing `fetch()`
+`.catch()`.
+
+Verified end-to-end via `curl` using real form-urlencoded POST bodies
+(exactly what the new `<form>` sends) against real staging data:
+view success returns the inline PDF, view failure returns the branded
+404 page, download success/failure both confirmed byte-for-byte
+unchanged from before. A real rendering browser wasn't available in
+this environment (Playwright installs but is missing system shared
+libraries, no root to install them) — desktop non-regression rests on
+`Content-Disposition: inline` over a real navigation being the
+standard mechanism every browser already relies on, not a
+screenshot-verified click-through; flagged as worth a quick manual
+check. New backend tests (`test_receipt.py`'s `TestViewModeErrorPage` —
+the branded-error-page path specifically, including that an unexpected
+exception is *not* swallowed and `mode="download"` is completely
+unaffected), verified as genuine regression guards.
+
+**Reload persistence (`b5e8b2e`).** Reloading right after a successful
+lookup previously reset to the empty form every time — no way back
+without re-entering both fields. On a successful lookup, `mobile_no` +
+`portal_code` (nothing else — not the points balance, not invoices,
+nothing beyond what's needed to redo the exact same lookup) are saved
+to `sessionStorage`, never `localStorage` and never a server-side
+session/cookie: scoped to one tab, cleared automatically when the tab
+closes. On page load, a saved pair triggers the *same real lookup
+request* automatically rather than rendering a stale cached blob, so a
+points-balance change since the last visit still shows up correctly.
+"Check Another Number" now also clears `sessionStorage`, on top of what
+it already reset. A failed auto-restore (credentials no longer valid)
+clears the stale entry too, so it doesn't keep failing on every future
+reload; a transient failure (rate-limited, network hiccup) leaves it
+alone since a retry may still succeed.
+
+Doesn't change the actual authentication model at all — `mobile_no` +
+`portal_code` remain the only credential, same "shared secret" already
+required for every lookup regardless of this change. One real,
+honestly-stated tradeoff: on a shared/public device where the tab is
+never closed between two different people, a reload now shows the
+previous person's data again (before this change, a reload reset to
+the empty form) — that risk already existed for in-memory JS state
+before any reload was even involved; "Check Another Number" remains the
+explicit way to clear it before handing off a shared device.
+
+Verified with a real, executable `jsdom`-driven test (loads the actual
+`index.html`, mocks `fetch`, drives real DOM events) rather than just
+reading the code, since no headless browser was available — 17 checks
+covering the exact manual flow (fresh lookup → simulated reload → same
+data restored automatically with exactly one re-verification request;
+Check Another Number → simulated reload → empty form, zero lookup
+requests made), plus edge cases (stale-credential cleanup, storage
+holding exactly the 2 intended fields and nothing more). Verified the
+test suite actually catches a regression: reverted the change,
+confirmed a real failure, restored, confirmed green.
+
+**Both deployed to production.** Full regression check for each: no
+frontend build step exists for this app (static HTML, no bundler) —
+verified via `node --check` plus the live `curl`/`jsdom` tests above.
+Backend Python tests (isolated-import harness, no live DB needed):
+39/39 passing after the receipt fix. Security review for both: no new
+user input, authorization, or data-access surface — the receipt fix's
+branded error page never echoes any raw request input into its HTML
+(no reflection risk); the reload-persistence fix stores nothing more
+sensitive than the same credential pair already required for the
+lookup it's persisting.
