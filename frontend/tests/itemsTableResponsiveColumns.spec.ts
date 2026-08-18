@@ -10,12 +10,12 @@ const headers = [
 	{ key: "qty", title: "QTY", required: true },
 	{ key: "uom", title: "UOM" },
 	{ key: "price_list_rate", title: "Price List Rate" },
-	{ key: "discount_percentage", title: "Discount %" },
-	{ key: "discount_amount", title: "Discount Amount" },
+	{ key: "discount_percentage", title: "Disc %" },
+	{ key: "discount_amount", title: "Disc Amt" },
 	{ key: "rate", title: "Rate", required: true },
 	{ key: "amount", title: "Amount", required: true },
 	{ key: "posa_is_offer", title: "Offer?" },
-	{ key: "actions", title: "Actions", required: true },
+	{ key: "actions", title: "", required: true },
 ];
 
 describe("items table final visible columns", () => {
@@ -39,14 +39,14 @@ describe("items table final visible columns", () => {
 
 	it("brings optional columns back one at a time as width grows past the required floor", () => {
 		// This header set's required columns (item_name/qty/rate/amount/
-		// actions) have min-widths summing to 556px (trimmed as part of the
-		// "close the remaining 1100-1272px gap without stacking" follow-up,
-		// paired with tighter cell padding/density at that width so the
-		// trim doesn't clip content); +48px for the expand column puts the
-		// required-only floor at 604px. 600px sits just below that floor,
-		// so nothing optional fits yet -- only at a width past the floor
-		// does the graduated logic start admitting optional columns back
-		// in, highest-priority first (price_list_rate, per
+		// actions) have min-widths summing to 531px (item_name 175, qty 116,
+		// rate 90, amount 84, actions 66 -- tuned as part of the
+		// real-browser-verified follow-up); +48px for the expand column puts
+		// the required-only floor at 579px. 600px sits just past that floor
+		// but still short of price_list_rate's own 120px need (21px
+		// remaining), so nothing optional fits yet -- only at a width with
+		// enough room does the graduated logic start admitting optional
+		// columns back in, highest-priority first (price_list_rate, per
 		// OPTIONAL_COLUMN_PRIORITY), one at a time as room allows.
 		const belowFloor = getResponsiveVisibleHeaders(headers, 600);
 		expect(belowFloor.map((column) => column.key)).toEqual([

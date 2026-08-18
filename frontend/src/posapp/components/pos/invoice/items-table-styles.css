@@ -232,7 +232,7 @@
 	max-width: 100% !important;
 	margin: 0 !important;
 	border-collapse: collapse !important;
-	table-layout: auto !important;
+	table-layout: fixed !important;
 	border-spacing: 0;
 }
 
@@ -291,7 +291,7 @@
 /* Table headers */
 .posa-cart-table th {
 	font-weight: 600;
-	font-size: var(--header-font-size, 0.8rem);
+	font-size: var(--header-font-size, 0.8rem) !important;
 	text-transform: none;
 	letter-spacing: 0.02em;
 	padding: 12px;
@@ -377,9 +377,9 @@
 
 /* Table cells */
 .posa-cart-table td {
-	padding: var(--cell-padding, 14px 12px);
+	padding: var(--cell-padding, 14px 12px) !important;
 	vertical-align: middle;
-	height: var(--cell-height, 60px);
+	height: var(--cell-height, 60px) !important;
 	text-align: center;
 	color: var(--pos-text-primary);
 	position: relative;
@@ -616,7 +616,7 @@
 	cursor: pointer;
 	transition: all 0.2s ease;
 	height: 32px;
-	font-size: 0.9rem;
+	font-size: var(--body-font-size, 0.9rem);
 }
 
 .posa-cart-table__editor-display:hover {
@@ -682,7 +682,7 @@
 	padding-bottom: 0 !important;
 	text-align: center;
 	font-weight: 600;
-	font-size: 0.9rem;
+	font-size: var(--body-font-size, 0.9rem);
 }
 
 .posa-cart-table__qty-input--direct .v-field__input {
@@ -956,6 +956,7 @@
 .posa-responsive-table-container.breakpoint-xs {
 	--table-padding: 8px;
 	--header-font-size: 0.65rem;
+	--body-font-size: 0.78rem;
 	--cell-padding: 8px 4px;
 	--cell-height: 48px;
 }
@@ -963,13 +964,15 @@
 .posa-responsive-table-container.breakpoint-sm {
 	--table-padding: 12px;
 	--header-font-size: 0.7rem;
+	--body-font-size: 0.8rem;
 	--cell-padding: 12px 6px;
 	--cell-height: 52px;
 }
 
 .posa-responsive-table-container.breakpoint-md {
 	--table-padding: 16px;
-	--header-font-size: 0.75rem;
+	--header-font-size: 0.72rem;
+	--body-font-size: 0.82rem;
 	--cell-padding: 14px 8px;
 	--cell-height: 56px;
 }
@@ -977,6 +980,7 @@
 .posa-responsive-table-container.breakpoint-lg {
 	--table-padding: 16px;
 	--header-font-size: 0.8rem;
+	--body-font-size: 0.88rem;
 	--cell-padding: 16px 12px;
 	--cell-height: 60px;
 }
@@ -984,6 +988,7 @@
 .posa-responsive-table-container.breakpoint-xl {
 	--table-padding: 20px;
 	--header-font-size: 0.85rem;
+	--body-font-size: 0.9rem;
 	--cell-padding: 18px 12px;
 	--cell-height: 64px;
 }

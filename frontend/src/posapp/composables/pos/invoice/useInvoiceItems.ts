@@ -93,13 +93,13 @@ export function useInvoiceItems(invoiceType: Ref<string>) {
 			width: "120px",
 		},
 		{
-			title: __("Discount %"),
+			title: __("Disc %"),
 			key: "discount_percentage",
 			align: "end",
 			required: true,
 		},
 		{
-			title: __("Discount Amount"),
+			title: __("Disc Amt"),
 			key: "discount_amount",
 			align: "end",
 			required: true,
@@ -113,7 +113,7 @@ export function useInvoiceItems(invoiceType: Ref<string>) {
 			required: false,
 		},
 		{
-			title: __("Actions"),
+			title: "",
 			key: "actions",
 			align: "center",
 			required: true,
