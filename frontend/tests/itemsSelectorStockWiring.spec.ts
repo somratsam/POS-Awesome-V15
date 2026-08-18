@@ -45,6 +45,7 @@ vi.mock("../src/posapp/composables/core/useResponsive", () => ({
 		isPhone: ref(false),
 		responsiveStyles: ref({ "--container-height": "640px" }),
 	}),
+	POS_COMPACT_LAYOUT_BREAKPOINT: 1300,
 }));
 
 vi.mock("../src/posapp/composables/core/useRtl", () => ({
