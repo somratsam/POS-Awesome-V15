@@ -2799,3 +2799,60 @@ branded error page never echoes any raw request input into its HTML
 (no reflection risk); the reload-persistence fix stores nothing more
 sensitive than the same credential pair already required for the
 lookup it's persisting.
+
+## 28. POS layout fix: three rounds, real-browser measurement required (2026-08-18)
+
+Staff on lower-res store PCs saw the Invoice Items table cut off (Amount/Actions
+columns), forcing horizontal scroll. Took three rounds to actually fix.
+
+**Round 1 — the original ask.** Fixed the left/right panel split ratio at the
+`md`/`lg` breakpoints, added graduated (priority-ordered) column-hiding instead
+of a flat hide-everything cliff, and made Discount %/Discount Amount required
+columns (staff use them regularly, must never hide). Deployed, confirmed
+working at the originally-reported widths.
+
+**Round 2 — reverted.** Extended the compact/stacked layout threshold to
+1300px to close a remaining gap (~1100-1272px). Technically worked but was
+rejected: staff lose the side-by-side search+cart view and have to tab between
+panels, unacceptable for the checkout flow even though the numbers closed.
+Reverted with a clean `git revert` (history intact, not a reset/force-push) —
+`6044083` (develop-swan) / `eb88c2f` (stable).
+
+**Round 3 — the real fix, and a real lesson.** A live 1280px store PC still
+showed the cutoff after a follow-up attempt that widened the split ratio
+instead of stacking. Investigation found Rounds 1-2's whole diagnostic
+approach — computing required column widths by reading CSS files and doing
+arithmetic — was unreliable in three concrete, previously-undiscovered ways:
+1. Vuetify ships its own `.v-table > .v-table__wrapper > table > tbody > tr >
+   td { padding: 0 16px; }`, which beat the app's own padding rule on
+   specificity alone — the Round 1 padding fix had silently never applied.
+2. The table used `table-layout: auto`, so a column's real width followed
+   whichever was wider — the header **label text** or the cell content — not
+   any configured min-width. A long label like "Discount Amount" alone forced
+   its column wide regardless of config.
+3. Widening the split ratio pushed the container width across a
+   compact-density CSS breakpoint, loosening padding right when trying to buy
+   back space.
+
+Real measurement (a real headless browser against a real running build, not
+estimates) showed the table needed **1007px**, not the assumed 768px — the
+true broken range was ~1100-1360px, wider than ever diagnosed.
+
+The actual fix: `!important` on the padding rule (to win the specificity
+fight), `table-layout: fixed` (so configured widths are finally authoritative),
+trimmed column min-widths, **lowered `item_name`'s width ratio from 0.3 to
+0.14** (the key fix — this alone made the *existing* split ratio sufficient
+everywhere, so the selector panel never had to narrow at all), a modest
+font-size reduction for cramped tiers only, shortened header labels
+("Discount %"→"Disc %", "Discount Amount"→"Disc Amt", "Actions"→icon-only —
+a deliberate, permanent, visible change, since Vuetify's flex-based header
+wrapper doesn't render `text-overflow: ellipsis` cleanly), and raising the
+compact-density threshold to 1000px.
+
+Verified via a real headless browser (Playwright/Chromium) driving the actual
+running site with a real cart item, tested at every 50px step from 1100px to
+1920px window width — zero horizontal overflow anywhere. Deployed to
+production and confirmed working live on the original problem store PC.
+
+See `CLAUDE.md`'s "Layout Fixes on Vuetify Tables Need Real Browser
+Measurement" for the reusable lesson.

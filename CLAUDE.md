@@ -326,6 +326,44 @@ parameter's safety was confirmed by reading `db_query.py` and the MariaDB
 driver's `escape()` down to the actual `escape_string()` call, not by
 assuming Frappe's ORM is safe in general.
 
+## Layout Fixes on Vuetify Tables Need Real Browser Measurement
+
+Reading CSS files and computing expected column widths/padding by hand is not
+reliable for this codebase's Vuetify data tables — trust real measurement
+(a real running build in a real headless browser) over arithmetic before
+claiming a layout fix works, especially anything involving column widths.
+Three concrete, previously-hidden gotchas made arithmetic-only fixes wrong:
+
+1. Vuetify ships its own default cell styles (e.g. `.v-table >
+   .v-table__wrapper > table > tbody > tr > td { padding: 0 16px; }`) that
+   can out-specificity a hand-written app rule — a CSS variable can look
+   fully wired up (defined, referenced, computed correctly) while never
+   actually winning the cascade. Confirm with the browser's own matched-rules
+   inspection (Chrome DevTools' "Computed" panel, or CDP's
+   `CSS.getMatchedStylesForNode` when scripting it), not by reading the rule
+   in isolation.
+2. The default `table-layout: auto` sizes each column from whichever is
+   wider — the header **label text** or the cell content — ignoring any
+   configured `width`/`min-width` entirely. A long label can single-handedly
+   force a column wide no matter what the JS config says. `table-layout:
+   fixed` is required before a width config becomes authoritative.
+3. Vuetify's data-table header content wrapper is `display: flex`, and CSS
+   `text-overflow: ellipsis` does not reliably render inside a flex
+   container — a narrow column with a long label can show garbled, cut-off
+   text instead of a clean "…".
+
+Concrete example that happened in this repo: a POS Invoice Items table
+overflow fix went through three rounds before it actually worked (see
+`PROGRESS_NOTES.md` section 28 for the full story). Rounds 1-2 computed a
+required-column floor of 768px by reading `min-width`/`padding` values out
+of the CSS source. A real headless browser (Playwright) measuring the actual
+rendered table found the true floor was 1007px — the padding fix had never
+applied (bug #1 above) and long column labels were forcing extra width
+regardless of config (bug #2). Only after fixing both, plus a third
+(unrelated) discovery that ellipsis wasn't rendering cleanly on the
+now-narrower columns (bug #3, fixed by shortening the labels), did a fresh
+measurement sweep from 1100-1920px window width show zero overflow anywhere.
+
 ## Build Commands
 
 ### Main Build Commands
