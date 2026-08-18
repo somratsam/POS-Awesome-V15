@@ -104,6 +104,9 @@ def _install_framework_stubs():
     class TimestampMismatchError(Exception):
         pass
 
+    class QueryDeadlockError(Exception):
+        pass
+
     frappe_utils.cint = lambda value: int(value or 0)
     frappe_utils.flt = lambda value, precision=None: round(float(value or 0), precision or 2)
     frappe_utils.getdate = lambda value: value
@@ -133,6 +136,7 @@ def _install_framework_stubs():
     frappe_module.session = types.SimpleNamespace(user="test@example.com")
 
     frappe_exceptions.TimestampMismatchError = TimestampMismatchError
+    frappe_module.QueryDeadlockError = QueryDeadlockError
     enqueue_calls = []
 
     def _enqueue(*args, **kwargs):
@@ -192,6 +196,7 @@ def _install_dependency_stubs():
 
     payments_module = types.ModuleType("posawesome.posawesome.api.payments")
     payments_module.redeeming_customer_credit = lambda *_args, **_kwargs: None
+    payments_module.get_available_credit = lambda *_args, **_kwargs: []
     sys.modules["posawesome.posawesome.api.payments"] = payments_module
 
     sale_controls_module = types.ModuleType("posawesome.posawesome.api.item_sale_controls")
@@ -2788,6 +2793,133 @@ class TestInvoiceIdempotency(unittest.TestCase):
         self.assertIs(result, ledger_doc)
         self.assertEqual(calls["insert"], 1)
         self.assertEqual(calls["save"], 0)
+
+    def test_save_submission_ledger_retries_and_recovers_from_a_deadlock(self):
+        """Simulates the exact scenario this fix targets: a real MySQL
+        deadlock (frappe.QueryDeadlockError) on the ledger's own save,
+        confirmed harmless and transient by the original investigation --
+        the retry must transparently recover, with the caller never
+        seeing the deadlock at all."""
+        ledger_doc = FakeDoc(
+            doctype="POS Invoice Submission Ledger",
+            name="ledger-key-deadlock-001",
+            ledger_key="ledger-key-deadlock-001",
+            client_request_id="request-deadlock-001",
+        )
+        self.creation.frappe.db.exists = lambda doctype, name: True
+
+        attempts = {"save": 0}
+
+        def save(ignore_permissions=False):
+            attempts["save"] += 1
+            if attempts["save"] == 1:
+                raise self.creation.frappe.QueryDeadlockError(
+                    "(1213, 'Deadlock found when trying to get lock; try restarting transaction')"
+                )
+            return ledger_doc
+
+        ledger_doc.save = save
+
+        result = self.creation._save_submission_ledger(ledger_doc)
+
+        self.assertIs(result, ledger_doc)
+        self.assertEqual(attempts["save"], 2)
+
+    def test_save_submission_ledger_retries_and_recovers_from_timestamp_mismatch_refreshing_modified(self):
+        """A TimestampMismatchError needs the doc's `modified` timestamp
+        refreshed before retrying, or the identical save would just fail
+        identically again -- unlike a deadlock, which needs no state
+        change before a retry."""
+        ledger_doc = FakeDoc(
+            doctype="POS Invoice Submission Ledger",
+            name="ledger-key-tsmismatch-001",
+            ledger_key="ledger-key-tsmismatch-001",
+            client_request_id="request-tsmismatch-001",
+            modified="2026-01-01 00:00:00",
+        )
+        self.creation.frappe.db.exists = lambda doctype, name: True
+        self.creation.frappe.db.get_value = lambda doctype, name, fieldname: (
+            "2026-01-01 00:00:05" if doctype == "POS Invoice Submission Ledger" else None
+        )
+
+        attempts = {"save": 0}
+        modified_seen_on_second_attempt = {}
+
+        def save(ignore_permissions=False):
+            attempts["save"] += 1
+            if attempts["save"] == 1:
+                raise self.creation.TimestampMismatchError(
+                    "Document has been modified after you have opened it"
+                )
+            modified_seen_on_second_attempt["modified"] = ledger_doc.modified
+            return ledger_doc
+
+        ledger_doc.save = save
+
+        result = self.creation._save_submission_ledger(ledger_doc)
+
+        self.assertIs(result, ledger_doc)
+        self.assertEqual(attempts["save"], 2)
+        self.assertEqual(
+            modified_seen_on_second_attempt["modified"],
+            "2026-01-01 00:00:05",
+            "modified must be refreshed from the DB before the retry, or an "
+            "identical save() call would just fail identically again",
+        )
+
+    def test_save_submission_ledger_gives_up_after_exhausting_retries(self):
+        """Confirms this is a *bounded* retry, not an infinite loop, and
+        that the original exception type still propagates once retries
+        are exhausted -- the frontend's DEADLOCK classification depends on
+        the real QueryDeadlockError (or its message) actually reaching
+        the client in this genuinely-still-failing case."""
+        ledger_doc = FakeDoc(
+            doctype="POS Invoice Submission Ledger",
+            name="ledger-key-exhausted-001",
+            ledger_key="ledger-key-exhausted-001",
+            client_request_id="request-exhausted-001",
+        )
+        self.creation.frappe.db.exists = lambda doctype, name: True
+
+        attempts = {"save": 0}
+
+        def save(ignore_permissions=False):
+            attempts["save"] += 1
+            raise self.creation.frappe.QueryDeadlockError("still deadlocked")
+
+        ledger_doc.save = save
+
+        with self.assertRaises(self.creation.frappe.QueryDeadlockError):
+            self.creation._save_submission_ledger(ledger_doc, retries=2)
+
+        # 1 initial attempt + 2 retries = 3 total calls before giving up.
+        self.assertEqual(attempts["save"], 3)
+
+    def test_save_submission_ledger_does_not_retry_unrelated_errors(self):
+        """The retry must be narrowly scoped to the two known transient
+        lock-conflict exceptions -- a real, unrelated failure (e.g. a
+        genuine validation error) must propagate immediately on the first
+        attempt, not be masked or retried."""
+        ledger_doc = FakeDoc(
+            doctype="POS Invoice Submission Ledger",
+            name="ledger-key-real-error-001",
+            ledger_key="ledger-key-real-error-001",
+            client_request_id="request-real-error-001",
+        )
+        self.creation.frappe.db.exists = lambda doctype, name: True
+
+        attempts = {"save": 0}
+
+        def save(ignore_permissions=False):
+            attempts["save"] += 1
+            raise ValueError("a genuinely unrelated failure")
+
+        ledger_doc.save = save
+
+        with self.assertRaises(ValueError):
+            self.creation._save_submission_ledger(ledger_doc)
+
+        self.assertEqual(attempts["save"], 1)
 
     def test_post_submit_without_payment_work_ignores_missing_ledger(self):
         self.creation.frappe.db.exists = lambda doctype, name: False

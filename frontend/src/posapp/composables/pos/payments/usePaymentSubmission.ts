@@ -281,6 +281,20 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			};
 		}
 
+		if (code === "DEADLOCK") {
+			// Reached only if the recovery check above (fetchSubmittedDocstatus)
+			// couldn't confirm the invoice actually went through -- a transient
+			// DB lock conflict, but genuinely not yet submitted this time.
+			// Calm, actionable wording instead of the raw deadlock/lock-wait
+			// text, matching this app's own retry-and-continue tone rather
+			// than an alarming technical error.
+			return {
+				title: __("Busy processing another request — please try again"),
+				detail,
+				color: "warning",
+			};
+		}
+
 		return {
 			title: __("Error submitting invoice: ") + message,
 			detail,
@@ -1407,7 +1421,7 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			});
 			const errorMsg = extractSubmissionErrorMessage(exc);
 
-			if (errorCode === "TIMESTAMP_MISMATCH") {
+			if (errorCode === "TIMESTAMP_MISMATCH" || errorCode === "DEADLOCK") {
 				const submittedStatus = await fetchSubmittedDocstatus(doc);
 				if (submittedStatus === 1) {
 					await removeInvoiceOutboxEntry(

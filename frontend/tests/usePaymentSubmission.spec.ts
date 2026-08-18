@@ -1539,6 +1539,208 @@ describe("usePaymentSubmission", () => {
 		consoleError.mockRestore();
 	});
 
+	it("recovers a DEADLOCK failure silently when the invoice was actually already submitted", async () => {
+		// Simulates the ledger-save deadlock/lock-conflict exhausting its
+		// backend retries (invoice_processing/creation.py's
+		// _save_ledger_with_lock_retry) after the invoice itself had
+		// already committed -- the exact scenario the original
+		// investigation confirmed is harmless. The fix must recognize this
+		// as a recoverable case and show a calm confirmation, not the raw
+		// deadlock error.
+		const invoiceService = (
+			await import("../src/posapp/services/invoiceService")
+		).default;
+		(invoiceService.submitInvoice as any).mockRejectedValue(
+			new ApiEnvelopeError({
+				ok: false,
+				data: null,
+				error: {
+					code: "DEADLOCK",
+					message:
+						"frappe.exceptions.QueryDeadlockError: (1213, 'Deadlock found when trying to get lock; try restarting transaction')",
+					retryable: true,
+				},
+				requestId: "req-deadlock-1",
+				serverTime: "2026-05-01T06:00:00Z",
+			}),
+		);
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		const toastStore = { show: vi.fn() };
+		const onSuccess = vi.fn();
+		const frappeCall = vi.fn().mockResolvedValue({ message: { docstatus: 1 } });
+		vi.stubGlobal("frappe", {
+			utils: { play_sound: vi.fn() },
+			call: frappeCall,
+		});
+
+		const invoiceDoc = ref<any>({
+			name: "ACC-SINV-DEADLOCK-1",
+			doctype: "Sales Invoice",
+			posa_client_request_id: "req-id-deadlock-1",
+			is_return: 0,
+			items: [{ item_code: "ITEM-1", qty: 1 }],
+			payments: [{ mode_of_payment: "Cash", amount: 100, type: "Cash" }],
+			rounded_total: 100,
+			grand_total: 100,
+		});
+
+		const { submitInvoice } = usePaymentSubmission({
+			invoiceDoc,
+			posProfile: ref({
+				posa_allow_submissions_in_background_job: 0,
+				create_pos_invoice_instead_of_sales_invoice: 0,
+			}),
+			stockSettings: ref({}),
+			invoiceType: ref("Invoice"),
+			formatFloat: (value) => Number(value || 0),
+			stores: {
+				toastStore,
+				uiStore: {
+					setLastInvoice: vi.fn(),
+					setLastStockAdjustment: vi.fn(),
+				},
+				customersStore: { setSelectedCustomer: vi.fn() },
+				invoiceStore: { invoiceDoc: invoiceDoc.value },
+			},
+			isCashback: ref(false),
+			paidChange: ref(0),
+			creditChange: ref(0),
+			redeemedCustomerCredit: ref(0),
+			customerCreditDict: ref([]),
+			diff_payment: ref(0),
+		});
+
+		const result = await submitInvoice(false, {
+			onFinishNavigation: vi.fn(),
+			onSuccess,
+		});
+
+		expect(result).toMatchObject({ recoveredDuplicateSubmission: true });
+		expect(frappeCall).toHaveBeenCalledWith(
+			expect.objectContaining({
+				method: "frappe.client.get_value",
+				args: expect.objectContaining({
+					doctype: "Sales Invoice",
+					filters: { name: "ACC-SINV-DEADLOCK-1" },
+				}),
+			}),
+		);
+		expect(toastStore.show).toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: "Invoice ACC-SINV-DEADLOCK-1 was already submitted",
+				color: "warning",
+			}),
+		);
+		// The calm-fallback DEADLOCK toast must NOT also fire -- recovery
+		// found the invoice really did go through, so this is a success
+		// path, not the "genuinely still failed" path.
+		expect(toastStore.show).not.toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: expect.stringContaining("Busy processing"),
+			}),
+		);
+		expect(onSuccess).toHaveBeenCalledWith(
+			expect.objectContaining({ recovered: true, docstatus: 1 }),
+		);
+		expect(consoleError).toHaveBeenCalledWith(
+			"Error submitting invoice:",
+			expect.objectContaining({ code: "DEADLOCK" }),
+		);
+		consoleError.mockRestore();
+	});
+
+	it("shows a calm message for a DEADLOCK failure that genuinely was not submitted", async () => {
+		// The rare true-residual case: even after the backend's own retry
+		// is exhausted, the recovery check confirms the invoice really
+		// didn't go through this time. Must still surface as a failure
+		// (never silently swallowed), but with calm wording instead of the
+		// raw deadlock/lock-wait error text.
+		const invoiceService = (
+			await import("../src/posapp/services/invoiceService")
+		).default;
+		(invoiceService.submitInvoice as any).mockRejectedValue(
+			new ApiEnvelopeError({
+				ok: false,
+				data: null,
+				error: {
+					code: "DEADLOCK",
+					message:
+						"frappe.exceptions.QueryDeadlockError: (1213, 'Deadlock found when trying to get lock; try restarting transaction')",
+					retryable: true,
+				},
+				requestId: "req-deadlock-2",
+				serverTime: "2026-05-01T06:00:00Z",
+			}),
+		);
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		const toastStore = { show: vi.fn() };
+		const frappeCall = vi.fn().mockResolvedValue({ message: { docstatus: 0 } });
+		vi.stubGlobal("frappe", {
+			utils: { play_sound: vi.fn() },
+			call: frappeCall,
+		});
+
+		const invoiceDoc = ref<any>({
+			name: "ACC-SINV-DEADLOCK-2",
+			doctype: "Sales Invoice",
+			posa_client_request_id: "req-id-deadlock-2",
+			is_return: 0,
+			items: [{ item_code: "ITEM-1", qty: 1 }],
+			payments: [{ mode_of_payment: "Cash", amount: 100, type: "Cash" }],
+			rounded_total: 100,
+			grand_total: 100,
+		});
+
+		const { submitInvoice } = usePaymentSubmission({
+			invoiceDoc,
+			posProfile: ref({
+				posa_allow_submissions_in_background_job: 0,
+				create_pos_invoice_instead_of_sales_invoice: 0,
+			}),
+			stockSettings: ref({}),
+			invoiceType: ref("Invoice"),
+			formatFloat: (value) => Number(value || 0),
+			stores: {
+				toastStore,
+				uiStore: {
+					setLastInvoice: vi.fn(),
+					setLastStockAdjustment: vi.fn(),
+				},
+				customersStore: { setSelectedCustomer: vi.fn() },
+				invoiceStore: { invoiceDoc: invoiceDoc.value },
+			},
+			isCashback: ref(false),
+			paidChange: ref(0),
+			creditChange: ref(0),
+			redeemedCustomerCredit: ref(0),
+			customerCreditDict: ref([]),
+			diff_payment: ref(0),
+		});
+
+		await expect(
+			submitInvoice(false, { onFinishNavigation: vi.fn() }),
+		).rejects.toThrow();
+
+		expect(toastStore.show).toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: "Busy processing another request — please try again",
+				color: "warning",
+			}),
+		);
+		// The raw exception text must never reach the cashier as the toast
+		// title -- that's the entire point of this fix.
+		expect(toastStore.show).not.toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: expect.stringContaining("QueryDeadlockError"),
+			}),
+		);
+		consoleError.mockRestore();
+	});
+
 	it("normalizes return payment rows before submit even when cashback is disabled", async () => {
 		const invoiceService = (
 			await import("../src/posapp/services/invoiceService")

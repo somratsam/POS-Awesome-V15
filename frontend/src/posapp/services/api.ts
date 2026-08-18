@@ -159,6 +159,27 @@ function classifyBusinessCode(message: string, explicitCode?: string | null) {
 	) {
 		return "TIMESTAMP_MISMATCH";
 	}
+	if (
+		normalized.includes("querydeadlockerror") ||
+		normalized.includes("deadlock occurred") ||
+		normalized.includes("deadlock found") ||
+		normalized.includes("querytimeouterror") ||
+		normalized.includes("lock wait timeout")
+	) {
+		// A transient DB lock conflict -- the backend now retries this
+		// internally where it actually originates (submission ledger save),
+		// so this classification only matters for the rare case a retry-
+		// exhausted deadlock/timeout still reaches this envelope, or any
+		// other call path that surfaces this text without going through
+		// frappe.call()'s own request.js (which currently shows its own
+		// native "Deadlock Occurred" dialog before this code ever runs, for
+		// calls made that way). Kept as its own code rather than reusing
+		// TIMESTAMP_MISMATCH so logs/telemetry can still tell the two
+		// apart, even though usePaymentSubmission.ts's recovery handling
+		// (checking whether the invoice actually went through) is
+		// identical for both.
+		return "DEADLOCK";
+	}
 	if (normalized.includes("amount must be negative")) {
 		return "RETURN_PAYMENT_AMOUNT_SIGN";
 	}

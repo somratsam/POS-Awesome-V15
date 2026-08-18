@@ -347,7 +347,7 @@ def _get_submission_ledger(client_request_id, company, pos_profile, document_typ
     return _get_submission_ledger_by_key(ledger_key)
 
 
-def _save_submission_ledger(ledger_doc):
+def _save_submission_ledger(ledger_doc, retries=2):
     if not ledger_doc:
         return None
 
@@ -361,16 +361,55 @@ def _save_submission_ledger(ledger_doc):
 
     if hasattr(ledger_doc, "is_new"):
         if ledger_doc.is_new() and hasattr(ledger_doc, "insert"):
-            ledger_doc.insert(ignore_permissions=True)
+            _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.insert(ignore_permissions=True), retries)
             return ledger_doc
 
     if ledger_name and not ledger_exists and hasattr(ledger_doc, "insert"):
-        ledger_doc.insert(ignore_permissions=True)
+        _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.insert(ignore_permissions=True), retries)
     elif ledger_name and hasattr(ledger_doc, "save"):
-        ledger_doc.save(ignore_permissions=True)
+        _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.save(ignore_permissions=True), retries)
     elif hasattr(ledger_doc, "insert"):
-        ledger_doc.insert(ignore_permissions=True)
+        _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.insert(ignore_permissions=True), retries)
     return ledger_doc
+
+
+def _save_ledger_with_lock_retry(ledger_doc, operation, retries):
+    """Retries a submission-ledger insert/save on a transient lock
+    conflict instead of letting it surface as a hard failure. Every OTHER
+    doc save on the submission path (_save_draft_with_latest_timestamp)
+    already retries on TimestampMismatchError; the ledger's own save
+    never did, so a lock conflict here could reach the cashier as a raw
+    "Deadlock Occurred" error even after the invoice itself had already
+    committed successfully -- confirmed harmless (no duplicate-invoice
+    risk, see PROGRESS_NOTES.md), just needed a retry like its siblings.
+
+    frappe.QueryDeadlockError (MySQL's deadlock detector picked this
+    transaction as the victim and rolled it back) needs no special
+    handling before retrying -- a deadlock rollback leaves nothing
+    partially committed, so simply re-running the same call is correct.
+    TimestampMismatchError (the ledger row's optimistic-lock version
+    moved since it was loaded -- realistically an offline-sync retry
+    racing an online attempt for the same client_request_id, per the
+    original investigation) does need the doc's `modified` timestamp
+    refreshed first, or the identical save would just fail identically
+    again; unlike the invoice doc's own retry, no full field-by-field
+    merge is needed here since only the ledger's own bookkeeping fields
+    (state, timestamps) are ever written back, not a rich, independently
+    user-editable document."""
+    attempts = 0
+    while True:
+        try:
+            operation()
+            return
+        except (TimestampMismatchError, frappe.QueryDeadlockError):
+            if attempts >= retries:
+                raise
+            attempts += 1
+            ledger_name = getattr(ledger_doc, "name", None)
+            if ledger_name:
+                latest_modified = frappe.db.get_value(LEDGER_DOCTYPE, ledger_name, "modified")
+                if latest_modified:
+                    ledger_doc.modified = latest_modified
 
 
 def _get_submission_ledger_by_name(ledger_name):

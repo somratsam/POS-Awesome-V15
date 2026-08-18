@@ -630,6 +630,18 @@ found.
   correct. Deferred for a future session; not urgent given no duplicate-invoice
   risk.
 
+  **Follow-up, resolved (2026-08-18):** fixed once staff actually started
+  complaining — see section 26. Both recommended fixes applied, plus a
+  precise finding the original investigation didn't have: the frontend
+  `classifyBusinessCode()` extension turns out to be unreachable for the
+  *specific* raw "Deadlock Occurred" dialog reported by staff, since
+  POS Awesome's submission flow goes through Frappe's own `frappe.call()`,
+  and `request.js` has hardcoded, function-local exception handling that
+  shows its own native dialog before POS Awesome's error-classification
+  code ever runs. Implemented anyway as defense-in-depth (low-risk,
+  purely additive, helps any other call path). The backend retry is the
+  fix that actually matters here.
+
 - **Dependency CVEs, from the 2026-08-12 security review (section 13).**
   `yarn audit` flags several packages with known CVEs. Deferred, not urgent:
   `html2pdf.js` → `jspdf@4.0.0` (one CVE rated critical upstream: "HTML
@@ -2553,3 +2565,132 @@ the portal is fully functional, these are polish):
   lookup resets to an empty login form instead of persisting the last
   successful lookup. A brief is already drafted (not yet sent) — no
   root-cause investigation done yet.
+
+## 26. "Deadlock Occurred" warning fixed: backend retry + frontend defense-in-depth (2026-08-18)
+
+The rare, intermittent "Deadlock Occurred" message during partial-payment
+sales — investigated and confirmed harmless back in section 4's deferred
+bullet (no duplicate-invoice risk, just a scary-but-cosmetic error gap) —
+got fixed once the deferred threshold ("staff actually complain") was hit.
+Not reliably reproducible on demand, so verified by reasoning through the
+exact code path and simulating the failure directly, same as the original
+investigation.
+
+**Backend — the actual fix.** `_save_submission_ledger()`
+(`invoice_processing/creation.py`) now retries its `insert()`/`save()`
+call through a new `_save_ledger_with_lock_retry()`, catching both
+`TimestampMismatchError` and `frappe.QueryDeadlockError`, bounded at 2
+retries (matching `_save_draft_with_latest_timestamp`'s own limit for
+the invoice doc's own save). A deadlock rollback leaves nothing partially
+committed, so simply re-running the same call is correct with no state
+adjustment needed; `TimestampMismatchError` does need the doc's
+`modified` timestamp refreshed from the DB first, or an identical retry
+would just fail identically again — no full field-by-field merge needed
+here though, unlike the invoice doc's own retry, since only the ledger's
+own bookkeeping fields are ever written back, not a rich, independently
+editable document. The original branching logic deciding insert-vs-save
+is untouched — only the actual mutation calls got wrapped, so the happy
+path (no lock conflict, the overwhelming majority of saves) is
+byte-for-byte identical to before: `operation()` called once, returns
+immediately. This is genuinely where the deadlock originates and where
+retrying transparently resolves it — the cashier should see nothing at
+all in the vast majority of cases this fixes.
+
+**Frontend — defense-in-depth, with an important caveat found while
+implementing it.** The original investigation recommended extending
+`classifyBusinessCode()` (`api.ts`) to recognize deadlock/508 text, so
+the existing "check if it actually succeeded" recovery path
+(`usePaymentSubmission.ts`, previously line 1410) would fire for this
+error the same way it already does for `TIMESTAMP_MISMATCH`. Implemented
+this (new `DEADLOCK` code, kept distinct from `TIMESTAMP_MISMATCH` so
+logs/telemetry can still tell the two apart even though the recovery
+handling is identical for both) — **but tracing the actual request path
+precisely (not assumed) surfaced something the original investigation
+didn't have**: POS Awesome's submission flow calls `frappe.call()`
+(Frappe's own RPC wrapper, not a raw `fetch()`), and Frappe's
+`request.js` has an `exception_handlers` map keyed by `exc_type`,
+declared as a `var` *local to* `frappe.request.call()`'s own function
+body — not exposed for external override. Its `QueryDeadlockError` entry
+shows Frappe's own native "Deadlock Occurred" `msgprint` dialog and then
+`return`s immediately, **before** `opts.error_callback` (which is what
+feeds into `classifyBusinessCode`) ever runs. So for the specific raw
+dialog staff have been seeing, the frontend classification change alone
+would not have suppressed it — confirmed by reading `request.js`'s
+`.fail()` handler line by line, not by guessing. Implemented the
+frontend change anyway: it's low-risk, purely additive, doesn't touch
+any existing classification, and does help for the rare case a
+retry-exhausted deadlock reaches the client, or any other call path that
+surfaces this text without going through `frappe.call()`. Also added a
+calm, on-brand `DEADLOCK`-specific toast (`buildSubmissionFailureToast`)
+for the true residual case — retries exhausted *and* the recovery check
+confirms it genuinely wasn't submitted — replacing what would otherwise
+have been the raw exception text as the toast title.
+
+**What wasn't attempted, and why.** Suppressing Frappe's own native
+"Deadlock Occurred" dialog directly (e.g. monkey-patching
+`frappe.request.call` or switching the submission transport away from
+`frappe.call()` entirely) was considered and rejected as disproportionate
+— a much larger, more invasive change than a UX-level fix warrants, for
+a residual case the backend retry should make rare. Flagged plainly
+rather than either silently skipping it or building something invasive
+without checking in first.
+
+**Confirmed purely cosmetic, no transaction-flow change**: the backend
+diff only wraps existing mutation calls in a retry loop (verified the
+happy-path call sequence is unchanged by inspection); the frontend diff
+only adds new branches inside existing `catch` blocks and a new toast
+variant — the `try` block's success-path code (lines ~1370-1397 of
+`usePaymentSubmission.ts`) is untouched by this change.
+
+**Verified**, since this can't be reliably triggered on demand:
+- Backend: `test_creation.py`'s `TestInvoiceIdempotency` gained 4 new
+  tests, **directly simulating the deadlock condition** (not attempting
+  a live repro) — a `save()` mock raising `frappe.QueryDeadlockError` on
+  the first call, succeeding on retry, confirming the caller never sees
+  it; the same for `TimestampMismatchError`, additionally confirming
+  `modified` is refreshed from the DB between attempts; a bounded-retry
+  exhaustion test confirming it's not an infinite loop and the original
+  exception type still propagates once retries run out; and a scoping
+  test confirming an unrelated real error (a plain `ValueError`)
+  propagates immediately on the first attempt, never retried — the
+  explicit "don't swallow real errors" check. All 5 `_save_submission_ledger`
+  tests pass (68 total in the module; 8 pre-existing, unrelated failures
+  found and confirmed identical on the unmodified file before touching
+  anything — a stale `mode_of_payment` fixture gap in
+  `TestStaleNamedInvoiceHandling`/`TestUpdateInvoiceReturnPayments`, not
+  caused by or related to this fix). Also found and fixed a separate,
+  unrelated pre-existing gap blocking the *entire* test file from running
+  at all: the stub for `posawesome.posawesome.api.payments` was missing
+  `get_available_credit`, which `creation.py` already imports — a one-line
+  additive stub fix, confirmed via isolated testing that this exact
+  ImportError already existed on the untouched file before any of this
+  session's changes.
+- Frontend: `apiEnvelope.spec.ts` gained 3 new tests (deadlock text →
+  `DEADLOCK` code; lock-wait-timeout text → `DEADLOCK` too; an unrelated
+  business error still classifies as `BUSINESS_RULE`, confirming the new
+  branch isn't overly broad). `usePaymentSubmission.spec.ts` gained 2 new
+  tests: a `DEADLOCK`-coded failure where the recovery check confirms
+  `docstatus === 1` resolves silently with the calm "already submitted"
+  toast and `recovered: true`, never the raw error; a `DEADLOCK`-coded
+  failure where the recovery check confirms it genuinely wasn't submitted
+  still throws (never silently swallowed) but with the new calm toast
+  title instead of the raw `QueryDeadlockError` text.
+- All new tests verified as genuine regression guards: reverted the
+  fix, confirmed real failures (4 backend, 4 frontend), restored,
+  confirmed green.
+
+**Full regression check**: frontend `vitest run` **219/219 files,
+1074/1074 tests**. `bench build --app posawesome`: clean, exit 0
+(`.ts` files touched). `bench migrate`: N/A — no doctype, fixture, or
+print-format file touched, only `.py`/`.ts` logic. Security review:
+N/A — no new user input, authorization, or data-access surface. The
+backend change retries an already-authorized, already-reviewed internal
+operation (`ledger_doc.insert`/`.save`, already `ignore_permissions=True`
+before this change) on a narrow, specific pair of transient DB
+exceptions; the frontend change is pure error-message classification
+(string matching, no `eval`/`innerHTML`) plus reuse of the *existing*
+`fetchSubmittedDocstatus` verification call, scoped to the same
+invoice already in flight for this submission, not a new query surface.
+
+Committed to `develop-swan` only — reported back with findings before
+promoting to `stable`, same standing workflow.
