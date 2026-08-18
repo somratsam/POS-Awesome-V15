@@ -7,10 +7,15 @@ import {
 
 // Mirrors useInvoiceItems.ts's actual available_columns (post fix: Discount
 // %/Amount are required, matching what staff asked for). Required column
-// min-widths sum to 800px + the table's own 48px expand column = 848px
-// floor; price_list_rate (120) takes it to 968, uom (80, no entry in
-// useItemsTableResponsive's own width map so it falls to that function's
-// 80px default) to 1048, posa_is_offer (70) to 1118.
+// min-widths (item_name 200, qty 116, discount_percentage 82,
+// discount_amount 82, rate 92, amount 88, actions 60 -- trimmed from their
+// original wider values as part of the "close the remaining 1100-1272px
+// gap without stacking" follow-up, paired with tighter cell padding/density
+// at that width so the trim doesn't clip content) sum to 720px + the
+// table's own 48px expand column = 768px floor; price_list_rate (120)
+// takes it to 888, uom (80, no entry in useItemsTableResponsive's own
+// width map so it falls to that function's 80px default) to 968,
+// posa_is_offer (70) to 1038.
 const ALL_HEADERS: TableHeader[] = [
 	{ title: "Name", key: "item_name", required: true },
 	{ title: "QTY", key: "qty", required: true },
@@ -24,10 +29,10 @@ const ALL_HEADERS: TableHeader[] = [
 	{ title: "Actions", key: "actions", required: true },
 ];
 
-const REQUIRED_FLOOR = 848;
-const PLUS_PRICE_LIST_RATE = 968;
-const PLUS_UOM = 1048;
-const PLUS_POSA_IS_OFFER = 1118;
+const REQUIRED_FLOOR = 768;
+const PLUS_PRICE_LIST_RATE = 888;
+const PLUS_UOM = 968;
+const PLUS_POSA_IS_OFFER = 1038;
 
 function visibleKeys(width: number) {
 	return getResponsiveVisibleHeaders(ALL_HEADERS, width).map((h) => h.key);

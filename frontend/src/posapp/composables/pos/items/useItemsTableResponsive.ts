@@ -102,16 +102,29 @@ export function buildFinalVisibleColumns(
 	return [...visibleHeaders, DATA_TABLE_EXPAND_COLUMN];
 }
 
+// Required-column minimums below (item_name unchanged; qty/rate/amount/
+// discount_percentage/discount_amount/actions trimmed) rely on the tighter
+// cell padding/font wired in via --cell-padding/--header-font-size
+// (items-table-styles.css) and the compact-view qty-input narrowing
+// (containerClasses above) actually being in effect -- the two changes
+// are a matched pair, not independent: shrinking these floors without the
+// CSS compaction would visually clip content in a way it doesn't once both
+// land together. See required-column floor math in the fix that added
+// this comment for the full breakdown (768px total incl. the 48px expand
+// column, down from 848px).
 const calculateColumnWidth = (header: TableHeader, width: number) => {
 	const baseWidths: Record<string, { min: number; max: number; ratio: number }> = {
 		item_name: { min: 200, max: 250, ratio: 0.3 },
-		qty: { min: 140, max: 160, ratio: 0.12 },
-		rate: { min: 100, max: 130, ratio: 0.12 },
-		amount: { min: 100, max: 130, ratio: 0.12 },
-		discount_percentage: { min: 90, max: 120, ratio: 0.1 },
-		discount_amount: { min: 90, max: 120, ratio: 0.11 },
+		qty: { min: 116, max: 160, ratio: 0.12 },
+		rate: { min: 92, max: 130, ratio: 0.12 },
+		amount: { min: 88, max: 130, ratio: 0.12 },
+		discount_percentage: { min: 82, max: 120, ratio: 0.1 },
+		discount_amount: { min: 82, max: 120, ratio: 0.11 },
 		price_list_rate: { min: 120, max: 140, ratio: 0.13 },
-		actions: { min: 80, max: 100, ratio: 0.08 },
+		// Actions holds exactly one small delete icon button (CartItemRow.vue)
+		// -- the old 80/100 floor/max were sized as if it needed the same
+		// room as a text column.
+		actions: { min: 60, max: 80, ratio: 0.05 },
 		posa_is_offer: { min: 70, max: 90, ratio: 0.06 },
 	};
 
@@ -127,13 +140,13 @@ const calculateColumnWidth = (header: TableHeader, width: number) => {
 const calculateMinColumnWidth = (header: TableHeader) => {
 	const minWidths: Record<string, number> = {
 		item_name: 200,
-		qty: 140,
-		rate: 100,
-		amount: 100,
-		discount_percentage: 90,
-		discount_amount: 90,
+		qty: 116,
+		rate: 92,
+		amount: 88,
+		discount_percentage: 82,
+		discount_amount: 82,
 		price_list_rate: 120,
-		actions: 80,
+		actions: 60,
 		posa_is_offer: 70,
 	};
 	return minWidths[header.key] || 80;
@@ -177,7 +190,10 @@ export function useItemsTableResponsive(
 
 	const containerClasses = computed(() => ({
 		[`breakpoint-${breakpoint.value}`]: true,
-		"compact-view": containerWidth.value < 600,
+		// Extended from <600 to <900 alongside tableDensity above, so the
+		// qty-input narrowing this class already drives (items-table-styles.css)
+		// reaches the same 700-900px band the required-columns floor needs it in.
+		"compact-view": containerWidth.value < 900,
 		"medium-view":
 			containerWidth.value >= 600 && containerWidth.value < 900,
 		"large-view": containerWidth.value >= 900,
@@ -194,8 +210,12 @@ export function useItemsTableResponsive(
 	}));
 
 	const tableDensity = computed(() => {
-		if (containerWidth.value < 500) return "compact";
-		if (containerWidth.value < 800) return "default";
+		// The required-columns floor (see calculateMinColumnWidth below)
+		// sits at ~768px including the expand column -- containers in the
+		// 700-900px band are exactly where the table needs its tightest
+		// row/cell sizing, not the "default"/"comfortable" density a flat
+		// <500/<800 split used to give them.
+		if (containerWidth.value < 900) return "compact";
 		return "comfortable";
 	});
 

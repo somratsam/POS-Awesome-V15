@@ -291,7 +291,7 @@
 /* Table headers */
 .posa-cart-table th {
 	font-weight: 600;
-	font-size: 0.8rem;
+	font-size: var(--header-font-size, 0.8rem);
 	text-transform: none;
 	letter-spacing: 0.02em;
 	padding: 12px;
@@ -377,9 +377,9 @@
 
 /* Table cells */
 .posa-cart-table td {
-	padding: 14px 12px;
+	padding: var(--cell-padding, 14px 12px);
 	vertical-align: middle;
-	height: 60px;
+	height: var(--cell-height, 60px);
 	text-align: center;
 	color: var(--pos-text-primary);
 	position: relative;
