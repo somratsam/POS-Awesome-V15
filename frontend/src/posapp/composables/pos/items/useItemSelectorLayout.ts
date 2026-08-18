@@ -28,9 +28,29 @@ export function useItemSelectorLayout(options: SelectorLayoutOptions = {}) {
 	const scrollThrottle = ref<number | null>(null);
 
 	// Computed Metrics
-	const cardColumns = computed(() => getCardColumns(windowWidth.value));
-	const cardGap = computed(() => getCardGap(windowWidth.value));
-	const cardPadding = computed(() => getCardPadding(windowWidth.value));
+	const cardContainerWidth = computed(() => {
+		// If we have a reference to the container, try to get its width
+		// Otherwise fallback to an estimated width based on window
+		if (itemsContainerRef.value && itemsContainerRef.value.$el) {
+			return itemsContainerRef.value.$el.clientWidth;
+		}
+		// Fallback estimation (e.g. 5 columns of regular grid)
+		// This is just a safe default until mounted
+		return windowWidth.value * 0.4; // Approx 40% of screen for items selector usually
+	});
+
+	// Column count/gap/padding are driven by the selector panel's own
+	// measured width, not the full browser window -- the panel's share of
+	// the window varies by breakpoint (see Pos.vue's split ratio), so
+	// window width alone doesn't reflect how much room is actually
+	// available here. cardColumnWidth already measured the real container
+	// this way; these three didn't, which meant they kept picking a
+	// column count sized for the *window*, then squeezing that many
+	// columns into whatever the panel's real (possibly much narrower)
+	// width turned out to be.
+	const cardColumns = computed(() => getCardColumns(cardContainerWidth.value));
+	const cardGap = computed(() => getCardGap(cardContainerWidth.value));
+	const cardPadding = computed(() => getCardPadding(cardContainerWidth.value));
 
 	const cardRowHeight = computed(() => {
 		if (windowWidth.value <= 768) {
@@ -44,17 +64,6 @@ export function useItemSelectorLayout(options: SelectorLayoutOptions = {}) {
 
 	const cardSlotHeight = computed(() => cardRowHeight.value + cardGap.value);
 	const cardSlotWidth = computed(() => cardColumnWidth.value + cardGap.value);
-
-	const cardContainerWidth = computed(() => {
-		// If we have a reference to the container, try to get its width
-		// Otherwise fallback to an estimated width based on window
-		if (itemsContainerRef.value && itemsContainerRef.value.$el) {
-			return itemsContainerRef.value.$el.clientWidth;
-		}
-		// Fallback estimation (e.g. 5 columns of regular grid)
-		// This is just a safe default until mounted
-		return windowWidth.value * 0.4; // Approx 40% of screen for items selector usually
-	});
 
 	const cardColumnWidth = computed(() => {
 		const columns = Math.max(1, cardColumns.value);

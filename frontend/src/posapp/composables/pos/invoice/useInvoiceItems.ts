@@ -96,13 +96,13 @@ export function useInvoiceItems(invoiceType: Ref<string>) {
 			title: __("Discount %"),
 			key: "discount_percentage",
 			align: "end",
-			required: false,
+			required: true,
 		},
 		{
 			title: __("Discount Amount"),
 			key: "discount_amount",
 			align: "end",
-			required: false,
+			required: true,
 		},
 		{ title: __("Rate"), key: "rate", align: "center", required: true },
 		{ title: __("Amount"), key: "amount", align: "center", required: true },
@@ -162,22 +162,16 @@ export function useInvoiceItems(invoiceType: Ref<string>) {
 			if (saved) {
 				setSelectedColumns(JSON.parse(saved));
 			} else if (pos_profile.value) {
-				// Default selection based on POS Profile
+				// Default selection based on POS Profile. Discount %/Amount
+				// are handled by `required` now (see available_columns above),
+				// not by posa_display_discount_percentage/_amount -- staff use
+				// them regularly enough that they're no longer optional at all,
+				// so there's nothing left for those two settings to gate here.
 				setSelectedColumns(
 					available_columns.value
 						.filter((col) => {
 							if (col.required) return true;
 							if (col.key === "price_list_rate") return true;
-							if (
-								col.key === "discount_percentage" &&
-								pos_profile.value?.posa_display_discount_percentage
-							)
-								return true;
-							if (
-								col.key === "discount_amount" &&
-								pos_profile.value?.posa_display_discount_amount
-							)
-								return true;
 							return false;
 						})
 						.map((col) => col.key),

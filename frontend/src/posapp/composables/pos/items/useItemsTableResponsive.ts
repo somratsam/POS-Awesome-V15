@@ -21,29 +21,66 @@ export const DATA_TABLE_EXPAND_COLUMN: TableHeader = {
 	minWidth: 48,
 };
 
+// Optional (non-required) columns are kept in this priority order as width
+// allows -- earlier entries survive narrower widths than later ones.
+// price_list_rate is selected by default for most POS Profiles (see
+// useInvoiceItems.ts's loadColumnPreferences), so it's prioritized over
+// uom/posa_is_offer, which are opt-in and used by fewer stores. Any
+// optional column not listed here (future additions) falls in after all
+// of these.
+const OPTIONAL_COLUMN_PRIORITY = ["price_list_rate", "uom", "posa_is_offer"];
+
+// Same 48px the data-table's expand column always renders at
+// (DATA_TABLE_EXPAND_COLUMN below) -- included here so the required-only
+// floor this graduated logic is based on reflects what the table actually
+// needs on screen, not just its data columns.
+const EXPAND_COLUMN_WIDTH = 48;
+
+function optionalColumnPriorityIndex(key: string) {
+	const index = OPTIONAL_COLUMN_PRIORITY.indexOf(key);
+	return index === -1 ? OPTIONAL_COLUMN_PRIORITY.length : index;
+}
+
 export function getResponsiveVisibleHeaders(
 	headers: TableHeader[],
 	width: number,
 ) {
-	return headers
-		.filter((header) => {
-			if (
-				header.required ||
-				header.key === "item_name" ||
-				header.key === "qty" ||
-				header.key === "actions" ||
-				header.key === "amount"
-			) {
-				return true;
-			}
+	const requiredHeaders = headers.filter((header) => header.required);
+	const optionalHeaders = headers.filter((header) => !header.required);
 
-			if (width > 0 && width < 450) {
-				return ["item_name", "qty", "amount", "actions"].includes(
-					header.key,
-				);
+	const visibleOptionalKeys = new Set<string>();
+	if (width <= 0) {
+		// Not measured yet (e.g. before the container's first layout pass)
+		// -- show everything selected rather than flashing a hidden state.
+		optionalHeaders.forEach((header) => visibleOptionalKeys.add(header.key));
+	} else {
+		const requiredFloor =
+			requiredHeaders.reduce(
+				(sum, header) => sum + calculateMinColumnWidth(header),
+				0,
+			) + EXPAND_COLUMN_WIDTH;
+
+		let remaining = width - requiredFloor;
+		const orderedOptional = [...optionalHeaders].sort(
+			(a, b) => optionalColumnPriorityIndex(a.key) - optionalColumnPriorityIndex(b.key),
+		);
+		for (const header of orderedOptional) {
+			const columnWidth = calculateMinColumnWidth(header);
+			if (remaining < columnWidth) {
+				// Stop at the first column that doesn't fit rather than
+				// skipping ahead to a lower-priority one that might --
+				// keeps the visible set predictable as width changes
+				// (the same columns disappear/reappear in a fixed order,
+				// not a shuffling combination).
+				break;
 			}
-			return true;
-		})
+			visibleOptionalKeys.add(header.key);
+			remaining -= columnWidth;
+		}
+	}
+
+	return headers
+		.filter((header) => header.required || visibleOptionalKeys.has(header.key))
 		.map((header) => ({
 			...header,
 			width: calculateColumnWidth(header, width),
