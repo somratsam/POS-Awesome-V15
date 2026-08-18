@@ -1,26 +1,5 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 
-// Below this window width, Pos.vue stacks the item-selector and invoice
-// panels to full width (one shown at a time via the mobile dock) instead
-// of splitting them side by side. Split view needs the invoice panel's
-// share of the window to clear the Invoice Items table's required-column
-// floor (~848px -- Discount %/Amount can never hide, see
-// useItemsTableResponsive.ts) at the 8/12 split ratio used from this
-// breakpoint up; 1300px leaves real margin above the bare 1272px minimum
-// so table borders/scrollbar-gutter don't reopen the gap.
-//
-// This is deliberately its own constant, not reused by isCompact/isTablet/
-// isDesktop below (which stay at 1100 for their own, unrelated consumers)
-// -- it exists specifically so every place that needs to know "is the
-// selector/invoice split layout viable" reads the same number. All of
-// Pos.vue's useCompactPosSwitcher/showBottomDock,
-// InvoiceSummary.vue's useCompactSaleDock, and ItemsSelector.vue's
-// reserve-bottom-dock-space check must move together if this ever changes
-// -- they're independent expressions of the same "is the layout stacked"
-// state, and forgetting one leaves the mobile dock hidden while the
-// layout is already stacked (or vice versa).
-export const POS_COMPACT_LAYOUT_BREAKPOINT = 1300;
-
 export function useResponsive() {
 	const windowWidth = ref(window.innerWidth);
 	const windowHeight = ref(window.innerHeight);
