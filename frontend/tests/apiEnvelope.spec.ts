@@ -83,4 +83,60 @@ describe("api envelope handling", () => {
 			},
 		});
 	});
+
+	it("classifies a QueryDeadlockError response as DEADLOCK, not a generic business rule", async () => {
+		// Real shape of what reaches the frontend when a submission-ledger
+		// save hits a transient lock conflict and exhausts its retries --
+		// see invoice_processing/creation.py's _save_ledger_with_lock_retry.
+		(frappe.call as any).mockImplementation(({ callback }: any) => {
+			callback({
+				exc: "frappe.exceptions.QueryDeadlockError: (1213, 'Deadlock found when trying to get lock; try restarting transaction')",
+			});
+		});
+
+		const result = await api.callEnvelope("pos.test.deadlock");
+
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "DEADLOCK",
+			},
+		});
+	});
+
+	it("classifies a lock-wait-timeout response as DEADLOCK too", async () => {
+		(frappe.call as any).mockImplementation(({ callback }: any) => {
+			callback({
+				exc: "frappe.exceptions.QueryTimeoutError: (1205, 'Lock wait timeout exceeded; try restarting transaction')",
+			});
+		});
+
+		const result = await api.callEnvelope("pos.test.lock_timeout");
+
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "DEADLOCK",
+			},
+		});
+	});
+
+	it("still classifies an unrelated business error as BUSINESS_RULE, not DEADLOCK", async () => {
+		// Regression guard for the new deadlock-detection branch: it must
+		// not be so broad that it swallows real, unrelated errors.
+		(frappe.call as any).mockImplementation(({ callback }: any) => {
+			callback({
+				exc: "frappe.exceptions.ValidationError: Item XYZ is out of stock",
+			});
+		});
+
+		const result = await api.callEnvelope("pos.test.unrelated_error");
+
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "BUSINESS_RULE",
+			},
+		});
+	});
 });
