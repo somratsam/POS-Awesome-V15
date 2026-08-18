@@ -114,17 +114,17 @@ export function buildFinalVisibleColumns(
 // column, down from 848px).
 const calculateColumnWidth = (header: TableHeader, width: number) => {
 	const baseWidths: Record<string, { min: number; max: number; ratio: number }> = {
-		item_name: { min: 200, max: 250, ratio: 0.3 },
+		item_name: { min: 175, max: 250, ratio: 0.14 },
 		qty: { min: 116, max: 160, ratio: 0.12 },
-		rate: { min: 92, max: 130, ratio: 0.12 },
-		amount: { min: 88, max: 130, ratio: 0.12 },
-		discount_percentage: { min: 82, max: 120, ratio: 0.1 },
-		discount_amount: { min: 82, max: 120, ratio: 0.11 },
+		rate: { min: 90, max: 130, ratio: 0.12 },
+		amount: { min: 84, max: 130, ratio: 0.12 },
+		discount_percentage: { min: 80, max: 120, ratio: 0.1 },
+		discount_amount: { min: 84, max: 120, ratio: 0.11 },
 		price_list_rate: { min: 120, max: 140, ratio: 0.13 },
 		// Actions holds exactly one small delete icon button (CartItemRow.vue)
 		// -- the old 80/100 floor/max were sized as if it needed the same
 		// room as a text column.
-		actions: { min: 60, max: 80, ratio: 0.05 },
+		actions: { min: 66, max: 80, ratio: 0.05 },
 		posa_is_offer: { min: 70, max: 90, ratio: 0.06 },
 	};
 
@@ -139,14 +139,14 @@ const calculateColumnWidth = (header: TableHeader, width: number) => {
 
 const calculateMinColumnWidth = (header: TableHeader) => {
 	const minWidths: Record<string, number> = {
-		item_name: 200,
+		item_name: 175,
 		qty: 116,
-		rate: 92,
-		amount: 88,
-		discount_percentage: 82,
-		discount_amount: 82,
+		rate: 90,
+		amount: 84,
+		discount_percentage: 80,
+		discount_amount: 84,
 		price_list_rate: 120,
-		actions: 60,
+		actions: 66,
 		posa_is_offer: 70,
 	};
 	return minWidths[header.key] || 80;
@@ -164,7 +164,12 @@ export function useItemsTableResponsive(
 	const updateBreakpoint = (width: number) => {
 		if (width < 500) return "xs";
 		if (width < 700) return "sm";
-		if (width < 900) return "md";
+		// Raised from 900 to 1000: the narrow-band split-ratio override
+		// (Pos.vue) can push this container to ~920-960px, and md's tighter
+		// --cell-padding/--header-font-size need to stay active through
+		// that range rather than flipping back to lg's looser values right
+		// when the ratio bump is trying to buy back space.
+		if (width < 1000) return "md";
 		if (width < 1200) return "lg";
 		return "xl";
 	};
@@ -190,13 +195,14 @@ export function useItemsTableResponsive(
 
 	const containerClasses = computed(() => ({
 		[`breakpoint-${breakpoint.value}`]: true,
-		// Extended from <600 to <900 alongside tableDensity above, so the
-		// qty-input narrowing this class already drives (items-table-styles.css)
-		// reaches the same 700-900px band the required-columns floor needs it in.
-		"compact-view": containerWidth.value < 900,
+		// Extended from <600 to <1000 alongside tableDensity/updateBreakpoint
+		// above, so the qty-input narrowing this class already drives
+		// (items-table-styles.css) stays active through the range the
+		// narrow-band split-ratio override can push this container to.
+		"compact-view": containerWidth.value < 1000,
 		"medium-view":
-			containerWidth.value >= 600 && containerWidth.value < 900,
-		"large-view": containerWidth.value >= 900,
+			containerWidth.value >= 600 && containerWidth.value < 1000,
+		"large-view": containerWidth.value >= 1000,
 	}));
 
 	const tableClasses = computed(() => ({
@@ -210,12 +216,11 @@ export function useItemsTableResponsive(
 	}));
 
 	const tableDensity = computed(() => {
-		// The required-columns floor (see calculateMinColumnWidth below)
-		// sits at ~768px including the expand column -- containers in the
-		// 700-900px band are exactly where the table needs its tightest
-		// row/cell sizing, not the "default"/"comfortable" density a flat
-		// <500/<800 split used to give them.
-		if (containerWidth.value < 900) return "compact";
+		// Matches updateBreakpoint's raised md/lg cutoff (1000, up from
+		// 900) so the narrow-band split-ratio override doesn't push this
+		// container across the line into looser density right when it's
+		// trying to buy back space.
+		if (containerWidth.value < 1000) return "compact";
 		return "comfortable";
 	});
 

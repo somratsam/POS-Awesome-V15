@@ -108,4 +108,30 @@ describe("useInvoiceItems column preferences", () => {
 		expect(discountColumns).toHaveLength(2);
 		expect(discountColumns.every((column) => column.required)).toBe(true);
 	});
+
+	it("uses shortened header labels for Discount %/Amount/Actions, verified against a real narrow render", async () => {
+		// The original full labels ("Discount %", "Discount Amount",
+		// "Actions") don't fit within these columns' real widths at the
+		// compaction this table now needs -- table-layout: fixed stops the
+		// header text from forcing the column wider (see
+		// itemsTableCellPaddingWiring.spec.ts), but that also means long
+		// text just gets clipped by the header's flex+ellipsis wrapper,
+		// which doesn't render a clean "..." (display:flex breaks
+		// text-overflow: ellipsis reliably -- confirmed by taking a real
+		// screenshot and finding garbled, not ellipsized, header text).
+		// Shortening the labels sidesteps that CSS bug entirely rather than
+		// trying to patch it. Actions becomes icon-only, matching the
+		// expand column's existing empty-title convention.
+		const { useInvoiceItems } = await import(
+			"../src/posapp/composables/pos/invoice/useInvoiceItems"
+		);
+		const invoiceItems = useInvoiceItems(ref("Invoice"));
+
+		const byKey = (key: string) =>
+			invoiceItems.available_columns.value.find((column) => column.key === key);
+
+		expect(byKey("discount_percentage")?.title).toBe("Disc %");
+		expect(byKey("discount_amount")?.title).toBe("Disc Amt");
+		expect(byKey("actions")?.title).toBe("");
+	});
 });
