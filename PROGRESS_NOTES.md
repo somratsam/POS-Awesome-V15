@@ -2136,3 +2136,168 @@ Reviewed and cherry-picked to `stable` the same day — this fix corrects
 a genuine, staff-reported production issue, low-risk (retry-only on the
 happy path, purely additive on the frontend) and fully covered by
 tests that directly simulate the failure condition.
+
+## 27. `swan_rewards`: mobile View/Download bug fixed, reload persistence added (2026-08-18)
+
+Both of section 25's "known open items" resolved this session. Both
+changes are entirely within `swan_rewards`' own repo (`swan-rewards-portal`,
+`main` branch) — no `posawesome` code touched — documented here per this
+project's standing convention of keeping the companion app's history
+with the main site's docs.
+
+**Mobile View/Download bug (`c463002`).** Diagnosed against real
+production behavior first, not assumed: "View" and "Download" both
+worked correctly on desktop Chrome but both downloaded on mobile
+Chrome. Confirmed via `curl` that the server was already sending the
+*correct*, different `Content-Disposition` header for each mode
+(`inline` vs `attachment`) — the section 25 guess (a missing header)
+was wrong. The real cause: `viewReceipt()`/`downloadReceipt()` both
+fetched the PDF via `fetch()` + `.blob()`, then reconstructed a *fresh*
+`Blob` client-side and either triggered `<a download>` or navigated a
+new tab's `.location` to a `blob:` URL — meaning the server's
+`Content-Disposition` header was never actually consulted by the
+browser at all, on either platform. Desktop Chrome reliably renders a
+`blob:` URL PDF inline regardless; Chrome for Android does not — a
+platform gap, not a header bug.
+
+Fixed by switching `viewReceipt()` to a real hidden
+`<form method="POST" target="_blank">` submission instead of
+`fetch()`+blob, so a genuine top-level browser navigation lets the
+browser's native inline-PDF handling take over using the server's
+*actual* `Content-Disposition: inline` header — the standard mechanism
+every browser already supports for real navigations, unlike `blob:`
+URLs. `downloadReceipt()` untouched, already worked correctly on both
+platforms.
+
+Since `mode="view"` now reaches the server via a real navigation rather
+than `fetch()`, a failure (bad credentials, no receipt, rate limited)
+would otherwise show Frappe's raw JSON/stack-trace error page in the
+new tab. `receipt.py`'s `get_receipt()` restructured (rate-limited
+logic split into `_fetch_receipt()`) so `mode="view"` catches
+`DoesNotExistError`/`TooManyRequestsError` and returns a small on-brand
+HTML page instead (same palette as `index.html`) — generic about which
+check failed, preserving the endpoint's existing non-disclosure
+property (wrong-mobile, wrong-code, and wrong-invoice-ownership all
+render identically; verified with a dedicated test). `mode="download"`
+re-raises unchanged, still handled by the existing `fetch()`
+`.catch()`.
+
+Verified end-to-end via `curl` using real form-urlencoded POST bodies
+(exactly what the new `<form>` sends) against real staging data:
+view success returns the inline PDF, view failure returns the branded
+404 page, download success/failure both confirmed byte-for-byte
+unchanged from before. A real rendering browser wasn't available in
+this environment (Playwright installs but is missing system shared
+libraries, no root to install them) — desktop non-regression rests on
+`Content-Disposition: inline` over a real navigation being the
+standard mechanism every browser already relies on, not a
+screenshot-verified click-through; flagged as worth a quick manual
+check. New backend tests (`test_receipt.py`'s `TestViewModeErrorPage` —
+the branded-error-page path specifically, including that an unexpected
+exception is *not* swallowed and `mode="download"` is completely
+unaffected), verified as genuine regression guards.
+
+**Reload persistence (`b5e8b2e`).** Reloading right after a successful
+lookup previously reset to the empty form every time — no way back
+without re-entering both fields. On a successful lookup, `mobile_no` +
+`portal_code` (nothing else — not the points balance, not invoices,
+nothing beyond what's needed to redo the exact same lookup) are saved
+to `sessionStorage`, never `localStorage` and never a server-side
+session/cookie: scoped to one tab, cleared automatically when the tab
+closes. On page load, a saved pair triggers the *same real lookup
+request* automatically rather than rendering a stale cached blob, so a
+points-balance change since the last visit still shows up correctly.
+"Check Another Number" now also clears `sessionStorage`, on top of what
+it already reset. A failed auto-restore (credentials no longer valid)
+clears the stale entry too, so it doesn't keep failing on every future
+reload; a transient failure (rate-limited, network hiccup) leaves it
+alone since a retry may still succeed.
+
+Doesn't change the actual authentication model at all — `mobile_no` +
+`portal_code` remain the only credential, same "shared secret" already
+required for every lookup regardless of this change. One real,
+honestly-stated tradeoff: on a shared/public device where the tab is
+never closed between two different people, a reload now shows the
+previous person's data again (before this change, a reload reset to
+the empty form) — that risk already existed for in-memory JS state
+before any reload was even involved; "Check Another Number" remains the
+explicit way to clear it before handing off a shared device.
+
+Verified with a real, executable `jsdom`-driven test (loads the actual
+`index.html`, mocks `fetch`, drives real DOM events) rather than just
+reading the code, since no headless browser was available — 17 checks
+covering the exact manual flow (fresh lookup → simulated reload → same
+data restored automatically with exactly one re-verification request;
+Check Another Number → simulated reload → empty form, zero lookup
+requests made), plus edge cases (stale-credential cleanup, storage
+holding exactly the 2 intended fields and nothing more). Verified the
+test suite actually catches a regression: reverted the change,
+confirmed a real failure, restored, confirmed green.
+
+**Both deployed to production.** Full regression check for each: no
+frontend build step exists for this app (static HTML, no bundler) —
+verified via `node --check` plus the live `curl`/`jsdom` tests above.
+Backend Python tests (isolated-import harness, no live DB needed):
+39/39 passing after the receipt fix. Security review for both: no new
+user input, authorization, or data-access surface — the receipt fix's
+branded error page never echoes any raw request input into its HTML
+(no reflection risk); the reload-persistence fix stores nothing more
+sensitive than the same credential pair already required for the
+lookup it's persisting.
+
+## 28. POS layout fix: three rounds, real-browser measurement required (2026-08-18)
+
+Staff on lower-res store PCs saw the Invoice Items table cut off (Amount/Actions
+columns), forcing horizontal scroll. Took three rounds to actually fix.
+
+**Round 1 — the original ask.** Fixed the left/right panel split ratio at the
+`md`/`lg` breakpoints, added graduated (priority-ordered) column-hiding instead
+of a flat hide-everything cliff, and made Discount %/Discount Amount required
+columns (staff use them regularly, must never hide). Deployed, confirmed
+working at the originally-reported widths.
+
+**Round 2 — reverted.** Extended the compact/stacked layout threshold to
+1300px to close a remaining gap (~1100-1272px). Technically worked but was
+rejected: staff lose the side-by-side search+cart view and have to tab between
+panels, unacceptable for the checkout flow even though the numbers closed.
+Reverted with a clean `git revert` (history intact, not a reset/force-push) —
+`6044083` (develop-swan) / `eb88c2f` (stable).
+
+**Round 3 — the real fix, and a real lesson.** A live 1280px store PC still
+showed the cutoff after a follow-up attempt that widened the split ratio
+instead of stacking. Investigation found Rounds 1-2's whole diagnostic
+approach — computing required column widths by reading CSS files and doing
+arithmetic — was unreliable in three concrete, previously-undiscovered ways:
+1. Vuetify ships its own `.v-table > .v-table__wrapper > table > tbody > tr >
+   td { padding: 0 16px; }`, which beat the app's own padding rule on
+   specificity alone — the Round 1 padding fix had silently never applied.
+2. The table used `table-layout: auto`, so a column's real width followed
+   whichever was wider — the header **label text** or the cell content — not
+   any configured min-width. A long label like "Discount Amount" alone forced
+   its column wide regardless of config.
+3. Widening the split ratio pushed the container width across a
+   compact-density CSS breakpoint, loosening padding right when trying to buy
+   back space.
+
+Real measurement (a real headless browser against a real running build, not
+estimates) showed the table needed **1007px**, not the assumed 768px — the
+true broken range was ~1100-1360px, wider than ever diagnosed.
+
+The actual fix: `!important` on the padding rule (to win the specificity
+fight), `table-layout: fixed` (so configured widths are finally authoritative),
+trimmed column min-widths, **lowered `item_name`'s width ratio from 0.3 to
+0.14** (the key fix — this alone made the *existing* split ratio sufficient
+everywhere, so the selector panel never had to narrow at all), a modest
+font-size reduction for cramped tiers only, shortened header labels
+("Discount %"→"Disc %", "Discount Amount"→"Disc Amt", "Actions"→icon-only —
+a deliberate, permanent, visible change, since Vuetify's flex-based header
+wrapper doesn't render `text-overflow: ellipsis` cleanly), and raising the
+compact-density threshold to 1000px.
+
+Verified via a real headless browser (Playwright/Chromium) driving the actual
+running site with a real cart item, tested at every 50px step from 1100px to
+1920px window width — zero horizontal overflow anywhere. Deployed to
+production and confirmed working live on the original problem store PC.
+
+See `CLAUDE.md`'s "Layout Fixes on Vuetify Tables Need Real Browser
+Measurement" for the reusable lesson.
