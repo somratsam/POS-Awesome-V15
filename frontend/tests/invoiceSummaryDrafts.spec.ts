@@ -13,6 +13,7 @@ vi.mock("../src/posapp/composables/core/useResponsive", () => ({
 		isPhone: { value: false },
 		isCompact: { value: false },
 	}),
+	POS_COMPACT_LAYOUT_BREAKPOINT: 1300,
 }));
 
 import InvoiceSummary from "../src/posapp/components/pos/invoice/InvoiceSummary.vue";

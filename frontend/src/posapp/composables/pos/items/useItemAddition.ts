@@ -22,6 +22,24 @@ declare const frappe: any;
 
 export function useItemAddition() {
 	const toastStore = useToastStore();
+
+	// Confirms a tap-to-add succeeded, matching the confirmation barcode
+	// scans already got (useScanProcessor.ts's own "Item {0} added to
+	// invoice" toast). Tapping an item card previously added it silently --
+	// the only feedback was the cart total/badge ticking up -- which made
+	// it hard to tell a successful tap from a missed one during a fast,
+	// multi-item add sequence. context.skipNotification lets a caller that
+	// shows its own confirmation (the scanner) opt out, so both paths never
+	// double-toast for the same add.
+	const notifyItemAdded = (item: any, context: any) => {
+		if (context?.skipNotification) return;
+		const itemName = item?.item_name || item?.item_code || __("Item");
+		toastStore.show({
+			title: __("Item {0} added to invoice", [itemName]),
+			color: "success",
+		});
+	};
+
 	const { calcStockQty } = useStockUtils();
 
 	const { runAsyncTask, scheduleItemTask } = useItemTasks() as any;
@@ -663,6 +681,7 @@ export function useItemAddition() {
 				}
 
 				if (index === -1 || context.new_line) {
+					notifyItemAdded(item, context);
 					if (context.invoiceStore) {
 						// Use batching
 						return new Promise((resolve) => {
@@ -772,6 +791,7 @@ export function useItemAddition() {
 					}
 				} else {
 					// Existing item update
+					notifyItemAdded(item, context);
 					const cur_item = context.items[index];
 					const qtyDelta = context.isReturnInvoice
 						? -Math.abs(qtyOrOne(new_item.qty))
@@ -954,6 +974,8 @@ export function useItemAddition() {
 					cur_item.serial_no_selected.push(item.to_set_serial_no);
 					item.to_set_serial_no = null;
 				}
+
+				notifyItemAdded(item, context);
 
 				const mergeIntoLine = (line: any) => {
 					// For returns, subtract from quantity to make it more negative

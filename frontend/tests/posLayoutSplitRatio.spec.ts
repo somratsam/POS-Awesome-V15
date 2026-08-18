@@ -16,8 +16,13 @@ import posSource from "../src/posapp/components/pos/shell/Pos.vue?raw";
 // or lg (1280-1919px) tier -- exactly where the invoice table's own column
 // minimum widths (~850px) didn't fit inside a 7/12 share of the row. xl
 // (1920px+) already worked fine, so it -- and sm, which is unreachable
-// anyway since useCompactPosSwitcher forces full stacking below 1100px --
-// are deliberately left unchanged.
+// anyway since useCompactPosSwitcher forces full stacking below
+// POS_COMPACT_LAYOUT_BREAKPOINT (1300px, see useResponsive.ts) -- are
+// deliberately left unchanged. That same 1300px floor also means md's own
+// :md values below are effectively dead in practice today (md tops out at
+// 1279px, entirely inside the stacked zone) -- left as-is rather than
+// pruned, since they're harmless and Vuetify's md tier existing at all is
+// what this split ratio was originally designed against.
 
 describe("POS layout: selector/invoice split ratio", () => {
 	// One block per v-col that participates in the split: the four
