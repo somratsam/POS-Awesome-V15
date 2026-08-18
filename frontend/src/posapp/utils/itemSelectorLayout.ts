@@ -7,9 +7,8 @@
 // not the full browser window. The panel is only ever a fraction of the
 // window -- 4/12 of it at the md/lg breakpoints, 5/12 at xl and above (see
 // Pos.vue's split ratio), or the full width when useCompactPosSwitcher
-// stacks the layout below POS_COMPACT_LAYOUT_BREAKPOINT (see
-// useResponsive.ts) -- so a container-width threshold can't reuse the old
-// window-width cutoffs (768/1200) directly.
+// stacks the layout below 1100px window width -- so a container-width
+// threshold can't reuse the old window-width cutoffs (768/1200) directly.
 //
 // Anchored against two real cases:
 // - A 1366px window (lg tier, 4/12 split) measures a ~455px container.

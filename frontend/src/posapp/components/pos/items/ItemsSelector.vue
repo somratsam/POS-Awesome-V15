@@ -285,9 +285,7 @@
 			:active-price-list="active_price_list"
 			:offers-count="offersCount"
 			:coupons-count="couponsCount"
-			:reserve-bottom-dock-space="
-				context === 'pos' && responsive.windowWidth.value < POS_COMPACT_LAYOUT_BREAKPOINT
-			"
+			:reserve-bottom-dock-space="context === 'pos' && responsive.windowWidth.value < 1100"
 			@open-offers="uiStore.setActiveView('offers')"
 			@open-coupons="uiStore.setActiveView('coupons')"
 		/>
@@ -340,7 +338,7 @@ import PharmacyItemSearchTable from "./PharmacyItemSearchTable.vue";
 import NewItemDialog from "./NewItemDialog.vue";
 import ScanErrorDialog from "./ScanErrorDialog.vue";
 
-import { useResponsive, POS_COMPACT_LAYOUT_BREAKPOINT } from "../../../composables/core/useResponsive";
+import { useResponsive } from "../../../composables/core/useResponsive";
 import { useRtl } from "../../../composables/core/useRtl";
 import { useFlyAnimation } from "../../../composables/core/useFlyAnimation";
 import { useCartValidation } from "../../../composables/pos/items/useCartValidation";

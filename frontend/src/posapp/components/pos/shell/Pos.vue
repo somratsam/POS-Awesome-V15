@@ -304,7 +304,7 @@ import { usePosShift } from "../../../composables/pos/shared/usePosShift";
 import { useOffers } from "../../../composables/pos/shared/useOffers";
 // Import the cache cleanup function
 import { clearExpiredCustomerBalances } from "../../../../offline/index";
-import { useResponsive, POS_COMPACT_LAYOUT_BREAKPOINT } from "../../../composables/core/useResponsive";
+import { useResponsive } from "../../../composables/core/useResponsive";
 import { useRtl } from "../../../composables/core/useRtl";
 import { useUIStore } from "../../../stores/uiStore.js";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
@@ -349,16 +349,11 @@ export default {
 		const counterGridActive = computed(() =>
 			isCounterGridTemplate(posProfile.value, responsive.windowWidth.value),
 		);
-		const useCompactPosSwitcher = computed(
-			() => responsive.windowWidth.value < POS_COMPACT_LAYOUT_BREAKPOINT,
-		);
+		const useCompactPosSwitcher = computed(() => responsive.windowWidth.value < 1100);
 		const compactPanel = ref("selector");
 		const isPhone = computed(() => responsive.isPhone.value);
 		const showBottomDock = computed(
-			() =>
-				!counterGridActive.value &&
-				!dialog.value &&
-				responsive.windowWidth.value < POS_COMPACT_LAYOUT_BREAKPOINT,
+			() => !counterGridActive.value && !dialog.value && responsive.windowWidth.value < 1100,
 		);
 		const counterItemSearchOpen = ref(false);
 		const counterDirectEntryPending = ref(false);

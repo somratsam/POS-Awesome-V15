@@ -12,7 +12,6 @@ vi.mock("../src/posapp/composables/core/useResponsive", () => ({
 	useResponsive: () => ({
 		windowWidth: { value: 1400 },
 	}),
-	POS_COMPACT_LAYOUT_BREAKPOINT: 1300,
 }));
 
 vi.mock("../src/offline/index", () => ({

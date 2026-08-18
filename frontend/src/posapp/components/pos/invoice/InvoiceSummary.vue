@@ -307,7 +307,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { loadItemSelectorSettings } from "../../../utils/itemSelectorSettings";
-import { useResponsive, POS_COMPACT_LAYOUT_BREAKPOINT } from "../../../composables/core/useResponsive";
+import { useResponsive } from "../../../composables/core/useResponsive";
 import { useUIStore } from "../../../stores/uiStore";
 import {
 	getAvailableDocumentSources,
@@ -387,9 +387,7 @@ const additionalDiscountPercentageDisplay = ref(
 	normalizeDiscountDisplay(props.additional_discount_percentage),
 );
 const isCounterGrid = computed(() => props.presentation === "counter-grid");
-const useCompactSaleDock = computed(
-	() => responsive.windowWidth.value < POS_COMPACT_LAYOUT_BREAKPOINT,
-);
+const useCompactSaleDock = computed(() => responsive.windowWidth.value < 1100);
 const showDesktopDrafts = computed(() => Boolean(responsive.isDesktop.value));
 const showReturnDiscountAlert = computed(
 	() =>
