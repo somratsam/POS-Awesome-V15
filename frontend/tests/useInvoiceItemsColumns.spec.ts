@@ -62,10 +62,12 @@ describe("useInvoiceItems column preferences", () => {
 		]);
 		invoiceItems.saveColumnPreferences();
 
+		// discount_value (an alias for discount_percentage) and item_name
+		// are NOT valid optional keys -- discount_percentage is required
+		// (see the dedicated test below), and item_name always was.
 		expect(invoiceItems.selected_columns.value).toEqual([
 			"uom",
 			"price_list_rate",
-			"discount_percentage",
 		]);
 		expect(invoiceItems.items_headers.value.map((column) => column.key)).toEqual(
 			expect.arrayContaining([
@@ -74,13 +76,36 @@ describe("useInvoiceItems column preferences", () => {
 				"uom",
 				"price_list_rate",
 				"discount_percentage",
+				"discount_amount",
 				"rate",
 				"amount",
 				"actions",
 			]),
 		);
 		expect(localStorage.getItem("posawesome_selected_columns")).toBe(
-			JSON.stringify(["uom", "price_list_rate", "discount_percentage"]),
+			JSON.stringify(["uom", "price_list_rate"]),
 		);
+	});
+
+	it("never lets Discount % or Discount Amount be excluded, even via an explicit selection that omits them", async () => {
+		// Staff use these two regularly -- they must always render,
+		// regardless of what selected_columns says, the same guarantee
+		// item_name/qty/rate/amount/actions already had.
+		const { useInvoiceItems } = await import(
+			"../src/posapp/composables/pos/invoice/useInvoiceItems"
+		);
+		const invoiceItems = useInvoiceItems(ref("Invoice"));
+
+		invoiceItems.setSelectedColumns([]);
+
+		const visibleKeys = invoiceItems.items_headers.value.map((column) => column.key);
+		expect(visibleKeys).toContain("discount_percentage");
+		expect(visibleKeys).toContain("discount_amount");
+
+		const discountColumns = invoiceItems.available_columns.value.filter(
+			(column) => column.key === "discount_percentage" || column.key === "discount_amount",
+		);
+		expect(discountColumns).toHaveLength(2);
+		expect(discountColumns.every((column) => column.required)).toBe(true);
 	});
 });

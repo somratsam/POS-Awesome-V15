@@ -37,23 +37,35 @@ describe("items table final visible columns", () => {
 		]);
 	});
 
-	it("keeps selected optional columns visible in normal POS pane widths", () => {
-		const responsive = getResponsiveVisibleHeaders(headers, 600);
-		const finalColumns = buildFinalVisibleColumns(headers, 600);
-
-		expect(responsive.map((column) => column.key)).toEqual([
+	it("brings optional columns back one at a time as width grows past the required floor", () => {
+		// This header set's required columns (item_name/qty/rate/amount/
+		// actions) have min-widths summing to 620px; +48px for the expand
+		// column puts the required-only floor at 668px. 600px sits below
+		// that floor, so nothing optional fits yet -- only at a width past
+		// the floor does the graduated logic start admitting optional
+		// columns back in, highest-priority first (price_list_rate, per
+		// OPTIONAL_COLUMN_PRIORITY), one at a time as room allows.
+		const belowFloor = getResponsiveVisibleHeaders(headers, 600);
+		expect(belowFloor.map((column) => column.key)).toEqual([
 			"item_name",
 			"qty",
-			"uom",
-			"price_list_rate",
-			"discount_percentage",
-			"discount_amount",
 			"rate",
 			"amount",
-			"posa_is_offer",
 			"actions",
 		]);
-		expect(finalColumns.slice(0, -1)).toEqual(responsive);
+
+		const pastFloor = getResponsiveVisibleHeaders(headers, 850);
+		const finalColumns = buildFinalVisibleColumns(headers, 850);
+
+		expect(pastFloor.map((column) => column.key)).toEqual([
+			"item_name",
+			"qty",
+			"price_list_rate",
+			"rate",
+			"amount",
+			"actions",
+		]);
+		expect(finalColumns.slice(0, -1)).toEqual(pastFloor);
 		expect(finalColumns.at(-1)?.key).toBe("data-table-expand");
 	});
 
