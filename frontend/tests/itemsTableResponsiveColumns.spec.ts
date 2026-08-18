@@ -39,11 +39,14 @@ describe("items table final visible columns", () => {
 
 	it("brings optional columns back one at a time as width grows past the required floor", () => {
 		// This header set's required columns (item_name/qty/rate/amount/
-		// actions) have min-widths summing to 620px; +48px for the expand
-		// column puts the required-only floor at 668px. 600px sits below
-		// that floor, so nothing optional fits yet -- only at a width past
-		// the floor does the graduated logic start admitting optional
-		// columns back in, highest-priority first (price_list_rate, per
+		// actions) have min-widths summing to 556px (trimmed as part of the
+		// "close the remaining 1100-1272px gap without stacking" follow-up,
+		// paired with tighter cell padding/density at that width so the
+		// trim doesn't clip content); +48px for the expand column puts the
+		// required-only floor at 604px. 600px sits just below that floor,
+		// so nothing optional fits yet -- only at a width past the floor
+		// does the graduated logic start admitting optional columns back
+		// in, highest-priority first (price_list_rate, per
 		// OPTIONAL_COLUMN_PRIORITY), one at a time as room allows.
 		const belowFloor = getResponsiveVisibleHeaders(headers, 600);
 		expect(belowFloor.map((column) => column.key)).toEqual([
@@ -54,8 +57,8 @@ describe("items table final visible columns", () => {
 			"actions",
 		]);
 
-		const pastFloor = getResponsiveVisibleHeaders(headers, 850);
-		const finalColumns = buildFinalVisibleColumns(headers, 850);
+		const pastFloor = getResponsiveVisibleHeaders(headers, 750);
+		const finalColumns = buildFinalVisibleColumns(headers, 750);
 
 		expect(pastFloor.map((column) => column.key)).toEqual([
 			"item_name",

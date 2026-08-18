@@ -1009,9 +1009,9 @@ function handleDiscountAmountPaste(event) {
 
 /* Add minimal padding for table cells as per ItemsTable.vue styles */
 td {
-	padding: 16px 12px;
+	padding: var(--cell-padding, 16px 12px);
 	vertical-align: middle;
-	height: 60px;
+	height: var(--cell-height, 60px);
 	text-align: center;
 	color: var(--pos-text-primary);
 	position: relative;

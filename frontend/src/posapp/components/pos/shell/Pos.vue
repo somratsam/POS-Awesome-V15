@@ -106,6 +106,7 @@
 				:md="useCompactPosSwitcher ? 12 : 4"
 				:sm="useCompactPosSwitcher ? 12 : 5"
 				cols="12"
+				:style="narrowBandSelectorStyle"
 				class="pos dynamic-col dynamic-col--selector"
 			>
 				<ItemsSelector context="pos" />
@@ -117,6 +118,7 @@
 				:md="useCompactPosSwitcher ? 12 : 4"
 				:sm="useCompactPosSwitcher ? 12 : 5"
 				cols="12"
+				:style="narrowBandSelectorStyle"
 				class="pos dynamic-col dynamic-col--selector"
 			>
 				<PosOffers></PosOffers>
@@ -128,6 +130,7 @@
 				:md="useCompactPosSwitcher ? 12 : 4"
 				:sm="useCompactPosSwitcher ? 12 : 5"
 				cols="12"
+				:style="narrowBandSelectorStyle"
 				class="pos dynamic-col dynamic-col--selector"
 			>
 				<PosCoupons></PosCoupons>
@@ -143,6 +146,7 @@
 				:md="useCompactPosSwitcher ? 12 : 4"
 				:sm="useCompactPosSwitcher ? 12 : 5"
 				cols="12"
+				:style="narrowBandSelectorStyle"
 				class="pos dynamic-col dynamic-col--selector"
 			>
 				<Payments></Payments>
@@ -155,6 +159,7 @@
 				:md="useCompactPosSwitcher ? 12 : 8"
 				:sm="useCompactPosSwitcher ? 12 : 7"
 				cols="12"
+				:style="narrowBandInvoiceStyle"
 				class="pos dynamic-col dynamic-col--invoice"
 			>
 				<Invoice ref="invoicePanel"></Invoice>
@@ -350,6 +355,30 @@ export default {
 			isCounterGridTemplate(posProfile.value, responsive.windowWidth.value),
 		);
 		const useCompactPosSwitcher = computed(() => responsive.windowWidth.value < 1100);
+		// Windows from 1100px (where the layout stops stacking) up to
+		// 1272px sit inside Vuetify's own md/lg tiers, but the standard
+		// 8/12 invoice split doesn't clear the Invoice Items table's own
+		// required-column floor there -- the table's compaction (see
+		// useItemsTableResponsive.ts) closes most of that gap on its own,
+		// but this band is kept as a safety margin on top of it rather
+		// than narrowed to the bare-minimum width the compaction math
+		// implies, since that math isn't verified against an actual
+		// rendered browser. Widens the invoice panel to 9/12 (and narrows
+		// the selector to 3/12) only in this band; both panels stay
+		// visible side by side the whole time, unlike the compact/stacked
+		// switcher above -- this never triggers full stacking.
+		const useNarrowSplitBand = computed(
+			() =>
+				!useCompactPosSwitcher.value &&
+				responsive.windowWidth.value >= 1100 &&
+				responsive.windowWidth.value < 1272,
+		);
+		const narrowBandSelectorStyle = computed(() =>
+			useNarrowSplitBand.value ? { flex: "0 0 25%", maxWidth: "25%" } : {},
+		);
+		const narrowBandInvoiceStyle = computed(() =>
+			useNarrowSplitBand.value ? { flex: "0 0 75%", maxWidth: "75%" } : {},
+		);
 		const compactPanel = ref("selector");
 		const isPhone = computed(() => responsive.isPhone.value);
 		const showBottomDock = computed(
@@ -865,6 +894,8 @@ export default {
 			counterItemSearchSubtitle,
 			counterAuxiliaryOpen,
 			useCompactPosSwitcher,
+			narrowBandSelectorStyle,
+			narrowBandInvoiceStyle,
 			showBottomDock,
 			layoutStyleOverrides,
 			compactPanel,
