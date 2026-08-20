@@ -1,20 +1,48 @@
 # POS Awesome — develop-swan Fork Progress Notes
 
-Last updated: 2026-08-11
+Last updated: 2026-08-18
 
 This file exists so a future session (mine or another Claude Code session) can pick up
 context on this fork quickly without re-deriving it from scratch. If you're starting
 fresh with no memory of prior sessions, read this whole file before touching anything
 related to POS Closing Shift / Z Report — section 2 below is written to be
-self-sufficient.
+self-sufficient. **See "Current State" just below for an at-a-glance summary before
+diving into the full chronological history.**
+
+## Current State (as of 2026-08-18)
+
+**posawesome.** `develop-swan` and `stable` are content-identical for every actual
+code file as of today (verified via direct diff, not just commit ancestry — the two
+branches' histories diverge because of cherry-picking, but the resulting trees don't).
+They differ only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits,
+which is expected: each branch narrates its own promotion story. Everything below has
+been cherry-picked to `stable` and deployed to production the same session it was
+built, per this fork's standing "prove it on staging, then promote" workflow. Most
+recent work: the POS Invoice Items table layout fix (three rounds — section 28) and
+the "Deadlock Occurred" warning fix (section 26), both live in production.
+
+**swan_rewards** (companion app, separate repo — see `CLAUDE.md`'s "Companion app"
+note for the architecture). Live in production at `rewards.swan-intl.com` (own Frappe
+multi-site, DNS + Let's Encrypt SSL,
+no ERPNext/POS Awesome installed — section 25). The sync bridge
+(`posawesome/posawesome/api/rewards_sync.py`) is live and configured on production,
+pushing every 15 minutes plus a daily full refresh. Every issue found during the
+initial rollout (store locations, two receipt-PDF bugs, a mobile Chrome View bug, a
+reload-persistence UX gap) is resolved — sections 23-27. No currently-known open
+issues on either app.
+
+**Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
+production for both apps and is where every change above was proven before promotion.
 
 ## Fork tracking
 
 This repo tracks Defendicon's original **POS-Awesome-V15** upstream at
 `github.com/somratsam/POS-Awesome-V15`, branch **develop-swan**.
-(Production currently runs Defendicon's original `develop` branch directly at
-`github.com/defendicon/POS-Awesome-V15` — not this fork. At last check, that branch's
-HEAD was identical to this fork's base commit `cd5eba1`, i.e. no drift yet.)
+(Historical note, now superseded — see "Current State" above: this section originally
+said production ran Defendicon's `develop` branch directly, not this fork, with no
+drift as of base commit `cd5eba1`. That stopped being accurate once production started
+receiving deployments from this fork's `stable` branch, starting with section 20's
+promotion — production has been deployed from `stable` many times since.)
 
 Local git remote is named `upstream` and points at the fork above; `develop-swan` is
 currently up to date with `upstream/develop-swan`.
