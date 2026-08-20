@@ -419,6 +419,13 @@ const paid_change_rules = ref([]);
 const is_user_editing_paid_change = ref(false);
 const highlightSubmit = ref(false);
 const last_payment_change_was_cash = ref(null);
+// Tracks the order in which the cashier has directly edited each payment
+// box (mode_of_payment -> sequence number), so that rebalancing the OTHER
+// boxes after a direct edit to the preferred box can leave the cashier's
+// most recently typed amounts alone and reduce older/untouched boxes first.
+// Reset whenever a new invoice is loaded into the dialog.
+const paymentEditSequenceCounter = ref(0);
+const lastEditedPaymentSequence = ref({});
 const backgroundStatusCheck = ref(null);
 const paymentVisible = ref(false);
 const paymentRoot = ref(null);
@@ -650,12 +657,14 @@ const {
 	request_payment,
 	getVisibleDenominations,
 	isCashLikePayment,
+	autoBalancePayments,
 } = usePaymentMethods({
 	invoiceDoc: computed(() => invoiceStore.invoiceDoc),
 	posProfile: pos_profile,
 	diffPayment: diff_payment,
 	getNetInvoiceAmount: () => netInvoiceSettlementAmount.value,
 	formatFloat: (val) => flt(val, currency_precision.value),
+	currencyPrecision: currency_precision,
 	stores: {
 		toastStore,
 		uiStore,
@@ -1254,6 +1263,27 @@ const rebalancePreferredPaymentCoverage = (giftCardAmount = giftCardAppliedAmoun
 	});
 };
 
+// Mirror of rebalancePreferredPaymentCoverage() for the opposite direction:
+// when the cashier edits the PREFERRED box directly, true up the OTHER boxes
+// so the total still matches the invoice. Same guards (skip for returns and
+// credit sales, where these boxes aren't meant to sum to the settlement
+// amount). Reduces the least-recently-edited/never-touched boxes first, so a
+// box the cashier just typed into elsewhere isn't immediately clobbered.
+const rebalanceOtherPaymentsByRecency = (editedPayment) => {
+	const doc = invoice_doc.value;
+	if (!doc || doc.is_return || is_credit_sale.value) {
+		return;
+	}
+
+	autoBalancePayments(editedPayment, currency_precision.value, {
+		sortOthers: (a, b) => {
+			const seqA = lastEditedPaymentSequence.value[a?.mode_of_payment] || 0;
+			const seqB = lastEditedPaymentSequence.value[b?.mode_of_payment] || 0;
+			return seqA - seqB;
+		},
+	});
+};
+
 const mergeProfilePaymentsIntoReturn = (doc) => {
 	const profilePayments = buildProfilePaymentLines();
 	if (!profilePayments.length) return;
@@ -1502,6 +1532,28 @@ const handlePaymentAmountChange = (payment, event) => {
 			toCompanyCurrency(paymentCurrencyContext(), payment.amount),
 			currency_precision.value,
 		);
+	}
+
+	// This handler only fires for genuine cashier edits (the @update-amount
+	// event from a payment box), never for programmatic rebalances -- so it's
+	// safe to unconditionally record this box as the most recently touched.
+	if (payment?.mode_of_payment) {
+		paymentEditSequenceCounter.value += 1;
+		lastEditedPaymentSequence.value[payment.mode_of_payment] = paymentEditSequenceCounter.value;
+	}
+
+	// True up the preferred payment line to the new remainder, same mechanism
+	// already used for loyalty/gift-card/credit changes -- but only when the
+	// box just edited isn't itself the preferred one, so a direct manual edit
+	// to the preferred box's own amount isn't immediately overwritten by its
+	// own rebalance. When the preferred box IS the one just edited, rebalance
+	// the other boxes instead, so a direct edit there doesn't leave the total
+	// silently out of sync with the invoice.
+	const preferredPayment = resolvePreferredPaymentLine(invoice_doc.value, isCashLikePayment);
+	if (preferredPayment && payment !== preferredPayment) {
+		rebalancePreferredPaymentCoverage();
+	} else if (preferredPayment && payment === preferredPayment) {
+		rebalanceOtherPaymentsByRecency(payment);
 	}
 };
 
@@ -2209,6 +2261,8 @@ onMounted(() => {
 			last_payment_change_was_cash.value = null;
 			is_credit_sale.value = false;
 			is_write_off_change.value = false;
+			paymentEditSequenceCounter.value = 0;
+			lastEditedPaymentSequence.value = {};
 
 			// Decide the credit-return default ONCE, when the return is first
 			// loaded, so reopening the dialog / a failed submit never overrides a

@@ -194,6 +194,127 @@ describe("usePaymentMethods", () => {
 		expect(invoiceDoc.value.payments[1].amount).toBe(150);
 	});
 
+	it("does not overwrite a payment box that already has a manually-entered amount", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [
+				{
+					mode_of_payment: "Cash",
+					type: "Cash",
+					amount: 50,
+					base_amount: 50,
+					default: 1,
+				},
+				{
+					mode_of_payment: "Visa",
+					type: "Bank",
+					amount: 30,
+					base_amount: 30,
+				},
+			],
+		});
+
+		const { set_rest_amount } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 20),
+			getNetInvoiceAmount: () => 100,
+			currencyPrecision: ref(2),
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// Refocusing the Cash box, which the cashier already set to 50, must
+		// leave it untouched rather than recomputing it to the remainder (70).
+		set_rest_amount(invoiceDoc.value.payments[0]);
+
+		expect(invoiceDoc.value.payments[0].amount).toBe(50);
+		expect(invoiceDoc.value.payments[0].base_amount).toBe(50);
+	});
+
+	it("still auto-fills a genuinely empty box on focus even when currencyPrecision is provided", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [
+				{
+					mode_of_payment: "Cash",
+					type: "Cash",
+					amount: 50,
+					base_amount: 50,
+					default: 1,
+				},
+				{
+					mode_of_payment: "Visa",
+					type: "Bank",
+					amount: 0,
+					base_amount: 0,
+				},
+			],
+		});
+
+		const { set_rest_amount } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 50),
+			getNetInvoiceAmount: () => 100,
+			currencyPrecision: ref(2),
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		set_rest_amount(invoiceDoc.value.payments[1]);
+
+		expect(invoiceDoc.value.payments[1].amount).toBe(50);
+	});
+
+	it("does not overwrite an already-set negative return refund amount on refocus", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			is_return: 1,
+			payments: [
+				{
+					mode_of_payment: "Cash",
+					type: "Cash",
+					amount: -60,
+					base_amount: -60,
+					default: 1,
+				},
+				{
+					mode_of_payment: "Visa",
+					type: "Bank",
+					amount: -40,
+					base_amount: -40,
+				},
+			],
+		});
+
+		const { set_rest_amount } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => -100,
+			currencyPrecision: ref(2),
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		set_rest_amount(invoiceDoc.value.payments[0], true);
+
+		expect(invoiceDoc.value.payments[0].amount).toBe(-60);
+	});
+
 	it("auto-balances against the net settlement amount instead of gross totals", () => {
 		const invoiceDoc = ref<any>({
 			rounded_total: 500,
@@ -231,6 +352,112 @@ describe("usePaymentMethods", () => {
 
 		expect(invoiceDoc.value.payments[1].amount).toBe(100);
 		expect(invoiceDoc.value.payments[1].base_amount).toBe(100);
+	});
+
+	it("auto-balances larger amounts first by default when no comparator is given", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [
+				{ mode_of_payment: "Cash", type: "Cash", amount: 150, base_amount: 150, default: 1 },
+				{ mode_of_payment: "Visa", type: "Bank", amount: 20, base_amount: 20 },
+				{ mode_of_payment: "Card", type: "Bank", amount: 30, base_amount: 30 },
+			],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 100,
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// Editing "Card" leaves a 100 excess (150+20+30 - 100). The default
+		// (no comparator) sort reduces the largest other amount first: Cash (150)
+		// absorbs the whole excess, Visa is untouched.
+		autoBalancePayments(invoiceDoc.value.payments[2]);
+
+		expect(invoiceDoc.value.payments[0].amount).toBe(50);
+		expect(invoiceDoc.value.payments[1].amount).toBe(20);
+	});
+
+	it("respects a custom sortOthers comparator instead of the amount-descending default", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [
+				{ mode_of_payment: "Cash", type: "Cash", amount: 150, base_amount: 150, default: 1 },
+				{ mode_of_payment: "Visa", type: "Bank", amount: 20, base_amount: 20 },
+				{ mode_of_payment: "Card", type: "Bank", amount: 30, base_amount: 30 },
+			],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 100,
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// Custom comparator: reduce Visa before Cash, overriding the
+		// amount-descending default entirely.
+		autoBalancePayments(invoiceDoc.value.payments[2], 2, {
+			sortOthers: (a, b) =>
+				(a.mode_of_payment === "Visa" ? -1 : 1) - (b.mode_of_payment === "Visa" ? -1 : 1),
+		});
+
+		expect(invoiceDoc.value.payments[1].amount).toBe(0);
+		expect(invoiceDoc.value.payments[0].amount).toBe(70);
+	});
+
+	it("rebalances other boxes by recency against the net (credit-adjusted) settlement amount", () => {
+		// Simulates the preferred-box-direct-edit scenario: credit was forced
+		// first (net settlement = 700 instead of the 1000 grand total), the
+		// remaining 700 was split Cash (preferred, 400) / Visa (300), and the
+		// cashier then directly retypes Cash up to 500 -- getNetInvoiceAmount
+		// still reflects the credit-reduced total, so the excess must be
+		// computed against 700, not the 1000 gross.
+		const invoiceDoc = ref<any>({
+			rounded_total: 1000,
+			grand_total: 1000,
+			conversion_rate: 1,
+			payments: [
+				{ mode_of_payment: "Cash", type: "Cash", amount: 500, base_amount: 500, default: 1 },
+				{ mode_of_payment: "Visa", type: "Bank", amount: 300, base_amount: 300 },
+			],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 700, // 1000 - 300 customer credit already redeemed
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// Visa was edited before Cash, so a recency comparator (oldest-edited
+		// first) picks Visa to absorb the excess, leaving Cash's just-typed 500
+		// untouched -- mirrors rebalanceOtherPaymentsByRecency's sortOthers.
+		const editedAt: Record<string, number> = { Visa: 1, Cash: 2 };
+		autoBalancePayments(invoiceDoc.value.payments[0], 2, {
+			sortOthers: (a, b) => (editedAt[a.mode_of_payment] || 0) - (editedAt[b.mode_of_payment] || 0),
+		});
+
+		expect(invoiceDoc.value.payments[0].amount).toBe(500);
+		expect(invoiceDoc.value.payments[1].amount).toBe(200);
 	});
 
 	it("builds cash denomination suggestions from the net settlement amount", () => {
