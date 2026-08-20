@@ -3,6 +3,7 @@ import { ref, unref, type Ref, type ComputedRef } from "vue";
 import { getSmartTenderSuggestions } from "../../../../utils/smartTender";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
 import { isCashLikePaymentLine } from "../../../utils/cashTender";
+import { hasMeaningfulAmount } from "../../../utils/paymentInitialization";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -13,6 +14,7 @@ export interface PaymentMethodsOptions {
 	diffPayment?: ComputedRef<number>;
 	getNetInvoiceAmount?: () => number;
 	formatFloat?: (_val: any) => number;
+	currencyPrecision?: Ref<number>;
 	stores: {
 		toastStore: any;
 		uiStore: any;
@@ -44,6 +46,7 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		posProfile,
 		// diffPayment,
 		formatFloat,
+		currencyPrecision,
 		stores,
 		eventBus,
 		onSubmit,
@@ -122,6 +125,7 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 	const autoBalancePayments = (
 		excludePayment: any,
 		_currencyPrecision: number = 2,
+		options?: { sortOthers?: (_a: any, _b: any) => number },
 	) => {
 		const doc = unref(invoiceDoc);
 		if (!doc) return;
@@ -144,9 +148,10 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 				(p: any) => p !== excludePayment && flt(p.amount) > 0,
 			);
 
-			// Sort by amount descending to reduce larger chunks first
+			// Sort by amount descending to reduce larger chunks first, unless the
+			// caller supplies its own ordering (e.g. most-recently-edited first).
 			otherPayments.sort(
-				(a: any, b: any) => flt(b.amount) - flt(a.amount),
+				options?.sortOthers ?? ((a: any, b: any) => flt(b.amount) - flt(a.amount)),
 			);
 
 			let remaining_excess = excess;
@@ -270,6 +275,14 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 	};
 
 	const set_rest_amount = (payment: any, isReturn = false) => {
+		// Focusing a box that already carries a deliberately-entered amount
+		// (manually typed, or auto-filled and then left as-is) must not silently
+		// overwrite it -- only a genuinely empty box should get the helpful
+		// "fill in what's left" default.
+		if (hasMeaningfulAmount(payment, unref(currencyPrecision) ?? 2)) {
+			return;
+		}
+
 		const doc = unref(invoiceDoc);
 		const invoiceAmount = getInvoiceSettlementAmount();
 		const currentPaid = doc.payments.reduce(

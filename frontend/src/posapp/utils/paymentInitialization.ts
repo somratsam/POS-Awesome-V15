@@ -42,7 +42,7 @@ const roundToPrecision = (value: number, precision = 2): number => {
 	return Math.round((value + Number.EPSILON) * factor) / factor;
 };
 
-const hasMeaningfulAmount = (
+export const hasMeaningfulAmount = (
 	payment: PaymentLine | null | undefined,
 	precision = 2,
 ): boolean => {
