@@ -11,19 +11,28 @@ diving into the full chronological history.**
 
 ## Current State (as of 2026-08-20)
 
-No code changed between the latest dated section below (2026-08-18) and this
-documentation audit (2026-08-20) — this section just confirms and summarizes what was
-already true, it doesn't reflect new work.
+**`develop-swan` and `stable` are currently OUT OF SYNC** — see the payment-screen
+work below. Everything dated 2026-08-18 and earlier is content-identical between the
+two branches (verified via direct diff, not just commit ancestry — the two branches'
+histories diverge because of cherry-picking, but the resulting trees didn't, as of
+that date). Most recent work through 2026-08-18: the POS Invoice Items table layout
+fix (three rounds — section 28) and the "Deadlock Occurred" warning fix (section 26),
+both live in production, both cherry-picked to `stable` the same session they were
+built, per this fork's standing "prove it on staging, then promote" workflow.
 
-**posawesome.** `develop-swan` and `stable` are content-identical for every actual
-code file as of today (verified via direct diff, not just commit ancestry — the two
-branches' histories diverge because of cherry-picking, but the resulting trees don't).
-They differ only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits,
-which is expected: each branch narrates its own promotion story. Everything below has
-been cherry-picked to `stable` and deployed to production the same session it was
-built, per this fork's standing "prove it on staging, then promote" workflow. Most
-recent work: the POS Invoice Items table layout fix (three rounds — section 28) and
-the "Deadlock Occurred" warning fix (section 26), both live in production.
+**2026-08-20 payment-screen fixes (section 29) — `develop-swan` only, NOT on
+`stable`, NOT yet promoted to production.** Bug #1 (payment-box refocus overwriting a
+manually-typed amount) and bug #2 (the preferred-box direct-edit rebalance gap —
+wiring the previously-dead `autoBalancePayments()` into checkout) are both built and
+passing the full frontend regression check on `develop-swan`. Bug #3 (multi-"cash"-
+named-method validation gap) is documented but not fixed. None of this has been
+proven live on staging yet, unlike this fork's usual workflow for payment-related
+changes — do not assume it's in production. Check section 29's "Status" note and this
+file's own `git log` for whether it's been committed/promoted since this was written.
+
+**posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
+only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
+expected: each branch narrates its own promotion story.
 
 **swan_rewards** (companion app, separate repo — see `CLAUDE.md`'s "Companion app"
 note for the architecture). Live in production at `rewards.swan-intl.com` (own Frappe
@@ -2888,3 +2897,105 @@ production and confirmed working live on the original problem store PC.
 
 See `CLAUDE.md`'s "Layout Fixes on Vuetify Tables Need Real Browser
 Measurement" for the reusable lesson.
+
+## 29. Payment box refocus overwrite + preferred-box direct-edit rebalance gap (2026-08-20)
+
+### Background
+
+This continues a 3-bug payment-screen audit (bugs #1-#3 below) done in a prior
+session. That session was lost before its findings were written down anywhere
+in this file or `CLAUDE.md` — only bug #1's already-verified-working fix
+survived, sitting uncommitted in the working tree, confirmed still present at
+the start of this session. Bug #2's description (below) matches exactly what
+this session built from the approved design, carried over in the handoff
+prompt. **Bug #3's description below is reconstructed from reading the
+codebase this session, not from the original audit note — the original
+wording didn't survive, so if it resurfaces, sanity-check this description
+against whatever prompted the original finding.**
+
+**Bug #1 — refocus silently overwrote a manually-typed amount. Fixed.**
+`set_rest_amount()` (called on box focus to helpfully fill in "what's left")
+recomputed and overwrote the amount unconditionally, even when the box
+already held a deliberately-entered value (manually typed, or auto-filled
+and left as-is). Fixed by guarding on the existing `hasMeaningfulAmount()`
+helper (exported from `paymentInitialization.ts`) before recomputing —
+`usePaymentMethods.ts`'s `set_rest_amount` now returns early if the box
+already carries a meaningful amount. Verified live in the browser before
+this session started; this session confirmed the fix was still present,
+uncommitted, in the working tree, with its 3 tests already in
+`usePaymentMethods.spec.ts`.
+
+**Bug #2 — dead `autoBalancePayments()` safety net, never wired into
+checkout. Fixed this session.** `handlePaymentAmountChange()` already trued
+up the preferred payment line when a *non*-preferred box was edited
+(`rebalancePreferredPaymentCoverage()`), but had no counterpart for the
+reverse: directly editing the preferred box itself left the other boxes
+untouched, so the total could silently drift out of sync with the invoice.
+`autoBalancePayments()` existed in `usePaymentMethods.ts` (already used by
+`PurchasePaymentDialog.vue`) precisely to correct this kind of excess, but
+was never wired into the main checkout payment flow — a dead safety net.
+
+Fix: added an optional `sortOthers` comparator param to `autoBalancePayments()`
+(default unchanged — amount-descending); added `Payments.vue` state tracking
+the order in which the cashier has directly edited each payment box
+(`paymentEditSequenceCounter` / `lastEditedPaymentSequence`, bumped only in
+`handlePaymentAmountChange`, i.e. only for genuine UI-driven edits, never for
+programmatic rebalances; reset when a new invoice loads into the dialog via
+the `send_invoice_doc_payment` handler); added
+`rebalanceOtherPaymentsByRecency()`, gated the same way as
+`rebalancePreferredPaymentCoverage()` (skip for returns and credit sales),
+which calls `autoBalancePayments()` with a recency comparator that reduces
+the least-recently-edited/never-touched box first — so a box the cashier
+just typed into elsewhere isn't immediately clobbered by the rebalance.
+Wired into `handlePaymentAmountChange`'s previously-empty
+`payment === preferredPayment` branch. Reuses the same credit-aware
+`getNetInvoiceAmount()` path `autoBalancePayments()` already had, so it
+balances against the net (credit-adjusted) settlement amount, not the gross
+total — covered by a dedicated test. `autoBalancePayments()` is no longer a
+dead safety net: it's live in both `PurchasePaymentDialog.vue` and, as of
+today, the main checkout `Payments.vue` flow.
+
+**Bug #3 — multi-"cash"-named-payment-method validation gap. Still open, not
+fixed.** `isCashLikePaymentLine()` (`frontend/src/posapp/utils/cashTender.ts`,
+lines 21-38) identifies "the" cash line via `mode.includes("cash")` — a plain
+case-insensitive substring match on `mode_of_payment`, with no
+dedup/disambiguation if a POS Profile configures more than one payment method
+whose name contains "cash" (e.g. "Cash" + "Petty Cash" + "Cash on Delivery").
+`resolvePreferredPaymentLine()`, `rebalancePreferredPaymentCoverage()`,
+today's new `rebalanceOtherPaymentsByRecency()`, and the quick-cash-tender
+denomination suggestions (`getQuickCashTenderSuggestions()`, same file) all
+funnel through this one heuristic, so all of them would inherit whatever
+ambiguity multiple matches created — most likely picking whichever line
+happens to be `default: 1` or appears first, silently, rather than validating
+there's exactly one true cash line. No store on this fork is currently
+configured with more than one cash-like-named payment method, so this hasn't
+surfaced in production. Not investigated further or fixed this session — see
+the caveat above about this description's provenance.
+
+### Deferred / open items for next session
+
+- **Bug #3 above** (multi-"cash"-named-method validation gap) — not fixed;
+  needs its own investigation starting from `cashTender.ts`'s
+  `isCashLikePaymentLine()`, plus confirmation of what the original audit
+  actually found, if that can be recovered.
+- **Credit-forced-after-fill gap (explicitly out of scope this session):** a
+  different gap from bug #2, where payment boxes are filled first and
+  customer credit only becomes *newly forced* afterward (via the existing
+  credit-eligibility watcher in `Payments.vue`, a separate code path from
+  `handlePaymentAmountChange`) can leave Cash/other boxes over-target with
+  nothing correcting them. Not built in this session — the credit-eligibility
+  watcher would need its own rebalance call (likely reusing
+  `autoBalancePayments()`/`rebalanceOtherPaymentsByRecency()`), but that
+  watcher's trigger conditions and interaction with
+  `is_credit_sale`/`is_return` need their own investigation before changing
+  it.
+
+### Status
+
+Built and tested on `develop-swan` only (bug #1 fix + bug #2 fix, 6 new/
+updated tests total across `usePaymentMethods.spec.ts`). **Not yet committed,
+not yet promoted to `stable`** — full regression check passed (frontend suite
+225/225 files, 1119/1119 tests; `bench build --app posawesome` clean) but this
+has not yet been proven live on staging the way this fork's other payment
+changes have been before promotion (see e.g. section 26, section 28). Do not
+assume this is in production.
