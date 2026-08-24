@@ -1,6 +1,6 @@
 # POS Awesome — develop-swan Fork Progress Notes
 
-Last updated: 2026-08-20
+Last updated: 2026-08-24
 
 This file exists so a future session (mine or another Claude Code session) can pick up
 context on this fork quickly without re-deriving it from scratch. If you're starting
@@ -2990,12 +2990,67 @@ the caveat above about this description's provenance.
   `is_credit_sale`/`is_return` need their own investigation before changing
   it.
 
+  **Verification status (2026-08-24): manually spot-checked on staging by
+  the user, did NOT reproduce — but not fully proven across all variations
+  yet. Treat as still open, revisit later, not urgent.** The user's manual
+  repro: filled Cash=20, Master Card=5, added a second item to push the
+  total up, then toggled "Use Customer Balance" ON (after crossing the
+  credit threshold, never passing through a blocked state first). Result:
+  credit applied (97.20), Cash/Master Card stayed at 20.00/5.00 unchanged,
+  Visa (preferred) correctly absorbed the exact remainder (65.70), total
+  matched the invoice exactly, no change due, submit worked normally — no
+  bug in that run.
+
+  A separate live-repro attempt earlier the same session (via a live
+  Playwright session against staging, using a purpose-built test customer
+  with a real 30 OMR credit balance) independently confirmed bug #2's fix
+  works live through the point where boxes are manually filled while credit
+  is toggled ON but blocked (Cash=10 → Visa auto-drops 25→15; Master
+  Card=15 → Visa auto-drops to 0), but could not reach the actual
+  threshold-crossing step live (blocked by an unrelated finding: the test
+  item showed Available QTY=0 in the POS item search and the frontend
+  clamped any qty increase back to 0, even though the item is a non-stock
+  service item — noted below as a possible separate issue, not chased
+  further). So the "does this actually manifest" question for steps 6-10
+  of that plan was answered by the user's manual test instead, not by that
+  live-repro attempt.
+
+  Why these two don't necessarily contradict each other: the code path
+  (`rebalancePreferredPaymentLine()` in `paymentInitialization.ts`) only
+  ever adjusts the *preferred* box, computed as
+  `invoiceTotal - coveredAmount(credit+loyalty+giftcard) - otherPaymentsTotal`,
+  clamped to a minimum of 0. The gap can only actually produce an
+  over-target total when `otherPaymentsTotal + coveredAmount > invoiceTotal`
+  (i.e. the preferred box would need to go negative to balance, but clamps
+  to 0 instead, leaving the excess on the other boxes). In the user's run,
+  `otherPaymentsTotal (25) + credit (97.20) = 122.20`, well under the
+  invoice total (187.90) — Visa had room to absorb the difference cleanly,
+  so the clamp-to-0 case was never triggered. The scenario most likely
+  still needs the *other* boxes to already be filled close to (or above)
+  what's left once credit is factored in — closer to the original
+  live-repro's numbers (Cash 10 + Master Card 15 = 25 against a
+  credit-reduced remainder of 20) than the user's (25 against a
+  credit-reduced remainder of 90.70). Next attempt should deliberately
+  construct that tighter-margin case rather than an arbitrary second item.
+
+- **Possible separate finding, not investigated:** during the live-repro
+  attempt above, a non-stock service item (`is_stock_item = 0`) showed
+  "Available QTY: 0" in the POS item search UI, and typing a cart qty above
+  0 for it was clamped back to 0 client-side with the toast "Maximum
+  available quantity is 0.00. Quantity adjusted to match stock." — i.e. a
+  stock-availability ceiling was enforced against an item that shouldn't be
+  stock-constrained at all. Could be specific to that one item's setup
+  rather than a general bug; not confirmed either way, not investigated
+  further this session.
+
 ### Status
 
-Built and tested on `develop-swan` only (bug #1 fix + bug #2 fix, 6 new/
-updated tests total across `usePaymentMethods.spec.ts`). **Not yet committed,
-not yet promoted to `stable`** — full regression check passed (frontend suite
-225/225 files, 1119/1119 tests; `bench build --app posawesome` clean) but this
-has not yet been proven live on staging the way this fork's other payment
-changes have been before promotion (see e.g. section 26, section 28). Do not
-assume this is in production.
+Built, tested, and **committed to `develop-swan`**: docs in `7f4f82b`, code
+(bug #1 fix + bug #2 fix, 6 new/updated tests across `usePaymentMethods.spec.ts`)
+in `6ac45e5`. **Not yet promoted to `stable`** — full regression check passed
+(frontend suite 225/225 files, 1119/1119 tests; `bench build --app posawesome`
+clean) and bug #2's fix has since been partially confirmed live on staging
+(see the verification note above), but this has not gone through this fork's
+full "prove it on staging, then promote" cycle the way other payment changes
+have (see e.g. section 26, section 28) — the credit-forced-after-fill
+follow-up above is still open. Do not assume this is in production.
