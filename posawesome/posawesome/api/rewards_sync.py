@@ -11,9 +11,10 @@ Two entry points, both wired via scheduler_events in hooks.py:
 - run_incremental_sync(): every 15 minutes, only rows changed since the
   last watermark.
 - run_full_refresh(): once daily, every non-generic customer regardless of
-  whether anything changed -- catches loyalty-point *expiry*, which shifts
-  a customer's balance with no corresponding "modified" timestamp anywhere
-  for a watermark to catch.
+  whether anything changed -- catches balance drift with no corresponding
+  "modified" timestamp anywhere for a watermark to catch, e.g. a change to
+  the Loyalty Program's own conversion_factor, which recomputes every
+  customer's loyalty_value without touching any individual Customer record.
 
 Generic/walk-in customers (posa_is_generic_customer) are excluded at the
 source query itself -- they are never computed, never batched, never sent.
@@ -28,8 +29,8 @@ Receipt PDFs (Step 8): generated only during incremental runs, gated by
 Sales Invoice.posa_receipt_synced so an already-synced receipt is never
 regenerated -- set only after a confirmed successful push, so a failed
 run retries on the next tick rather than silently losing the receipt.
-Full-refresh never touches receipts; its job is catching summary drift
-(e.g. point expiry), not re-processing immutable invoices. PDF generation
+Full-refresh never touches receipts; its job is catching summary drift,
+not re-processing immutable invoices. PDF generation
 requires frappe.utils.set_request() since the scheduler has no real HTTP
 request (frappe.get_print() otherwise raises inside Werkzeug's
 context-local proxy), and a custom 76mm page width matching the print
@@ -167,8 +168,6 @@ def _build_customer_payload(customer_name):
 
 	loyalty_points = 0
 	loyalty_value = 0
-	expiry_amount = 0
-	expiry_date = None
 
 	if customer.loyalty_program:
 		details = get_loyalty_program_details_with_points(
@@ -181,25 +180,6 @@ def _build_customer_payload(customer_name):
 		conversion_factor = details.get("conversion_factor") or 0
 		loyalty_value = loyalty_points * conversion_factor
 
-		nearest_expiry = frappe.db.sql(
-			"""
-			SELECT expiry_date, SUM(loyalty_points) AS points
-			FROM `tabLoyalty Point Entry`
-			WHERE customer = %s
-			  AND loyalty_program = %s
-			  AND expiry_date >= CURDATE()
-			  AND loyalty_points > 0
-			GROUP BY expiry_date
-			ORDER BY expiry_date ASC
-			LIMIT 1
-			""",
-			(customer_name, customer.loyalty_program),
-			as_dict=True,
-		)
-		if nearest_expiry:
-			expiry_amount = float(nearest_expiry[0]["points"] or 0)
-			expiry_date = nearest_expiry[0]["expiry_date"]
-
 	return {
 		"source_customer_id": customer_name,
 		"customer_name": customer.customer_name,
@@ -207,8 +187,6 @@ def _build_customer_payload(customer_name):
 		"loyalty_portal_code": customer.posa_loyalty_portal_code,
 		"loyalty_points": float(loyalty_points or 0),
 		"loyalty_value": float(loyalty_value or 0),
-		"expiry_amount": expiry_amount,
-		"expiry_date": str(expiry_date) if expiry_date else None,
 	}
 
 
