@@ -19,19 +19,20 @@ table layout fix (three rounds — section 28) and the "Deadlock Occurred"
 warning fix (section 26), both live in production, both cherry-picked to
 `stable` the same session they were built.
 
-**Payment-screen work, 2026-08-20 through 2026-08-25 (sections 29-30).** Bug #1
-(payment-box refocus overwriting a manually-typed amount) and bug #2
-(preferred-box direct-edit rebalance, both directions) are both fixed,
-unit-tested, and cherry-picked onto `stable` (`9406b79`, `45525cb`) — bug #2
-specifically went through a first promotion that turned out to be only
-half-fixed live (missing a symmetric "deficit" branch in
-`autoBalancePayments()`, caught by the user in production), a corrected fix,
-and the user's own live verification of both directions on staging before this
-second promotion. **`stable`/GitHub has both fixes as of this writing — the
-production SERVER itself still needs its own pull/build/restart, handed to the
-user to run.** Check whether that's actually happened before assuming
-production is current. Bug #3 (multi-"cash"-named-method validation gap) and
-the credit-forced-after-fill gap remain documented-only, not built.
+**Payment-screen work, 2026-08-20 through 2026-08-25 (sections 29-30) — DONE,
+deployed, verified.** Bug #1 (payment-box refocus overwriting a
+manually-typed amount) and bug #2 (preferred-box direct-edit rebalance, both
+directions) are both fixed, unit-tested, cherry-picked onto `stable`
+(`9406b79`, `45525cb`), deployed to the production server (pull/build/restart),
+and **confirmed working live on production by the user, both directions of
+bug #2 included.** Bug #2 specifically went through a first promotion that
+turned out to be only half-fixed live (missing a symmetric "deficit" branch
+in `autoBalancePayments()`, caught by the user in production), a corrected
+fix, the user's own live verification of both directions on staging, a
+second promotion, and finally live verification on production itself — see
+section 30 for the full sequence. Bug #3 (multi-"cash"-named-method
+validation gap) and the credit-forced-after-fill gap remain documented-only,
+not built — the only open items from this arc.
 
 **posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
 only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
@@ -3061,7 +3062,7 @@ follow-up above is still open. Do not assume this is in production.
 **Superseded by section 30 — `6ac45e5` was promoted to `stable`/production
 the same day, and a real regression was found there. See below.**
 
-## 30. Bug #2's fix promoted, then found broken in production for one direction (2026-08-24 → 2026-08-25)
+## 30. Bug #2's fix promoted, found broken in production, corrected, reverified live (2026-08-24 → 2026-08-25) — RESOLVED
 
 **Promotion.** `6ac45e5` (bug #1 + bug #2 fixes) cherry-picked cleanly onto
 `stable` as `9406b79` (diff verified byte-identical), full regression check
@@ -3136,6 +3137,15 @@ convention that each branch narrates its own promotion story in its own
 
 Production-side deployment (pull / `bench build --app posawesome` — required,
 frontend files changed / `bench migrate` — N/A, no doctype/fixture/print-format
-touched / restart) handed to the user to run themselves, same pattern as every
-other promotion this fork. Not run by this session — check whether it's
-actually live before assuming so.
+touched / restart) run by the user themselves, same pattern as every other
+promotion this fork.
+
+**Deployed and verified live on production.** The user confirmed both
+directions of bug #2's fix (increasing and decreasing the preferred payment
+box) working correctly on the actual production server, not just staging or
+`stable`/GitHub. Bug #1 and bug #2 are both fully closed as of 2026-08-25 —
+built, tested, promoted, deployed, and live-verified on production. Only
+open items remaining from this whole payment-screen arc are bug #3
+(multi-"cash"-named-method validation gap) and the credit-forced-after-fill
+gap, both still documented-only, not built (see section 29's "Deferred /
+open items" for both).

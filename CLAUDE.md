@@ -364,6 +364,62 @@ regardless of config (bug #2). Only after fixing both, plus a third
 now-narrower columns (bug #3, fixed by shortening the labels), did a fresh
 measurement sweep from 1100-1920px window width show zero overflow anywhere.
 
+## A Rebalance/Auto-Correct Function Needs Both Directions Tested, Not Just the One You Designed For
+
+When adding logic that automatically corrects one value against another (a
+payment box against an invoice total, a quantity against a limit, etc.),
+explicitly design and test BOTH directions it can be wrong in -- too much
+and too little -- even if the feature request or bug report only describes
+one of them. A function that only handles "the total is now too high, shrink
+something" is not a general rebalance; it's half of one, and the missing
+half won't show up in testing unless someone deliberately exercises the
+opposite direction.
+
+Concrete example that happened in this repo: `autoBalancePayments()`
+(`usePaymentMethods.ts`) was built to fix a specific reported gap --
+directly editing the POS payment screen's preferred payment box didn't
+rebalance the other boxes. The fix added a working `if (excess > 0)` branch
+that shrinks other payment boxes when an edit creates an overpayment. It
+shipped, passed its own tests, was promoted to `stable`, and deployed to
+production -- where the user found it only half-worked: decreasing the
+preferred box (creating a shortfall, not an excess) left the other box
+"stuck," since there was no corresponding branch to grow another box to
+cover a deficit. Every test written for the fix, and the live/manual
+verification done before promoting it, exercised only the excess direction
+-- the one the original bug report described -- so nothing caught the
+missing half until a real cashier hit it in production. See
+`PROGRESS_NOTES.md` section 30 for the full incident, root-cause trace, and
+the corrected fix (a symmetric deficit branch, plus tests for both
+directions this time).
+
+## Playwright E2E Against This POS App: Time-Box Terminal-Lock/Login Friction, Don't Fight It
+
+Live browser reproduction against this app's real POS screens (staging or
+production) is valuable and sometimes necessary to actually prove a bug or a
+fix -- but the terminal-lock/cashier-PIN unlock dialog, POS Opening Shift
+dialog, and item-search/cart interaction mechanics have repeatedly eaten
+30+ minutes of a session on script/selector mechanics rather than the actual
+bug under investigation, across separate sessions and separate bugs. Set an
+explicit time box (10-15 minutes is reasonable) before attempting a live
+Playwright repro of a specific hypothesis, and if it's not through by then,
+stop and report what a careful code read found instead of continuing to
+fight the harness -- a precise code-level diagnosis, clearly labeled as
+"not yet live-verified," is more useful than another 30 minutes of ETIMEDOUT/
+overlay-scrim/re-locked-terminal retries. A user manually testing in their
+own browser has repeatedly resolved these faster than automating around the
+friction.
+
+Concrete example that happened in this repo: both the credit-eligibility
+gap investigation (`PROGRESS_NOTES.md` section 29) and the payment-box
+deficit-direction regression (section 30) hit this same friction --
+`ensureAuthoritativeTerminalUnlock()`'s cashier-matching logic failing
+against a freshly-provisioned test user, a `Terminal Locked` dialog
+reappearing after an unrelated click landed on the wrong element, and a
+"Maximum available quantity is 0.00" stock clamp on a non-stock item
+blocking an unrelated qty-edit step. In both cases, stopping to report a
+precise code-level trace (later confirmed correct by the user's own manual
+testing) got to a decision faster than continuing to debug the automation.
+
 ## Build Commands
 
 ### Main Build Commands
