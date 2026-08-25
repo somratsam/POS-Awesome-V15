@@ -230,6 +230,13 @@ def get_invoice_for_return(invoice_name, pos_profile=None, doctype="Sales Invoic
         "doctype": doctype,
         "customer": invoice_doc.customer,
         "customer_name": invoice_doc.customer_name,
+        # Lets the frontend steer staff toward "Return without Invoice" up
+        # front, before they fill out a whole return that would fail the
+        # server-side guard against pooling store credit onto a shared
+        # customer account -- see _guard_generic_customer_stored_credit.
+        "posa_customer_is_generic": cint(
+            frappe.db.get_value("Customer", invoice_doc.customer, "posa_is_generic_customer")
+        ),
         "grand_total": invoice_doc.grand_total,
         # Paid/outstanding state of the ORIGINAL invoice. Used to decide how much
         # of a return may be refunded as cash vs. applied as a credit note.

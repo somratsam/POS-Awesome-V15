@@ -1406,6 +1406,7 @@ def _normalize_return_payment_rows(
     invoice_doc.base_paid_amount = flt(sum(p.base_amount for p in invoice_doc.payments or []))
 
     _guard_return_cash_refund(invoice_doc, pos_profile_doc, enforce_credit_only_policy)
+    _guard_generic_customer_stored_credit(invoice_doc, enforce_credit_only_policy)
 
 
 def _payment_row_key(row):
@@ -1533,6 +1534,11 @@ def _guard_return_cash_refund(invoice_doc, pos_profile_doc=None, enforce_credit_
        amount the customer actually paid on the original invoice and reject
        anything beyond it so the error surfaces instead of silently losing
        money.
+
+    See also _guard_generic_customer_stored_credit, a sibling check called
+    right after this one from the same call site (_normalize_return_payment_rows)
+    -- this function governs how much cash a return may refund; that one
+    governs who a resulting store credit is allowed to be attributed to.
     """
     if not invoice_doc.get("is_return"):
         return
@@ -1574,6 +1580,64 @@ def _guard_return_cash_refund(invoice_doc, pos_profile_doc=None, enforce_credit_
                 return_against,
             )
         )
+
+
+def _guard_generic_customer_stored_credit(invoice_doc, enforce_credit_only_policy=False):
+    """Block a credit-issuing return linked to a shared/anonymous customer.
+
+    Customer records flagged posa_is_generic_customer (e.g. a walk-in
+    "Anonymous" customer reused across many unrelated sales) are shared
+    buckets, not individually tracked people. posa_is_generic_customer's
+    only existing effect elsewhere (customer.py's ensure_loyalty_portal_code)
+    is clearing loyalty_program/posa_loyalty_portal_code -- a cosmetic
+    loyalty-points gap. Store credit is real money: if a return against an
+    invoice originally billed to a generic customer is recorded as credit
+    (via posa_returns_credit_only, or the cashier just leaving every payment
+    at 0 / toggling "Store as Credit?"), that credit pools onto the shared
+    account and becomes redeemable by whichever unrelated person is next
+    selected as that same customer -- not the person who actually returned
+    the item.
+
+    Only checked when linked to an original invoice (return_against set).
+    ERPNext's own core return validation (validate_return_against in
+    erpnext/controllers/sales_and_purchase_return.py, run on every save of
+    a return via AccountsController.validate) requires the return's
+    customer to exactly match return_against's customer -- there is no way
+    to keep the link and swap in a different (real) customer instead, so
+    staff must use "Return without Invoice" (posa_allow_return_without_invoice),
+    which never sets return_against and so is unaffected by this check.
+
+    Same timing as _guard_return_cash_refund: only enforced when
+    enforce_credit_only_policy is True (genuine final submission), never
+    during update_invoice's draft-save/cart-building calls, where payment
+    amounts may still be in an intermediate, not-yet-decided state.
+    """
+    if not invoice_doc.get("is_return") or not enforce_credit_only_policy:
+        return
+
+    if not invoice_doc.get("return_against") or not invoice_doc.get("customer"):
+        return
+
+    refund = abs(flt(invoice_doc.paid_amount))
+    return_total = abs(flt(invoice_doc.get("rounded_total") or invoice_doc.get("grand_total")))
+    tolerance = 1.0 / (10 ** (cint(invoice_doc.precision("paid_amount")) or 2))
+    if refund >= return_total - tolerance:
+        # Fully refunded in cash/other tender -- no credit is left behind,
+        # so which customer this is attributed to doesn't matter here.
+        return
+
+    if not cint(frappe.db.get_value("Customer", invoice_doc.customer, "posa_is_generic_customer")):
+        return
+
+    frappe.throw(
+        _(
+            'This return is linked to an original invoice recorded under "{0}", a '
+            "shared/anonymous customer account. Store credit can't be issued to it "
+            '-- it would be redeemable by any future customer selected as "{0}", '
+            'not just the person returning this item. Use "Return without Invoice" '
+            "instead and select or create the real customer."
+        ).format(invoice_doc.customer)
+    )
 
 
 def _mode_of_payment_names(invoice_doc):

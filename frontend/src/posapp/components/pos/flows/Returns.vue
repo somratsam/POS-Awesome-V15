@@ -738,6 +738,27 @@ export default {
 					return;
 				}
 
+				// This original invoice was billed to a shared/anonymous customer
+				// account -- store credit issued on a linked return would pool onto
+				// it, redeemable by any future customer selected as the same
+				// generic account, not just whoever actually returns this item.
+				// return_against locks the return's customer to match this one
+				// exactly (ERPNext's own core return validation), so there is no
+				// way to swap in the real customer while keeping the link -- stop
+				// here rather than let staff fill out the whole return first. The
+				// server enforces the authoritative version of this at submission
+				// (see _guard_generic_customer_stored_credit).
+				if (return_doc.posa_customer_is_generic) {
+					this.toastStore.show({
+						title: __(
+							'"{0}" is a shared/anonymous customer account -- store credit can\'t be issued to it. Use "Return without Invoice" instead and select or create the real customer.',
+							[return_doc.customer_name || return_doc.customer],
+						),
+						color: "error",
+					});
+					return;
+				}
+
 				const invoice_doc = {};
 				const items = [];
 
