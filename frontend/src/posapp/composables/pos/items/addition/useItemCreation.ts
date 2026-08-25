@@ -324,5 +324,6 @@ export function useItemCreation() {
 		getNewItem,
 		prepareItemForCart,
 		handleVariantItem,
+		fetchItemVariantsMeta,
 	};
 }

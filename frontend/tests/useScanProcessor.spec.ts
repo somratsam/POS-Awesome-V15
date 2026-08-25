@@ -86,6 +86,7 @@ const makeContext = (
 			scanErrorMessage: ref(""),
 			scanErrorCode: ref(""),
 			scanErrorDetails: ref(""),
+			scanVariantHint: ref<any>(null),
 		},
 		searchCache: ref(new Map()),
 		eventBus: {
@@ -341,5 +342,74 @@ describe("useScanProcessor serial scan handling", () => {
 		expect(addedItem.uom).toBe("Box");
 		expect(addedItem.rate).toBe(120);
 		expect(addedItem.conversion_factor).toBe(12);
+	});
+
+	it("sets the scan-variant hint after scan-adding an item that belongs to a variant family", async () => {
+		const ctx = makeContext();
+		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
+
+		await addScannedItemToInvoice(
+			createScannableItem({
+				item_code: "ITEM-BLUE-M",
+				item_name: "Style 123 - Blue - Medium",
+				variant_of: "STYLE-123",
+			}),
+			"BARCODE-BLUE-M",
+		);
+
+		expect(ctx.scannerInput.scanVariantHint.value).toEqual({
+			itemCode: "ITEM-BLUE-M",
+			itemName: "Style 123 - Blue - Medium",
+			variantOf: "STYLE-123",
+		});
+	});
+
+	it("does not set a scan-variant hint for a plain (non-variant) item, and clears a stale one from an earlier scan", async () => {
+		const ctx = makeContext();
+		ctx.scannerInput.scanVariantHint.value = {
+			itemCode: "ITEM-BLUE-M",
+			itemName: "Style 123 - Blue - Medium",
+			variantOf: "STYLE-123",
+		};
+		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
+
+		await addScannedItemToInvoice(
+			createScannableItem({ item_code: "ITEM-PLAIN", variant_of: undefined }),
+			"BARCODE-PLAIN",
+		);
+
+		expect(ctx.scannerInput.scanVariantHint.value).toBeNull();
+	});
+
+	it("replaces the scan-variant hint (not accumulates) when a second variant item is scanned", async () => {
+		const ctx = makeContext();
+		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
+
+		await addScannedItemToInvoice(
+			createScannableItem({ item_code: "ITEM-BLUE-M", variant_of: "STYLE-123" }),
+			"BARCODE-BLUE-M",
+		);
+		await addScannedItemToInvoice(
+			createScannableItem({ item_code: "ITEM-RED-L", variant_of: "STYLE-999" }),
+			"BARCODE-RED-L",
+		);
+
+		expect(ctx.scannerInput.scanVariantHint.value).toMatchObject({
+			itemCode: "ITEM-RED-L",
+			variantOf: "STYLE-999",
+		});
+	});
+
+	it("still adds a variant item to the invoice normally -- the hint is additive, not a gate", async () => {
+		const ctx = makeContext();
+		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
+
+		await addScannedItemToInvoice(
+			createScannableItem({ item_code: "ITEM-BLUE-M", variant_of: "STYLE-123" }),
+			"BARCODE-BLUE-M",
+		);
+
+		expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
+		expect(ctx.itemAddition.addItem.mock.calls[0][0].item_code).toBe("ITEM-BLUE-M");
 	});
 });

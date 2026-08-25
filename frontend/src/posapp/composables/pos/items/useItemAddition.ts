@@ -35,8 +35,12 @@ export function useItemAddition() {
 		groupAndAddItemDebounced,
 	} = useItemMerging() as any;
 
-	const { getNewItem, prepareItemForCart, handleVariantItem } =
-		useItemCreation() as any;
+	const {
+		getNewItem,
+		prepareItemForCart,
+		handleVariantItem,
+		fetchItemVariantsMeta,
+	} = useItemCreation() as any;
 
 	const { shouldAutoSetBatch, showBatchDialog, handleItemExpansion } =
 		useItemBatchSerial() as any;
@@ -1106,5 +1110,6 @@ export function useItemAddition() {
 		groupAndAddItemDebounced,
 		handleVariantItem,
 		prepareItemForCart,
+		fetchItemVariantsMeta,
 	};
 }
