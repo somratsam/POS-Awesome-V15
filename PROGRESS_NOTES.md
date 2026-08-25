@@ -3299,8 +3299,35 @@ generic-customer condition happens to apply. Live-verified on staging via
 throws for it and does not throw for a real customer, using the actual
 production code path (not mocked).
 
-**Status: built, tested, verified live on staging (not yet through this
-fork's promote-to-`stable` cycle) -- not yet committed.**
+**Follow-up bug, found by the user's own live testing, fixed same day
+(`2933f33`).** The user tested both client-side entry points live:
+`InvoiceManagement.vue`'s worked correctly (exact guard message shown).
+`Returns.vue`'s blocked the return correctly but instead of the guard
+message, staff saw a raw JS error: "Cannot read properties of undefined
+(reading 'show')". Root cause, confirmed by directly comparing
+`Returns.vue`'s `setup()` against `InvoiceManagement.vue`'s working one
+(not guessed): `Returns.vue` never called `useToastStore()` or returned
+it from `setup()` at all -- unlike every other component in this app that
+uses `this.toastStore`. **Every single `this.toastStore.show()` call in
+this file was already broken before today**, including three pre-existing
+ones (invoice-load error, "no returnable items", search error) -- nobody
+had apparently ever reliably hit any of them before the new guard, which
+staff now exercise routinely. Fixed by adding the same
+`import { useToastStore } from "../../../stores/toastStore"` /
+`useToastStore()` / return wiring `InvoiceManagement.vue` already has.
+Live browser re-verification of this specific fix was attempted but
+hit the same pre-existing terminal-lock/browser-automation friction
+documented earlier in this same section and in `CLAUDE.md` -- stopped
+per that same lesson rather than continuing to fight it; confidence
+instead comes from the direct side-by-side code comparison (not a guess)
+plus a clean `bench build` and full frontend suite (226/226, 1125/1125).
+**Worth a quick manual spot-check** given live verification didn't
+happen this time.
+
+**Status: built, tested (226/226 files, 1125/1125 tests both times),
+verified live on staging for the guard logic itself -- committed to
+`develop-swan` (`248b473` fix, `e1c79b2` docs, `2933f33` the toastStore
+follow-up fix) but not yet through this fork's promote-to-`stable` cycle.**
 
 **Reminder, per the user's explicit request: they still need to check
 PRODUCTION directly (not staging) for any store credit already pooled on
