@@ -82,8 +82,8 @@ card in `www/index.html` — HTML/CSS/JS/both locale strings). Both repos' code
 promoted to `stable`/GitHub main and deployed to production; the user confirmed the
 portal correctly shows no expiry section and points display normally, live.
 
-**Variant sibling scan hint, Phase 1 (section 33) — built, staging-verified,
-promotion in progress.** New feature: after scanning an item that belongs to a
+**Variant sibling scan hint, Phase 1 (section 33) — DONE, deployed, verified
+on production.** New feature: after scanning an item that belongs to a
 variant family, a small dismissible hint offers to show other sizes/colors in
 stock at this store; tapping it reuses the existing `Variants.vue` dialog with
 an on-demand fetch (no fetch on every scan). Found and fixed two real bugs
@@ -95,8 +95,12 @@ the pre-existing template-item trigger's contract) and a completely
 non-functional (dead Vuetify-2-class) selected-state indicator on the variant
 filter chips, affecting both the new and the pre-existing template-item dialog
 equally. All three pieces committed together (`f16a89c`), full regression
-green (226/226 files, 1130/1130 tests), confirmed working live on staging by
-the user. Not yet promoted to `stable`/production as of this note.
+green on both `develop-swan` and `stable` (226/226 files, 1130/1130 tests
+each), cherry-picked to `stable` (`6684e78`), pushed to GitHub, deployed to
+production (pull, `bench build` -- frontend-only change, no migrate needed --
+`bench restart`), and **confirmed working live on production by the user**:
+scan, hint, dialog, and selected-state chips all verified with the same real
+barcode (89410444020014).
 
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
@@ -3613,13 +3617,22 @@ inferred as `Ref<null>` permanently (TypeScript can't widen a bare
 `ItemsSelector.vue`. Fixed with an explicit generic:
 `ref<{ itemCode: string; itemName: string; variantOf: string } | null>(null)`.
 
-**Promoted:** all three pieces committed to `develop-swan` in one commit
-(`f16a89c`) -- the feature, the blinking-dialog fix, and the chip
-selected-state fix were built and verified together in the same
-session, so they're recorded as one story here and in the commit
-message rather than split. User confirmed all three working live on
-staging (real barcode 89410444020014: item adds normally, hint appears,
-"View" opens the dialog cleanly with no blinking, siblings show correct
-same-store stock, and filter chips now show a clear selected state in
-both the new dialog and the existing template-item one) before any
-promotion toward `stable`/production.
+**Promoted, pushed, deployed, and verified live on production -- DONE.**
+All three pieces committed to `develop-swan` in one commit (`f16a89c`)
+-- the feature, the blinking-dialog fix, and the chip selected-state fix
+were built and verified together in the same session, so they're
+recorded as one story here and in the commit message rather than split.
+User confirmed all three working live on staging first (real barcode
+89410444020014: item adds normally, hint appears, "View" opens the
+dialog cleanly with no blinking, siblings show correct same-store
+stock, and filter chips now show a clear selected state in both the new
+dialog and the existing template-item one) before any promotion.
+Cherry-picked onto `stable` as `6684e78` (diff verified byte-identical
+against `f16a89c` on every touched code file), full regression re-run
+on `stable` itself (clean `bench build`, 226/226 files, 1130/1130
+tests), both branches pushed to GitHub. Production deploy: `git pull` +
+`bench build --app posawesome` (frontend-only change, no
+doctype/fixture/print-format touched, so no `migrate` needed) + `bench
+restart`, run by the user. **Confirmed working live on production by
+the user** with the same real barcode -- scan, hint, dialog, and
+selected-state chips all verified.
