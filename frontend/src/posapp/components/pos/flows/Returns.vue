@@ -327,6 +327,7 @@
 import format, { formatUtils } from "../../../format";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
 import { useUIStore } from "../../../stores/uiStore.js";
+import { useToastStore } from "../../../stores/toastStore";
 import { computed } from "vue";
 import { useResponsive } from "../../../composables/core/useResponsive";
 import { useTheme } from "../../../composables/core/useTheme";
@@ -336,6 +337,7 @@ export default {
 	setup() {
 		const invoiceStore = useInvoiceStore();
 		const uiStore = useUIStore();
+		const toastStore = useToastStore();
 		const responsive = useResponsive();
 		const theme = useTheme();
 		const isCompactReturns = computed(() => responsive.windowWidth.value < 1100);
@@ -348,6 +350,7 @@ export default {
 		return {
 			invoiceStore,
 			uiStore,
+			toastStore,
 			isCompactReturns,
 			returnsDialogWidth,
 			returnsDialogMaxWidth,
