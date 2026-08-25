@@ -11,28 +11,27 @@ diving into the full chronological history.**
 
 ## Current State (as of 2026-08-25)
 
-**`develop-swan` and `stable` are currently OUT OF SYNC, and `stable`/production
-currently has a KNOWN HALF-BROKEN payment fix live — see section 30.** Everything
-dated 2026-08-18 and earlier is content-identical between the two branches
-(verified via direct diff). Most recent fully-proven work through 2026-08-18:
-the POS Invoice Items table layout fix (three rounds — section 28) and the
-"Deadlock Occurred" warning fix (section 26), both live in production, both
-cherry-picked to `stable` the same session they were built.
+**`develop-swan` and `stable` are OUT OF SYNC only in their own docs commits —
+see section 30 for the full payment-screen story.** Everything dated 2026-08-18
+and earlier is content-identical between the two branches (verified via direct
+diff). Most recent fully-proven work through 2026-08-18: the POS Invoice Items
+table layout fix (three rounds — section 28) and the "Deadlock Occurred"
+warning fix (section 26), both live in production, both cherry-picked to
+`stable` the same session they were built.
 
-**Payment-screen work, 2026-08-20 through 2026-08-25 (sections 29-30) — read
-section 30 before touching anything payment-related.** Bug #1 (payment-box
-refocus overwriting a manually-typed amount) is fixed, promoted to `stable`
-(`9406b79`), and live in production — solid. Bug #2 (preferred-box direct-edit
-rebalance) was fixed, promoted to `stable`/production the same way, then found
-by the user to be **only half-fixed live**: editing the preferred box down
-directly left the other box stuck (a missing symmetric "deficit" branch in
-`autoBalancePayments()`). A corrected fix (`392add7`) is built, unit-tested (4
-new tests covering both directions), and regression-checked, but sits on
-`develop-swan` only — **NOT yet promoted, pending the user's own live
-verification of both directions before repeating the promotion.** Bug #3
-(multi-"cash"-named-method validation gap) and the credit-forced-after-fill gap
-remain documented-only, not built. Check section 30's tail and this file's own
-`git log`/`stable` HEAD for whether the corrected fix has since been promoted.
+**Payment-screen work, 2026-08-20 through 2026-08-25 (sections 29-30).** Bug #1
+(payment-box refocus overwriting a manually-typed amount) and bug #2
+(preferred-box direct-edit rebalance, both directions) are both fixed,
+unit-tested, and cherry-picked onto `stable` (`9406b79`, `45525cb`) — bug #2
+specifically went through a first promotion that turned out to be only
+half-fixed live (missing a symmetric "deficit" branch in
+`autoBalancePayments()`, caught by the user in production), a corrected fix,
+and the user's own live verification of both directions on staging before this
+second promotion. **`stable`/GitHub has both fixes as of this writing — the
+production SERVER itself still needs its own pull/build/restart, handed to the
+user to run.** Check whether that's actually happened before assuming
+production is current. Bug #3 (multi-"cash"-named-method validation gap) and
+the credit-forced-after-fill gap remain documented-only, not built.
 
 **posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
 only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
@@ -3105,27 +3104,38 @@ user's explicit instruction, in favor of a careful code read plus the user's
 own report. The code-level diagnosis above was later confirmed correct by
 the user ("Confirmed - this matches exactly what I saw").
 
-**Fix (`392add7`, `develop-swan` only — NOT yet promoted to `stable`/production,
-pending the user's own live verification before repeating the promotion):**
-added a symmetric deficit branch to `autoBalancePayments()`. On a deficit, it
-adds the shortfall onto a single other payment line (same `sortOthers`
-priority order as the excess direction — e.g. least-recently-edited first
-via `rebalanceOtherPaymentsByRecency`'s comparator), rather than spreading it
-across several boxes: growth has no natural per-box cap the way shrinking
-toward zero does, so one clear target keeps the result predictable. 4 new
-tests added (`usePaymentMethods.spec.ts`, 19 tests total in that file now):
-default-sort growth, custom-comparator growth, the exact production scenario
-(preferred box edited down after credit applied, two other boxes filled at
-different times — the least-recently-edited one grows to absorb the
-shortfall, credit-adjusted net total respected), and a no-other-payment-line
-no-op safety check.
+**Fix (`392add7` on `develop-swan`):** added a symmetric deficit branch to
+`autoBalancePayments()`. On a deficit, it adds the shortfall onto a single
+other payment line (same `sortOthers` priority order as the excess direction
+— e.g. least-recently-edited first via `rebalanceOtherPaymentsByRecency`'s
+comparator), rather than spreading it across several boxes: growth has no
+natural per-box cap the way shrinking toward zero does, so one clear target
+keeps the result predictable. 4 new tests added (`usePaymentMethods.spec.ts`,
+19 tests total in that file now): default-sort growth, custom-comparator
+growth, the exact production scenario (preferred box edited down after
+credit applied, two other boxes filled at different times — the
+least-recently-edited one grows to absorb the shortfall, credit-adjusted net
+total respected), and a no-other-payment-line no-op safety check.
 
-**Verification status: full regression check passed (225/225 files, 1123/1123
-tests; `bench build --app posawesome` clean) — but NOT yet live-verified.**
+**Live-verified by the user on staging, both directions (increasing and
+decreasing the preferred box) — correct behavior confirmed both ways.**
 Per the user's explicit request, no further automated live-repro attempts
-were made this round given the repeated browser-automation friction; the
-user will test both directions (increasing and decreasing the preferred box)
-live themselves before this gets promoted to `stable`. **Do not cherry-pick
-`392add7` to `stable` or treat bug #2 as fixed in production until that
-live verification happens** — as of this writing, production still has the
-half-broken version (`9406b79`) live.
+were made from this session given the repeated browser-automation friction
+(unlock-dialog/terminal-lock flakiness) hit on both this bug and section 29's
+credit-gap investigation — the user verified live themselves instead.
+
+**Promoted.** Cherry-picked onto `stable` as `45525cb` (diff verified
+byte-identical to `392add7`), full regression check re-run on `stable`
+(225/225 files, 1123/1123 tests; `bench build --app posawesome` clean),
+pushed to GitHub (`9406b79..45525cb`). `develop-swan` also pushed
+(`83c7b68..d4ec59a`). **Docs commits (`7f4f82b`, `83c7b68`, `d4ec59a`) were
+deliberately NOT cherry-picked to `stable`**, per this fork's standing
+convention that each branch narrates its own promotion story in its own
+`PROGRESS_NOTES.md`/`CLAUDE.md` — only the code commits (`6ac45e5`→`9406b79`,
+`392add7`→`45525cb`) went to `stable`.
+
+Production-side deployment (pull / `bench build --app posawesome` — required,
+frontend files changed / `bench migrate` — N/A, no doctype/fixture/print-format
+touched / restart) handed to the user to run themselves, same pattern as every
+other promotion this fork. Not run by this session — check whether it's
+actually live before assuming so.
