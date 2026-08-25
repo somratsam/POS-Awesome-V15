@@ -3356,3 +3356,87 @@ incident -- no further tracking needed. Bug #1 and bug #2 (section 30)
 and this generic-customer credit gap (section 31) are all now fully
 closed: built, tested, promoted, deployed, and live-verified on
 production.
+
+## 32. Loyalty points: business policy change to no-expiry, and a real bug caught before it shipped (2026-08-25)
+
+**Business decision:** loyalty points no longer expire, going forward.
+The user planned to set Loyalty Program "Swan Rewards" -> Expiry
+Duration to 0 (or blank) to represent this.
+
+**Caught before the change was made, by tracing the actual code path
+instead of assuming:** `expiry_duration = 0` does **not** mean "never
+expires" in ERPNext core. Traced `add_days(self.posting_date,
+lp_details.expiry_duration)` (`sales_invoice.py:2164`) -- a duration of 0
+sets a newly-earned point's `expiry_date` to the *same day it's earned*.
+Traced further into the balance calculation itself
+(`get_loyalty_details()`, `loyalty_program.py:78-79`, filters
+`expiry_date >= today`): those points would show up in the customer's
+balance for exactly one day and then silently vanish the next -- a real
+loss of value, not a display bug. Blank isn't a legal alternative either
+-- the DB column is `int(11) NOT NULL DEFAULT '0'`, confirmed live, so a
+blank form field just becomes 0 too. Correct value for "effectively
+never expires" (ERPNext has no first-class "unlimited" option): a very
+large duration, **36500** (100 years).
+
+**Downstream impact also traced, not assumed:** the rewards portal's
+"X points expiring on [date]" warning (`swan_rewards`) is driven by a
+live SQL query in `rewards_sync.py` for the nearest `expiry_date >=
+today` across real `Loyalty Point Entry` rows, not by the Loyalty
+Program setting directly. With `expiry_duration=0`, this would have
+shown "points expiring today" continuously. With a large duration, it
+would have shown a real-but-meaningless ~100-years-out date instead of
+hiding cleanly. Since "no expiry" is now the actual business policy
+(not a workaround to be hidden conditionally), the user asked for full
+removal, not a conditional hide.
+
+**Fix, both repos:**
+- `posawesome` (`9d50717`): removed the nearest-expiry SQL query and
+  `expiry_amount`/`expiry_date` fields from `rewards_sync.py`'s
+  `_build_customer_payload()` entirely. Updated the module docstring's
+  stated rationale for the daily full-refresh job (previously cited
+  point expiry specifically; now cites general balance drift, e.g. a
+  Loyalty Program `conversion_factor` change, which still applies).
+- `swan_rewards` (separate repo, `github.com/somratsam/swan-rewards-portal`,
+  `a80da89` on `main`): removed the feature end to end -- the
+  `expiry_amount`/`expiry_date` fields (and their now-orphaned DB
+  columns; confirmed `bench migrate` does not drop columns for fields
+  removed from a DocType JSON, dropped them explicitly via `ALTER
+  TABLE`, then reconfirmed a second `bench migrate` stayed clean/didn't
+  recreate them) on `Rewards Customer`, the storing logic in `sync.py`,
+  the `SELECT`/response fields in `lookup.py`, and the entire expiry
+  card in `www/index.html` -- HTML, CSS (including the `--amber-*`
+  tokens and `.icon-badge--amber`, used nowhere else), both locale
+  strings (en/ar), and the JS show/hide logic. Two test fixtures
+  (`test_lookup.py`, `test_receipt.py`) updated to match.
+
+**Staging state fixed as part of this, not left as a separate TODO:**
+Loyalty Program "Swan Rewards" -> Expiry Duration set to 36500 on
+`staging.local` (was found to already be 0 there -- differs from what
+the user believed production currently has; production's actual value
+was NOT checked or changed by this session, the user is doing that
+separately).
+
+**Full regression check:** posawesome backend module 3/3
+(`test_rewards_sync.py`, unaffected -- confirms no accidental breakage
+of the unrelated PDF-generation tests in the same file); live-called
+`_build_customer_payload()` against a real customer, confirmed no
+expiry keys and no error. `swan_rewards`'s full test suite 39/39 (`python
+-m unittest` against all 4 test files -- this app's tests are fully
+frappe-stubbed, no bench/site context needed, so unaffected by the
+`FrappeTestCase`/ERPNext bootstrap issue noted in section 30's CLAUDE.md
+entry, which requires the `erpnext` app that this bare-Frappe site
+doesn't have installed). `bench --site rewards.staging.local migrate`
+run twice, clean both times, confirmed idempotent (columns stayed
+dropped, weren't recreated). Live-called `match_customer()` against the
+real post-migrate DB, confirmed the trimmed `SELECT` executes without
+error. `bench build`: N/A for both repos -- no `.vue`/`.ts` touched in
+posawesome, and `swan_rewards`'s `www/index.html` is static/server-rendered
+with no separate build step at all.
+
+**Status:** posawesome committed and pushed to `develop-swan`
+(`9d50717`). `swan_rewards` committed locally on `main` (`a80da89`), **not
+yet pushed** -- this repo has no established "push automatically" norm
+from this session the way posawesome's branches do, so left for the user
+to confirm. Neither repo's change has been promoted/deployed to
+production -- the user is handling production's config value and any
+deploy separately.
