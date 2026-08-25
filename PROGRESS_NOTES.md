@@ -34,8 +34,8 @@ section 30 for the full sequence. Bug #3 (multi-"cash"-named-method
 validation gap) and the credit-forced-after-fill gap remain documented-only,
 not built — the only open items from this arc.
 
-**Generic-customer store-credit leakage (section 31) — real gap found, fixed,
-promoted to `stable`/GitHub.** A return against an invoice originally billed
+**Generic-customer store-credit leakage (section 31) — DONE, deployed,
+verified on production.** A return against an invoice originally billed
 to a shared/anonymous customer (e.g. "Anonymous") could issue real,
 redeemable store credit onto that shared account under this store's
 credit-only return policy — `posa_is_generic_customer`'s protection only
@@ -46,13 +46,13 @@ plus matching client-side guards in both `Returns.vue` and
 Invoice" flow instead — plus an unrelated pre-existing bug found along the
 way (`Returns.vue` never instantiated `toastStore` at all, so every toast
 in that file was silently dead) fixed the same day. Built, tested (8
-backend + 2 frontend, full suite 226/226), user live-verified both entry
-points on staging, cherry-picked to `stable` (`0308161`, `41c9a57`), pushed
-to GitHub. **Production server deploy handed to the user; check whether
-it's actually happened before assuming so.** **The user still needs to
-separately check production directly for any credit already pooled on the
-real "Anonymous" account** — this session had no production access to
-check that itself.
+backend + 2 frontend, full suite 226/226), cherry-picked to `stable`
+(`0308161`, `41c9a57`), pushed to GitHub, deployed to production, and
+**confirmed working live on production by the user — both return entry
+points correctly block.** The 60 OMR of test credit the user's own
+earlier testing had left pooled on production's real "Anonymous" account
+has been found, cancelled, and confirmed back to 0 — resolved, not an
+ongoing item.
 
 **posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
 only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
@@ -3337,14 +3337,22 @@ as `0308161`/`41c9a57` (diffs verified byte-identical on every touched
 file), full regression re-run on `stable` (backend module 8/8; frontend
 suite 226/226 files, 1125/1125 tests; `bench build --app posawesome`
 clean), pushed to GitHub (`45525cb..41c9a57`). `develop-swan` also pushed
-(`051bfd3..5fe7050`). Production-side deployment (pull / `bench build`
--- required / `bench migrate` -- N/A / restart) handed to the user to run
-themselves, with a final live spot-check on production planned
-afterward, same pattern as every other promotion today.
+(`051bfd3..5fe7050`).
 
-**Reminder, per the user's explicit request: they still need to check
-PRODUCTION directly (not staging) for any store credit already pooled on
-the real "Anonymous" account** -- this session has no production access,
-so it could only confirm staging is currently clean (see above). This is
-a data-cleanup question separate from the code fix, and needs answering
-regardless of the code fix's promotion status.
+**Deployed and verified live on production.** The user ran the
+production-side deploy themselves (pull / `bench build` / restart) and
+confirmed both return paths (Sales Return search, Invoice Management)
+correctly block a credit-issuing return against the shared "Anonymous"
+customer on the real production server, not just staging.
+
+**Production credit-pooling check: done, resolved.** The user's own
+earlier live testing of this exact flow (before today's fix went live)
+had left 60 OMR of real store credit pooled on production's actual
+"Anonymous" account -- confirming this session's staging-only check
+couldn't rule out. The user found it, cancelled the test return invoice
+that created it, and confirmed the balance is back to 0. Test residue
+from verifying the bug, not a real customer's credit and not an ongoing
+incident -- no further tracking needed. Bug #1 and bug #2 (section 30)
+and this generic-customer credit gap (section 31) are all now fully
+closed: built, tested, promoted, deployed, and live-verified on
+production.
