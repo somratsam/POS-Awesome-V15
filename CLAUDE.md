@@ -420,6 +420,45 @@ blocking an unrelated qty-edit step. In both cases, stopping to report a
 precise code-level trace (later confirmed correct by the user's own manual
 testing) got to a decision faster than continuing to debug the automation.
 
+## Vitest Bundles Its Own (Older) Vite — `.js`-Importing-`.ts` Files Fail to Resolve
+
+This app writes store/composable imports with an explicit `.js` extension
+even though the real file is `.ts` (e.g. `import { useUIStore } from
+"../../../stores/uiStore.js"` when only `uiStore.ts` exists) — a deliberate,
+working TypeScript/bundler-resolution convention used **pervasively**, in
+20+ files including `Payments.vue`, `Invoice.vue`, and `Pos.vue`. The root
+Vite (`frontend/node_modules/vite`) resolves this correctly. But Vitest
+ships its own bundled, separate copy of Vite
+(`frontend/node_modules/vitest/node_modules/vite`) which can be a full
+major version behind (5.4.21 vs. the root's 6.3.5, confirmed in this repo)
+— and the older version does not resolve `.js`-suffixed imports against
+`.ts` files, failing with `Failed to resolve import "....js". Does the
+file exist?` at Vite's SFC-transform stage, before any `vi.mock()` call
+can intervene (mocking the module doesn't help — the failure happens
+during static resolution, not module execution).
+
+This only surfaces the first time any Vitest spec tries to mount/import a
+component using the `.js`-suffixed style — most existing specs happen to
+mount components that (coincidentally) use the bare-specifier style
+instead, so this had never been hit before. Before concluding a component
+"can't be unit tested" or trying to work around a resolution error for a
+component import, check `node_modules/vitest/node_modules/vite/package.json`
+vs. `node_modules/vite/package.json` for a version mismatch first.
+
+Not a two-line fix: aligning Vitest's transitive Vite version is a
+dependency change with blast radius across the whole test suite, and
+normalizing one file's import style away from this codebase's own
+dominant `.js`-suffixed convention just to make it testable is the wrong
+direction. Concrete example that happened in this repo: adding a
+generic-customer-credit guard to both `Returns.vue` and
+`InvoiceManagement.vue` (identical logic, two call sites — see
+`PROGRESS_NOTES.md` section 31), `InvoiceManagement.vue` got a real
+component test immediately (it uses bare-specifier imports), but the
+identical `Returns.vue` test failed on this resolution error. Resolved by
+accepting the coverage gap for `Returns.vue` specifically (relying on the
+already-proven-identical `InvoiceManagement.vue` test plus a clean
+`bench build` as evidence) rather than forcing a fix in either direction.
+
 ## Build Commands
 
 ### Main Build Commands

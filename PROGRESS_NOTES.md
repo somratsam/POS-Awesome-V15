@@ -34,6 +34,21 @@ section 30 for the full sequence. Bug #3 (multi-"cash"-named-method
 validation gap) and the credit-forced-after-fill gap remain documented-only,
 not built — the only open items from this arc.
 
+**Generic-customer store-credit leakage (section 31) — real gap found and fixed,
+NOT yet committed.** A return against an invoice originally billed to a
+shared/anonymous customer (e.g. "Anonymous") could issue real, redeemable
+store credit onto that shared account under this store's credit-only return
+policy — `posa_is_generic_customer`'s protection only ever covered loyalty
+points, never credit. Fixed: a server-side guard
+(`_guard_generic_customer_stored_credit` in `invoice_processing/creation.py`)
+plus matching client-side guards in both `Returns.vue` and
+`InvoiceManagement.vue`, steering staff to the existing "Return without
+Invoice" flow instead. Built, tested (8 backend + 2 frontend, full suite
+226/226), live-verified on staging — but sitting uncommitted in the working
+tree as of this writing. **The user still needs to separately check
+production directly for any credit already pooled on the real "Anonymous"
+account** — this session had no production access to check that itself.
+
 **posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
 only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
 expected: each branch narrates its own promotion story.
@@ -3149,3 +3164,147 @@ open items remaining from this whole payment-screen arc are bug #3
 (multi-"cash"-named-method validation gap) and the credit-forced-after-fill
 gap, both still documented-only, not built (see section 29's "Deferred /
 open items" for both).
+
+## 31. Generic-customer store-credit leakage: real gap found and fixed (2026-08-25)
+
+**The concern, raised by the user.** `posa_is_generic_customer` (section 19,
+`72fc12e`) was built to flag shared/anonymous customer records (e.g.
+"Anonymous", used across many unrelated walk-in sales) so loyalty
+points/portal codes don't pool onto them. The user asked, urgently: does
+that protection extend to store credit too? Scenario -- a customer buys
+under "Anonymous", returns it weeks later, staff finds the original
+invoice for the return (auto-populating the return's customer field to
+match -- "Anonymous" again), and under this store's credit-only return
+policy (`posa_returns_credit_only`, section on "Enforce credit-only
+returns"), that return issues store credit to "Anonymous" -- redeemable by
+any future stranger selected as the same shared account. Real money, not
+a cosmetic loyalty gap.
+
+**Verified, not assumed.** Traced the entire `posa_is_generic_customer`
+usage surface (every reference in the codebase): its only effect is
+clearing `loyalty_program`/`posa_loyalty_portal_code` in
+`customer.py`'s `ensure_loyalty_portal_code()`, plus excluding generic
+customers from the rewards-portal sync job. **Zero references anywhere in
+the Sales Invoice/return/credit submission pipeline.**
+`get_available_credit()` (`payments.py`) filters purely by customer name --
+confirmed it treats a generic customer's pooled negative-outstanding
+invoices exactly like a real individual's, no special-casing at all.
+Confirmed live on staging (`bench console`): two customers flagged
+generic ("Anonymous", "anno"), neither currently pooling credit *on
+staging* -- doesn't rule out production, which this session has no direct
+access to check (flagged back to the user as a manual follow-up, see
+below). Confirmed the exact trigger path live in code:
+`Returns.vue:774`, `invoice_doc.customer = return_doc.customer;` --
+unconditional, matching the user's description exactly.
+
+**First proposed fix was wrong -- caught before building, by tracing
+precisely instead of assuming.** Initial idea: block the credit-issuing
+return and have staff swap in a newly-created real customer. Traced
+precisely why this can't work: ERPNext core
+(`erpnext/controllers/sales_and_purchase_return.py`'s
+`validate_return_against()`, called from `AccountsController.validate()`
+on *every* save of a return, not just submission) hard-requires the
+return's `customer` to exactly match `return_against`'s original
+invoice's customer, throwing a "Party Mismatch" error otherwise. There is
+no way to keep the `return_against` link and attribute the return to a
+different customer. Confirmed this app already has a working, built
+escape hatch for exactly this shape of problem -- **"Return without
+Invoice"** (`posa_allow_return_without_invoice`, `Returns.vue`'s
+`return_without_invoice()`), which never sets `return_against` at all.
+The user tested this live and confirmed it works correctly (credit
+issued to the real customer, items/stock handled properly).
+
+**The actual fix, built:**
+1. **Server-side guard (authoritative)** --
+   `_guard_generic_customer_stored_credit()`, a new sibling function next
+   to the existing `_guard_return_cash_refund()` in
+   `invoice_processing/creation.py`, called from the same call site
+   (`_normalize_return_payment_rows`) with the same timing (only at
+   genuine final submission, never during draft-save/cart-building --
+   verified against all 5 call sites of `_normalize_return_payment_rows`
+   in the file). Throws when: `is_return`, `return_against` is set, the
+   return would leave nonzero credit (`abs(paid_amount) < abs(grand_total)`,
+   with a precision-based tolerance), and the customer is
+   `posa_is_generic_customer`. Message points staff at "Return without
+   Invoice" by name.
+2. **`get_invoice_for_return()`** (`invoice_processing/returns.py`) now
+   returns a `posa_customer_is_generic` field so the frontend can steer
+   staff early, before they fill out a whole return.
+3. **Client-side guards (defense-in-depth, matches this codebase's
+   established pattern)** -- added at **both** real entry points that set
+   a return's customer from the original invoice (only one was
+   originally named; grepping found a second, independent one):
+   `Returns.vue`'s `submit_dialog()` (line ~774) and
+   `InvoiceManagement.vue`'s `createReturn()` (line ~3749). Both block
+   immediately and toast the same guidance the moment
+   `posa_customer_is_generic` comes back true, before building the return
+   invoice at all -- deliberately unconditional on the credit-only policy
+   setting (matches what was asked; the authoritative server-side check is
+   the one that's precisely conditioned on whether credit would actually
+   result).
+
+**Tests.** Backend: 8 new tests in
+`test_return_generic_customer_credit_guard.py`, covering both directions
+(blocks / doesn't block) across every branch -- non-return, draft-save
+timing, no-`return_against`, full-cash-refund, non-generic customer,
+zero-refund credit, partial-refund credit, and a precision-boundary case.
+Frontend: `invoiceManagementGenericCustomerCreditGuard.spec.ts` (2 tests,
+real component method invocation via `(InvoiceManagement as any).methods
+.createReturn.call(context, ...)`, same pattern already established by
+`invoiceManagementSupervisor.spec.ts`) -- passing. **`Returns.vue` itself
+could not get the equivalent test** -- see the tooling finding below;
+its guard is the same few lines as `InvoiceManagement.vue`'s (already
+proven working) plus confirmed compiling correctly in the real
+`bench build` output, but has no dedicated automated regression test.
+
+**Tooling finding, worth knowing for any future frontend test work:**
+Vitest bundles its own internal Vite (`node_modules/vitest/node_modules/vite`,
+found at **5.4.21** in this repo) which is a full major version behind
+the root Vite used for the real build (**6.3.5**). The older bundled Vite
+does not resolve an import written with an explicit `.js` extension that
+actually points at a `.ts` file (a deliberate, working TypeScript/bundler
+convention this app uses **pervasively** -- 20+ files including
+`Payments.vue`, `Invoice.vue`, `Pos.vue` import `stores/uiStore.js`/
+`stores/invoiceStore.js` this way, and it resolves correctly in the real
+build every time via the root Vite). Any *new* Vitest spec that tries to
+mount one of those 20+ components for the first time will hit this same
+"Failed to resolve import ... Does the file exist?" error --
+`InvoiceManagement.vue` and a handful of others happen to already use the
+bare-specifier style and so were never affected; `Returns.vue` was simply
+the first of the `.js`-suffixed majority anyone tried to test-import.
+**Not fixed this session** -- the real fix (aligning Vitest's transitive
+Vite version with the root one) is a dependency change with broad blast
+radius across the whole 226-file suite, out of scope for a security fix.
+Normalizing individual files' import style away from the codebase's own
+dominant convention was rejected as the wrong direction to fix it in.
+
+**Full regression check:** backend module 8/8 (isolated,
+`bench --site staging.local run-tests --module
+posawesome.posawesome.api.test_return_generic_customer_credit_guard`);
+frontend suite 226/226 files, 1125/1125 tests; `bench build --app
+posawesome` clean (confirms `Returns.vue`'s real code compiles, despite
+Vitest being unable to import it); `bench migrate` N/A (only `.py`/`.vue`
+files touched). Security review: traced `frappe.db.get_value` usage (Frappe
+ORM, parameterized, same pattern already used identically elsewhere in
+this codebase -- not string-interpolated SQL); confirmed zero `v-html`
+usage anywhere in the entire frontend (grepped), so the new toast messages
+interpolating `customer_name` carry no XSS risk; confirmed the new
+`posa_customer_is_generic` API field discloses nothing the caller doesn't
+already have access to (`customer`/`customer_name` are already in the same
+response); traced that a client attempting to submit a mismatched
+`customer`/`return_against` pair is still safely caught by ERPNext's own
+core `validate_return_against()` regardless of whether this new guard's
+generic-customer condition happens to apply. Live-verified on staging via
+`bench console` against the real "Anonymous" customer record: the guard
+throws for it and does not throw for a real customer, using the actual
+production code path (not mocked).
+
+**Status: built, tested, verified live on staging (not yet through this
+fork's promote-to-`stable` cycle) -- not yet committed.**
+
+**Reminder, per the user's explicit request: they still need to check
+PRODUCTION directly (not staging) for any store credit already pooled on
+the real "Anonymous" account** -- this session has no production access,
+so it could only confirm staging is currently clean (see above). This is
+a data-cleanup question separate from the code fix, and needs answering
+regardless of when/whether the code fix above gets promoted.
