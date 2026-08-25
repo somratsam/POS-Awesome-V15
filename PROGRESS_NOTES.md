@@ -61,12 +61,26 @@ expected: each branch narrates its own promotion story.
 **swan_rewards** (companion app, separate repo — see `CLAUDE.md`'s "Companion app"
 note for the architecture). Live in production at `rewards.swan-intl.com` (own Frappe
 multi-site, DNS + Let's Encrypt SSL,
-no ERPNext/POS Awesome installed — section 25). The sync bridge
+no ERPNext/POS Awesome installed — section 18). The sync bridge
 (`posawesome/posawesome/api/rewards_sync.py`) is live and configured on production,
 pushing every 15 minutes plus a daily full refresh. Every issue found during the
 initial rollout (store locations, two receipt-PDF bugs, a mobile Chrome View bug, a
-reload-persistence UX gap) is resolved — sections 23-27. No currently-known open
+reload-persistence UX gap) is resolved — sections 16-18, 27. No currently-known open
 issues on either app.
+
+**Loyalty points: no-expiry policy change (section 32) — DONE, deployed, verified on
+production, both repos.** Business decision: loyalty points no longer expire. Caught
+a serious bug before it shipped: the user's original plan (`expiry_duration = 0`)
+does not mean "never expires" in ERPNext core — it means "expires the same day it's
+earned," and would have silently dropped points from customer balances within 24
+hours of being earned. Correct value is a very large duration (`36500`, ~100 years —
+ERPNext has no first-class "unlimited" option). Fixed the config on both staging and
+production. Removed the expiry-warning feature entirely (not hidden conditionally) in
+both `posawesome` (`rewards_sync.py`'s nearest-expiry computation) and `swan_rewards`
+(the `Rewards Customer` fields/columns, `sync.py`, `lookup.py`, and the whole expiry
+card in `www/index.html` — HTML/CSS/JS/both locale strings). Both repos' code
+promoted to `stable`/GitHub main and deployed to production; the user confirmed the
+portal correctly shows no expiry section and points display normally, live.
 
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
@@ -3433,10 +3447,26 @@ error. `bench build`: N/A for both repos -- no `.vue`/`.ts` touched in
 posawesome, and `swan_rewards`'s `www/index.html` is static/server-rendered
 with no separate build step at all.
 
-**Status:** posawesome committed and pushed to `develop-swan`
-(`9d50717`). `swan_rewards` committed locally on `main` (`a80da89`), **not
-yet pushed** -- this repo has no established "push automatically" norm
-from this session the way posawesome's branches do, so left for the user
-to confirm. Neither repo's change has been promoted/deployed to
-production -- the user is handling production's config value and any
-deploy separately.
+**Promoted, pushed, deployed, and verified live on production -- DONE.**
+posawesome: committed to `develop-swan` (`9d50717`), cherry-picked onto
+`stable` as `41567ce` (diff verified byte-identical), full regression
+re-run on `stable` (backend 3/3, frontend suite 226/226 files, 1125/1125
+tests), both branches pushed to GitHub. `swan_rewards`: pushed to GitHub
+on `main` (`a80da89`). Staging confirmed working by the user first
+(expiry section gone, points display normally, nothing broken) before
+either production deploy.
+
+**Production.** The user ran both deploys themselves (posawesome:
+`bench pull` + `bench restart`, no build/migrate needed -- pure Python
+change, no doctype/fixture touched; `swan_rewards`: `git pull` +
+`bench --site rewards.swan-intl.com migrate` + `bench restart`, same
+site-on-the-same-bench deployment shape as posawesome's own, confirmed
+against section 18's original rollout record) and fixed production's
+Loyalty Program `expiry_duration` to 36500 (the same value used on
+staging -- production's actual prior value was never confirmed by this
+session, only staging's 0 was). **Confirmed working live on production
+by the user:** portal correctly shows no expiry section, points display
+normally. The orphaned `expiry_amount`/`expiry_date` DB columns on
+production's `Rewards Customer` table were flagged as optional
+`bench migrate`-doesn't-drop-columns cleanup (same as staging), left to
+the user's discretion -- not required for correctness.
