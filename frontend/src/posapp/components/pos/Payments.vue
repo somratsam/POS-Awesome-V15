@@ -1265,10 +1265,13 @@ const rebalancePreferredPaymentCoverage = (giftCardAmount = giftCardAppliedAmoun
 
 // Mirror of rebalancePreferredPaymentCoverage() for the opposite direction:
 // when the cashier edits the PREFERRED box directly, true up the OTHER boxes
-// so the total still matches the invoice. Same guards (skip for returns and
-// credit sales, where these boxes aren't meant to sum to the settlement
-// amount). Reduces the least-recently-edited/never-touched boxes first, so a
-// box the cashier just typed into elsewhere isn't immediately clobbered.
+// so the total still matches the invoice -- symmetric in both directions: if
+// the edit left an excess, it shrinks other boxes (least-recently-edited/
+// never-touched first); if it left a shortfall, it grows the single
+// least-recently-edited/never-touched box to cover it. Either way, a box the
+// cashier just typed into elsewhere isn't immediately clobbered. Same guards
+// as rebalancePreferredPaymentCoverage (skip for returns and credit sales,
+// where these boxes aren't meant to sum to the settlement amount).
 const rebalanceOtherPaymentsByRecency = (editedPayment) => {
 	const doc = invoice_doc.value;
 	if (!doc || doc.is_return || is_credit_sale.value) {
