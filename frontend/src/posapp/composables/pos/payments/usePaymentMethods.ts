@@ -130,7 +130,6 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		const doc = unref(invoiceDoc);
 		if (!doc) return;
 
-		// Auto-subtract from other payments if we have an excess
 		const invoice_total = getInvoiceSettlementAmount();
 
 		// Calculate current total paid
@@ -139,9 +138,12 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 			0,
 		);
 
-		const excess = flt(current_total_paid - invoice_total);
+		const diff = flt(current_total_paid - invoice_total);
+		const sortOthers =
+			options?.sortOthers ?? ((a: any, b: any) => flt(b.amount) - flt(a.amount));
 
-		if (excess > 0) {
+		if (diff > 0) {
+			// Excess: subtract from other payments to bring the total back down.
 			// Find other payments with amount > 0 to reduce
 			// We filter out the current payment being edited to avoid circular issues
 			const otherPayments = doc.payments.filter(
@@ -150,11 +152,9 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 
 			// Sort by amount descending to reduce larger chunks first, unless the
 			// caller supplies its own ordering (e.g. most-recently-edited first).
-			otherPayments.sort(
-				options?.sortOthers ?? ((a: any, b: any) => flt(b.amount) - flt(a.amount)),
-			);
+			otherPayments.sort(sortOthers);
 
-			let remaining_excess = excess;
+			let remaining_excess = diff;
 
 			for (const other of otherPayments) {
 				if (remaining_excess <= 0) break;
@@ -171,6 +171,31 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 				}
 
 				remaining_excess = flt(remaining_excess - reduction);
+			}
+		} else if (diff < 0) {
+			// Deficit: the edit left the invoice short. Add the shortfall onto a
+			// single other payment (same priority order as the excess direction,
+			// e.g. least-recently-edited first) rather than spreading it across
+			// several -- there's no natural per-box cap on growth the way there
+			// is on shrinking toward zero, so one clear target keeps this
+			// predictable for the cashier.
+			const otherPayments = doc.payments.filter(
+				(p: any) => p !== excludePayment,
+			);
+
+			otherPayments.sort(sortOthers);
+
+			const target = otherPayments[0];
+			if (target) {
+				const shortfall = -diff;
+				const newAmount = flt(flt(target.amount) + shortfall);
+
+				target.amount = newAmount;
+				if (target.base_amount !== undefined) {
+					target.base_amount = flt(
+						toCompanyCurrency(currencyContext(doc), newAmount),
+					);
+				}
 			}
 		}
 	};

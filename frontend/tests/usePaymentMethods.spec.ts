@@ -460,6 +460,143 @@ describe("usePaymentMethods", () => {
 		expect(invoiceDoc.value.payments[1].amount).toBe(200);
 	});
 
+	it("grows the largest other box first by default when the edit leaves a deficit", () => {
+		// Mirror of "auto-balances larger amounts first by default", but for the
+		// direction that was missing entirely: editing the excluded payment
+		// (Card) down leaves the invoice short, and the shortfall must land on
+		// an OTHER box, not just sit there unaddressed.
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [
+				{ mode_of_payment: "Cash", type: "Cash", amount: 15, base_amount: 15, default: 1 },
+				{ mode_of_payment: "Visa", type: "Bank", amount: 5, base_amount: 5 },
+				{ mode_of_payment: "Card", type: "Bank", amount: 10, base_amount: 10 },
+			],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 100,
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// Cash(15) + Visa(5) + Card(10) = 30 against an invoice of 100 -- a
+		// 70 shortfall. No comparator given: the largest other box (Cash)
+		// absorbs it, mirroring the excess direction's default priority.
+		autoBalancePayments(invoiceDoc.value.payments[2]);
+
+		expect(invoiceDoc.value.payments[0].amount).toBe(85);
+		expect(invoiceDoc.value.payments[1].amount).toBe(5);
+		expect(invoiceDoc.value.payments[2].amount).toBe(10);
+	});
+
+	it("respects a custom sortOthers comparator when growing to cover a deficit", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [
+				{ mode_of_payment: "Cash", type: "Cash", amount: 15, base_amount: 15, default: 1 },
+				{ mode_of_payment: "Visa", type: "Bank", amount: 5, base_amount: 5 },
+				{ mode_of_payment: "Card", type: "Bank", amount: 10, base_amount: 10 },
+			],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 100,
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// Custom comparator forces Visa to the front instead of the
+		// amount-descending default, overriding which box takes the shortfall.
+		autoBalancePayments(invoiceDoc.value.payments[2], 2, {
+			sortOthers: (a, b) =>
+				(a.mode_of_payment === "Visa" ? -1 : 1) - (b.mode_of_payment === "Visa" ? -1 : 1),
+		});
+
+		expect(invoiceDoc.value.payments[1].amount).toBe(75);
+		expect(invoiceDoc.value.payments[0].amount).toBe(15);
+	});
+
+	it("grows the least-recently-edited other box to cover a shortfall against the net (credit-adjusted) settlement amount", () => {
+		// The exact production scenario this was built for: the preferred box
+		// (Cash) is edited DOWN directly, after credit was already applied and
+		// two other boxes were already filled at different times. The
+		// shortfall must land on whichever other box was touched least
+		// recently (MasterCard), leaving the more-recently-typed Visa alone --
+		// mirroring rebalanceOtherPaymentsByRecency's real comparator, and
+		// balancing against the credit-reduced net total, not the gross.
+		const invoiceDoc = ref<any>({
+			rounded_total: 1000,
+			grand_total: 1000,
+			conversion_rate: 1,
+			payments: [
+				{ mode_of_payment: "Cash", type: "Cash", amount: 100, base_amount: 100, default: 1 },
+				{ mode_of_payment: "Visa", type: "Bank", amount: 250, base_amount: 250 },
+				{ mode_of_payment: "Master Card", type: "Bank", amount: 250, base_amount: 250 },
+			],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 700, // 1000 - 300 customer credit already redeemed
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		// MasterCard was edited before Visa, so the recency comparator
+		// (oldest-edited first) picks MasterCard to absorb the shortfall.
+		const editedAt: Record<string, number> = { "Master Card": 1, Visa: 2 };
+		autoBalancePayments(invoiceDoc.value.payments[0], 2, {
+			sortOthers: (a, b) =>
+				(editedAt[a.mode_of_payment] || 0) - (editedAt[b.mode_of_payment] || 0),
+		});
+
+		expect(invoiceDoc.value.payments[0].amount).toBe(100);
+		expect(invoiceDoc.value.payments[1].amount).toBe(250);
+		expect(invoiceDoc.value.payments[2].amount).toBe(350);
+	});
+
+	it("does nothing when there is no other payment line to absorb a deficit", () => {
+		const invoiceDoc = ref<any>({
+			rounded_total: 100,
+			grand_total: 100,
+			conversion_rate: 1,
+			payments: [{ mode_of_payment: "Cash", type: "Cash", amount: 40, base_amount: 40, default: 1 }],
+		});
+
+		const { autoBalancePayments } = usePaymentMethods({
+			invoiceDoc,
+			posProfile: ref({}),
+			diffPayment: computed(() => 0),
+			getNetInvoiceAmount: () => 100,
+			stores: {
+				toastStore: { show: () => undefined },
+				uiStore: { freeze: () => undefined, unfreeze: () => undefined },
+			},
+		});
+
+		expect(() => autoBalancePayments(invoiceDoc.value.payments[0])).not.toThrow();
+		expect(invoiceDoc.value.payments[0].amount).toBe(40);
+	});
+
 	it("builds cash denomination suggestions from the net settlement amount", () => {
 		getSmartTenderSuggestionsMock.mockReturnValue([200, 500]);
 
