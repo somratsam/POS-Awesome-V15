@@ -34,20 +34,25 @@ section 30 for the full sequence. Bug #3 (multi-"cash"-named-method
 validation gap) and the credit-forced-after-fill gap remain documented-only,
 not built — the only open items from this arc.
 
-**Generic-customer store-credit leakage (section 31) — real gap found and fixed,
-NOT yet committed.** A return against an invoice originally billed to a
-shared/anonymous customer (e.g. "Anonymous") could issue real, redeemable
-store credit onto that shared account under this store's credit-only return
-policy — `posa_is_generic_customer`'s protection only ever covered loyalty
-points, never credit. Fixed: a server-side guard
+**Generic-customer store-credit leakage (section 31) — real gap found, fixed,
+promoted to `stable`/GitHub.** A return against an invoice originally billed
+to a shared/anonymous customer (e.g. "Anonymous") could issue real,
+redeemable store credit onto that shared account under this store's
+credit-only return policy — `posa_is_generic_customer`'s protection only
+ever covered loyalty points, never credit. Fixed: a server-side guard
 (`_guard_generic_customer_stored_credit` in `invoice_processing/creation.py`)
 plus matching client-side guards in both `Returns.vue` and
 `InvoiceManagement.vue`, steering staff to the existing "Return without
-Invoice" flow instead. Built, tested (8 backend + 2 frontend, full suite
-226/226), live-verified on staging — but sitting uncommitted in the working
-tree as of this writing. **The user still needs to separately check
-production directly for any credit already pooled on the real "Anonymous"
-account** — this session had no production access to check that itself.
+Invoice" flow instead — plus an unrelated pre-existing bug found along the
+way (`Returns.vue` never instantiated `toastStore` at all, so every toast
+in that file was silently dead) fixed the same day. Built, tested (8
+backend + 2 frontend, full suite 226/226), user live-verified both entry
+points on staging, cherry-picked to `stable` (`0308161`, `41c9a57`), pushed
+to GitHub. **Production server deploy handed to the user; check whether
+it's actually happened before assuming so.** **The user still needs to
+separately check production directly for any credit already pooled on the
+real "Anonymous" account** — this session had no production access to
+check that itself.
 
 **posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
 only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
@@ -3319,19 +3324,27 @@ Live browser re-verification of this specific fix was attempted but
 hit the same pre-existing terminal-lock/browser-automation friction
 documented earlier in this same section and in `CLAUDE.md` -- stopped
 per that same lesson rather than continuing to fight it; confidence
-instead comes from the direct side-by-side code comparison (not a guess)
+instead came from the direct side-by-side code comparison (not a guess)
 plus a clean `bench build` and full frontend suite (226/226, 1125/1125).
-**Worth a quick manual spot-check** given live verification didn't
-happen this time.
+**User spot-checked both entry points live themselves afterward and
+confirmed both now correctly block with the proper guidance message --
+no more JS error.**
 
-**Status: built, tested (226/226 files, 1125/1125 tests both times),
-verified live on staging for the guard logic itself -- committed to
-`develop-swan` (`248b473` fix, `e1c79b2` docs, `2933f33` the toastStore
-follow-up fix) but not yet through this fork's promote-to-`stable` cycle.**
+**Promoted.** `248b473` and `2933f33` (the two code fixes; docs commits
+`e1c79b2`/`5fe7050` deliberately not cherry-picked, per this fork's
+per-branch-narrates-its-own-story convention) cherry-picked onto `stable`
+as `0308161`/`41c9a57` (diffs verified byte-identical on every touched
+file), full regression re-run on `stable` (backend module 8/8; frontend
+suite 226/226 files, 1125/1125 tests; `bench build --app posawesome`
+clean), pushed to GitHub (`45525cb..41c9a57`). `develop-swan` also pushed
+(`051bfd3..5fe7050`). Production-side deployment (pull / `bench build`
+-- required / `bench migrate` -- N/A / restart) handed to the user to run
+themselves, with a final live spot-check on production planned
+afterward, same pattern as every other promotion today.
 
 **Reminder, per the user's explicit request: they still need to check
 PRODUCTION directly (not staging) for any store credit already pooled on
 the real "Anonymous" account** -- this session has no production access,
 so it could only confirm staging is currently clean (see above). This is
 a data-cleanup question separate from the code fix, and needs answering
-regardless of when/whether the code fix above gets promoted.
+regardless of the code fix's promotion status.
