@@ -82,6 +82,22 @@ card in `www/index.html` — HTML/CSS/JS/both locale strings). Both repos' code
 promoted to `stable`/GitHub main and deployed to production; the user confirmed the
 portal correctly shows no expiry section and points display normally, live.
 
+**Variant sibling scan hint, Phase 1 (section 33) — built, staging-verified,
+promotion in progress.** New feature: after scanning an item that belongs to a
+variant family, a small dismissible hint offers to show other sizes/colors in
+stock at this store; tapping it reuses the existing `Variants.vue` dialog with
+an on-demand fetch (no fetch on every scan). Found and fixed two real bugs
+during the user's own live testing along the way: an unbounded refetch loop
+that made the dialog blink (root cause: `Variants.vue`'s own deep-watched
+`uiStore.variantsData` re-firing on itself when the new entry point passed an
+empty `items` array; fixed by pre-fetching before opening the dialog, matching
+the pre-existing template-item trigger's contract) and a completely
+non-functional (dead Vuetify-2-class) selected-state indicator on the variant
+filter chips, affecting both the new and the pre-existing template-item dialog
+equally. All three pieces committed together (`f16a89c`), full regression
+green (226/226 files, 1130/1130 tests), confirmed working live on staging by
+the user. Not yet promoted to `stable`/production as of this note.
+
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
 
@@ -3470,3 +3486,140 @@ normally. The orphaned `expiry_amount`/`expiry_date` DB columns on
 production's `Rewards Customer` table were flagged as optional
 `bench migrate`-doesn't-drop-columns cleanup (same as staging), left to
 the user's discretion -- not required for correctness.
+
+## 33. Variant sibling scan hint (Phase 1): new feature, a real blinking-dialog bug, and a dead selected-state chip style fixed the same day (2026-08-25)
+
+**Business context:** Swan International is a multi-brand fashion
+retailer (9 brands, ~6000 items) where size/color variants are the norm,
+not the exception. Staff scanning a barcode had no way to see, at the
+point of scan, that the same style exists in other sizes/colors -- a
+real lost-sale gap (a customer wants Style 123 in Medium but the scanned
+unit is Large; nothing surfaces that Medium is in stock at this store).
+
+**Investigation-only first, per the user's request, before any build.**
+Five questions were answered from the existing codebase before any code
+was written: (1) every barcode scan response already returns
+`variant_of`/`has_variants` free of charge -- no new backend field
+needed; (2) `get_item_variants()` (`posawesome/api/items.py`) already
+implements the exact fetch needed -- sibling list + per-variant
+`actual_qty` (single-warehouse, POS-Profile-scoped) + attribute
+metadata, already used by the pre-existing template-item "choose a
+variant" flow; (3) `Variants.vue` already renders this exact data shape
+and can self-fetch when opened with an empty `items` array; (4) same-store
+data only (no cross-store stock) was the only architecturally clean
+option without new backend work; (5) effort estimate was small given
+items 1-3 -- confirmed correct in practice. The user approved "Option A
+(same-store only)" and asked for the implementation described below,
+explicitly staging-only pending their own visual test of the placement
+before any consideration of production.
+
+**Phase 1 build, three pieces, one shared bug and one shared UI fix
+discovered along the way:**
+
+**Piece 1 -- the hint itself.** After a scan-add of an item with
+`variant_of` set, `useScanProcessor.ts`'s `addScannedItemToInvoice()`
+sets a new `scanVariantHint` ref (added to `useScannerInput.ts`) to
+`{ itemCode, itemName, variantOf }`; a plain (non-variant) scan clears
+any stale hint from a previous scan. This is purely informational --
+never blocks or delays the scan-and-add flow, never fetches anything on
+its own. A new small component, `ScanVariantHint.vue` (a
+non-blocking, dismissible `v-snackbar`, `timeout="-1"`, bottom-anchored)
+renders it in `ItemsSelector.vue`, with "Other sizes/colors of {item}
+may be available" -- deliberately not promising a count, since the count
+is unknown without a fetch. Tapping "View" (`viewScanVariantHint()` in
+`ItemsSelector.vue`) fetches siblings on demand and opens the existing
+`Variants.vue` dialog, reusing it as-is (no changes to that component
+for this piece).
+
+**Bug found during the user's own live testing (real barcode
+89410444020014): the dialog blinked/flickered after opening instead of
+rendering cleanly.** The user correctly hypothesized the bug was in how
+the new entry point *triggers* the dialog, not in `Variants.vue` itself
+(confirmed zero lines changed there at that point). Traced live first,
+per the user's explicit instruction not to guess: a temporary Playwright
+script intercepting `get_item_variants` network calls showed 7+ calls
+firing within ~4 seconds of opening the dialog, still climbing when the
+trace window ended -- an unbounded refetch loop, not a one-off. Root
+cause, confirmed by re-reading `Variants.vue`'s actual watcher code line
+by line: its `"uiStore.variantsData"` watcher (`deep: true`) sets
+`this.parentItem = data.item` -- the *same* reactive object as the
+store's own nested `item`, not a copy (Vue doesn't re-wrap an
+already-reactive value). Its separate `attributes_meta` watcher then
+mutates `this.parentItem.attributes` in place, which -- because
+`parentItem` IS that shared object -- re-fires the deep watcher on
+itself. The original implementation passed `items: []` (relying on
+`Variants.vue`'s own on-demand `fetchVariants()`), and that internal
+fetch only ever reassigns the component-local `this.items` via
+`.concat()`, never the store's own `data.items` -- so every re-fire saw
+an empty stored array again and re-triggered `fetchVariants()` from
+scratch, wiping and reloading the dialog repeatedly. A first attempted
+fix (`toRaw()` on the `pos_profile` object passed into `openVariants`)
+addressed a real but secondary reactive-coupling concern and was
+re-traced and found insufficient -- the loop had nothing to do with
+`pos_profile`. **Actual fix:** `viewScanVariantHint()` now pre-fetches
+variants itself (a newly-exported `fetchItemVariantsMeta`, reused
+verbatim from `useItemCreation.ts`, the same function the pre-existing
+template-item flow already calls) and opens the dialog with a populated
+`items`/`attrsMeta` from the start -- exactly the contract the old,
+already-stable template-item trigger uses, which is why that flow never
+hit this bug. With `items` non-empty from the first run,
+`Variants.vue` never calls its own `fetchVariants()`, so the loop
+cannot start; re-tracing the watcher chain against the fix confirms it
+settles after one harmless extra pass with zero additional network
+calls. `Variants.vue` remains completely unmodified by this fix.
+
+**Second bug found during the user's own visual testing of the fixed
+dialog: the size/color filter chips (e.g. "BLACK", "57") had no visible
+selected state when tapped**, giving staff no confirmation of the
+currently-applied filter. Root cause: `Variants.vue`'s
+`selected-class="green--text text--accent-4"` on the chip group is dead
+Vuetify 2 class naming (double-dash `--text` utility classes) that does
+not exist anywhere in this app's Vuetify 3 (confirmed: zero matches in
+Vuetify's own bundled CSS) -- it has silently never applied any style,
+in *either* the new scan-hint dialog or the pre-existing template-item
+one, since both share this one component and this dead prop predates
+this whole feature. Fixed with an explicit per-chip `:variant`/`:color`
+binding (`outlined` -> `flat` + `primary` when the chip's value matches
+the active filter for its attribute), matching the same
+selected-vs-unselected visual pattern already used elsewhere in this app
+(`DocumentSourceSelector.vue`'s `variant="isActive ? 'flat' : 'tonal'"`)
+rather than introducing a new one. This is a template-only change to the
+one shared chip row -- confirmed to affect both flows identically (both
+had the same silently-broken indicator; both are fixed the same way).
+
+**Full regression check, all three pieces:** frontend suite 226/226
+files, 1130/1130 tests (new coverage: 4 tests in
+`useScanProcessor.spec.ts` for the hint set/clear/replace/non-gating
+behavior, 1 in `useScannerInput.spec.ts` for the hint ref and clear
+function). `bench build --app posawesome` clean (including `vue-tsc`
+type-checking, which caught one real error along the way -- see below).
+Backend: N/A, no Python touched. `bench migrate`: N/A, no
+doctype/fixture/print-format touched. Security review: N/A, no new user
+input, auth, or data-access surface -- purely client-side UI reusing an
+already-permission-scoped, already-existing backend endpoint. Confirmed
+untouched: `Variants.vue`'s own fetch/filter/add-to-cart logic,
+`useItemCreation.ts`'s pre-existing `handleVariantItem`, `uiStore.ts`'s
+`openVariants`/`closeVariants`, and `ItemsTable.vue` (cart rendering) --
+all verified via diff to have zero changes across the whole arc, plus
+the user's own live confirmation that the normal fast scan-and-add flow,
+a plain (non-variant) scan showing no hint, and the existing
+template-item flow all still work exactly as before.
+
+**One real type-error caught by the build, not by testing:**
+`const scanVariantHint = ref(null)` in `useScannerInput.ts` initially
+inferred as `Ref<null>` permanently (TypeScript can't widen a bare
+`ref(null)`'s type from later assignments), causing `vue-tsc` to fail on
+`scanVariantHint.itemName`/`.variantOf` property access in
+`ItemsSelector.vue`. Fixed with an explicit generic:
+`ref<{ itemCode: string; itemName: string; variantOf: string } | null>(null)`.
+
+**Promoted:** all three pieces committed to `develop-swan` in one commit
+(`f16a89c`) -- the feature, the blinking-dialog fix, and the chip
+selected-state fix were built and verified together in the same
+session, so they're recorded as one story here and in the commit
+message rather than split. User confirmed all three working live on
+staging (real barcode 89410444020014: item adds normally, hint appears,
+"View" opens the dialog cleanly with no blinking, siblings show correct
+same-store stock, and filter chips now show a clear selected state in
+both the new dialog and the existing template-item one) before any
+promotion toward `stable`/production.

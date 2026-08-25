@@ -459,6 +459,85 @@ accepting the coverage gap for `Returns.vue` specifically (relying on the
 already-proven-identical `InvoiceManagement.vue` test plus a clean
 `bench build` as evidence) rather than forcing a fix in either direction.
 
+## A Deep-Watched Reactive Object Passed By Reference Can Make a Watcher Re-Fire on Itself
+
+When a Vue component's `data()` property is assigned directly from a nested
+property of another deeply-watched (`deep: true`) reactive source — e.g.
+`this.parentItem = data.item` inside a `watch: { "someStore.someRef": {
+handler(data) { this.parentItem = data.item }, deep: true } }` — `this.parentItem`
+becomes the *same* object as `data.item`, not a copy (Vue does not re-wrap an
+already-reactive value in a new proxy). If any other code path later mutates
+that shared object in place (e.g. `this.parentItem.someField = [...]` from a
+completely separate watcher), the deep watcher on the *original* source fires
+again, because the mutation is visible through both references. If that
+watcher's own handler does anything conditional on state that never gets
+updated back onto the original source object (e.g. re-fetching because a
+locally-tracked array is empty, when only a *local* copy of that array — not
+the shared source's own copy — actually gets populated), the re-fire re-enters
+the same "not populated yet" branch every time, causing an unbounded
+loop bounded only by whatever async work is inside it (e.g. network latency),
+not a synchronous infinite loop and so not always obvious from a quick glance
+at the code. Confirm this class of bug only by tracing the exact object
+identity through the *actual* watcher code (does the assignment share a
+reference, does the mutation happen on that shared reference, does the
+re-fired handler's exit condition ever actually change) — not by reasoning
+about "reactive coupling" in the abstract, since a plausible-looking fix (e.g.
+stripping reactivity off an unrelated prop) can miss the real shared-reference
+chain entirely.
+
+Concrete example that happened in this repo: a new "view sibling variants"
+entry point (`ItemsSelector.vue`'s `viewScanVariantHint()`) opened the
+pre-existing `Variants.vue` dialog by calling `uiStore.openVariants({ item,
+items: [], profile, ... })` with an empty `items` array, intending to let
+`Variants.vue`'s own on-demand `fetchVariants()` populate it. `Variants.vue`'s
+`"uiStore.variantsData"` watcher (`deep: true`) sets `this.parentItem =
+data.item` (the same object as the store's own nested `item`, not a copy);
+its separate `attributes_meta` watcher mutates `this.parentItem.attributes` in
+place after every fetch, which — because `parentItem` IS that shared object —
+re-fires the `variantsData` watcher on itself. Because `fetchVariants()` only
+ever reassigns the component's own *local* `this.items` (via `.concat()`),
+never the store's own `data.items`, every re-fire still saw an empty stored
+array and re-triggered a fresh fetch — an unbounded wipe-and-refetch loop,
+visible to the user as the dialog blinking, confirmed live via network-request
+interception (7+ calls to the same endpoint within ~4 seconds, still
+climbing). A first fix attempt (`toRaw()` on an unrelated `profile` object
+also being passed into the same call) was plausible-looking (real reactive
+coupling, same deep-watched destination) but traced and found to be the wrong
+object entirely — the actual fix was to pre-fetch and pass a *populated*
+`items` array from the start (matching the pre-existing, already-stable
+template-item trigger's contract exactly), so the "not populated yet" branch
+inside `Variants.vue` is never entered and the loop can't start. See
+`PROGRESS_NOTES.md` section 33 for the full trace.
+
+## Vuetify 2 Class-Name Props (`green--text`, `foo--bar`) Silently Do Nothing Under This App's Vuetify 3
+
+This app runs Vuetify 3 (confirmed: `node_modules/vuetify/package.json`), which
+renamed its utility classes (`green--text` → `text-green`, etc.) and dropped the
+old double-dash naming entirely. A component prop that takes a raw class-name
+string (e.g. `v-chip-group`'s `selected-class`) will silently accept a Vuetify-2-style
+value with zero error and zero visible effect — Vue just adds a CSS class that
+matches nothing, and nothing in the UI looks wrong enough to draw attention,
+since the *absence* of a style is easy to miss versus a broken one. Before
+trusting that a `selected-class`/`active-class`/similar prop is doing anything,
+grep the exact class string against Vuetify's own bundled CSS
+(`node_modules/vuetify/dist/vuetify.css`) — if it's not there, the prop has
+never worked, no matter how long the code has existed or how correct it looks.
+Prefer this app's own established pattern for a selected/active visual state
+instead: flip the element's own `variant`/`color` props between an unselected
+and selected value (e.g. `DocumentSourceSelector.vue`'s
+`variant="isActive ? 'flat' : 'tonal'"`), not a raw CSS class name.
+
+Concrete example that happened in this repo: `Variants.vue`'s size/color
+filter `v-chip-group` had `selected-class="green--text text--accent-4"` since
+before this session — dead code, confirmed via a direct grep against
+Vuetify 3's bundled CSS turning up zero matches for either class. Found only
+because a user reported "no visual indication of which chip is selected" while
+testing an unrelated new feature that reuses this same dialog — the dead prop
+predated that feature and had silently never worked in the *pre-existing*
+template-item "choose a variant" flow either. Fixed with an explicit
+`:variant`/`:color` binding on each chip instead. See `PROGRESS_NOTES.md`
+section 33.
+
 ## Build Commands
 
 ### Main Build Commands
