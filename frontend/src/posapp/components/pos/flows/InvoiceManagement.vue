@@ -3725,6 +3725,26 @@ export default {
 					});
 					return;
 				}
+
+				// See the matching guard in Returns.vue's submit_dialog(): this
+				// original invoice was billed to a shared/anonymous customer, so
+				// a linked return's store credit would pool onto it. return_against
+				// locks the return's customer to match exactly (ERPNext's own core
+				// return validation), so there's no way to swap in the real
+				// customer here -- stop before building the return at all. The
+				// server enforces the authoritative version at submission (see
+				// _guard_generic_customer_stored_credit).
+				if (returnDoc.posa_customer_is_generic) {
+					this.toastStore.show({
+						title: __(
+							'"{0}" is a shared/anonymous customer account -- store credit can\'t be issued to it. Use "Return without Invoice" instead and select or create the real customer.',
+							[returnDoc.customer_name || returnDoc.customer],
+						),
+						color: "error",
+					});
+					return;
+				}
+
 				const invoiceDoc = {
 					items: returnDoc.items.map((item) => {
 						const row = { ...item };
