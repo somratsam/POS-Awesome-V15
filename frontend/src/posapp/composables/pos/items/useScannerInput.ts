@@ -62,6 +62,19 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	const scanErrorMessage = ref("");
 	const scanErrorCode = ref("");
 	const scanErrorDetails = ref("");
+	// Non-blocking, dismissible hint shown after a scan-add of an item that
+	// belongs to a variant family (item.variant_of set) -- "other
+	// sizes/colors may be available". Only the most recently scanned such
+	// item's hint is shown; set/replaced on every scan-add (variant or not)
+	// so it never lingers on a stale item. Purely informational -- never
+	// blocks or delays the scan-and-add flow itself, and never fetches
+	// anything on its own (see useScanProcessor.ts's addScannedItemToInvoice
+	// and ItemsSelector.vue's handling of the resulting @view event).
+	const scanVariantHint = ref<{
+		itemCode: string;
+		itemName: string;
+		variantOf: string;
+	} | null>(null);
 	const pendingScanCode = ref("");
 	const awaitingScanResult = ref(false);
 	const scaleBarcodeSettings = ref(normalizeScaleBarcodeSettings());
@@ -187,6 +200,10 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 
 		if (clearSearchHandler.value) clearSearchHandler.value();
 		if (focusSearchHandler.value) focusSearchHandler.value();
+	};
+
+	const clearScanVariantHint = () => {
+		scanVariantHint.value = null;
 	};
 
 	// --- onScan Integration ---
@@ -566,6 +583,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		scanErrorMessage,
 		scanErrorCode,
 		scanErrorDetails,
+		scanVariantHint,
 		pendingScanCode,
 		awaitingScanResult,
 		searchFromScanner,
@@ -576,6 +594,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		playScanTone,
 		showScanError,
 		acknowledgeScanError,
+		clearScanVariantHint,
 		onBarcodeScanned, // Call this when a code is detected
 		triggerOnScan,
 		ensureScaleBarcodeSettings,

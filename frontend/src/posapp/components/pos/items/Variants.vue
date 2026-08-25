@@ -12,7 +12,6 @@
 						<div v-for="attr in parentItem.attributes" :key="attr.attribute">
 							<v-chip-group
 								v-model="filters[attr.attribute]"
-								selected-class="green--text text--accent-4"
 								column
 								@update:model-value="updateFiltredItems"
 							>
@@ -20,7 +19,16 @@
 									v-for="value in attr.values"
 									:key="value.abbr"
 									:value="value.attribute_value"
-									variant="outlined"
+									:variant="
+										filters[attr.attribute] === value.attribute_value
+											? 'flat'
+											: 'outlined'
+									"
+									:color="
+										filters[attr.attribute] === value.attribute_value
+											? 'primary'
+											: undefined
+									"
 									label
 								>
 									{{ value.attribute_value }}

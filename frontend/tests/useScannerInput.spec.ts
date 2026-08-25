@@ -86,4 +86,19 @@ describe("useScannerInput", () => {
 		await vi.advanceTimersByTimeAsync(32);
 		expect(onScan).toHaveBeenCalledTimes(2);
 	});
+
+	it("starts with no scan-variant hint, and clearScanVariantHint resets it to null", () => {
+		const scanner = useScannerInput({});
+
+		expect(scanner.scanVariantHint.value).toBeNull();
+
+		scanner.scanVariantHint.value = {
+			itemCode: "ITEM-BLUE-M",
+			itemName: "Style 123 - Blue - Medium",
+			variantOf: "STYLE-123",
+		};
+		scanner.clearScanVariantHint();
+
+		expect(scanner.scanVariantHint.value).toBeNull();
+	});
 });

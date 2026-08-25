@@ -418,6 +418,20 @@ export function useScanProcessor(context: ScanProcessorContext) {
 				);
 			}
 
+			// Surface the "other sizes/colors" hint for a scanned variant, or
+			// clear a stale one from a previous scan -- purely informational,
+			// no fetch happens here (see ScanVariantHint.vue/ItemsSelector.vue
+			// for the on-demand fetch, triggered only if staff taps "View").
+			if (scannerInput.scanVariantHint) {
+				scannerInput.scanVariantHint.value = newItem.variant_of
+					? {
+							itemCode: newItem.item_code,
+							itemName,
+							variantOf: newItem.variant_of,
+						}
+					: null;
+			}
+
 			// Clear search after successful addition and refocus input via context callback
 			if (context.onItemAdded) context.onItemAdded();
 		} finally {
