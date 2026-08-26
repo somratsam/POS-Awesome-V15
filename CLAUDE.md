@@ -538,6 +538,42 @@ template-item "choose a variant" flow either. Fixed with an explicit
 `:variant`/`:color` binding on each chip instead. See `PROGRESS_NOTES.md`
 section 33.
 
+## A Shape-Based Heuristic (Length, Charset) Can't Reliably Separate Two Real, Legitimate Inputs — Classify by Confidence/Outcome Instead
+
+When a client-side heuristic decides "this input is probably an X" purely
+from its shape (length, character set) in order to short-circuit into a
+different, more consequential code path (auto-submitting a barcode lookup
+instead of running a normal search), check whether the real data actually
+supports that separation before trusting the heuristic — and if it doesn't,
+don't try to tune the heuristic harder; redesign around *what happens after*
+the guess turns out wrong; a wrong guess should be silently reversible, not
+alarming.
+
+Concrete example that happened in this repo: barcode-scan detection used
+digits-only charset + a length threshold to decide "auto-submit this as a
+barcode lookup, and show an error dialog if it's not found." Real catalog
+data confirmed this can never work reliably: a legitimate numeric style code
+(`"4524019703"`) is literally a *character-for-character prefix* of one of
+its own product variant's real registered barcode
+(`"45240197030024"`) — the two are indistinguishable by shape at any given
+moment while typing. No amount of length/charset tuning fixes this since the
+ambiguity is structural, not a calibration problem. The fix was to stop
+trying to classify better and instead tag *why* the system believes this
+might be a scan (verified hardware-scanner keystroke timing = high
+confidence; a value that merely looks barcode-shaped by charset/length,
+e.g. idle-settle typing or paste = low confidence), always attempt the
+(cheap, already-fast) lookup regardless, but only surface a user-facing
+error on a miss for high confidence — a low-confidence miss stays silent
+and normal search proceeds undisturbed, since the lookup was a harmless,
+fire-and-forget side attempt rather than something the UI had already
+committed to. See `PROGRESS_NOTES.md` section 34 for the full investigation,
+including a second, related finding: a parallel detection path with no
+timing awareness at all (built for virtual/scripted input) can misfire on
+an *incomplete* value during ordinary human typing pauses — the fix there
+was the same principle applied one level down: a premature low-confidence
+guess is fine to let through as long as its failure mode is silent, not
+that it needs to never fire at all.
+
 ## Build Commands
 
 ### Main Build Commands

@@ -102,6 +102,35 @@ production (pull, `bench build` -- frontend-only change, no migrate needed --
 scan, hint, dialog, and selected-state chips all verified with the same real
 barcode (89410444020014).
 
+**Barcode scanning: digits-only assumption + length threshold fixed,
+confidence-based redesign after two real bugs found live (section 34) —
+staging-verified and promoted to `develop-swan`/`stable`, production
+deployment explicitly PENDING a physical scanner test.** Real master-data
+analysis across all 9 brands found scan detection was built entirely for
+pure-numeric barcodes at a hardcoded 12-digit minimum, silently excluding
+Charlotte Wix (alphanumeric, as short as 7 characters, its only format) and
+a handful of GEOX/LIU.JO exceptions. Fixed the charset/length gates, then
+found and fixed two further real bugs during the user's own live staging
+testing: a premature-firing race on human-paced typing (fixed by deferring
+to the timing-verified keydown path when it's already tracking the value —
+though what actually makes a premature fire harmless is the confidence fix
+below, traced precisely rather than assumed) and a classification gap where
+real numeric style codes (confirmed via a real DB example: a style code is a
+literal prefix of its own variant's real registered barcode) can't be
+distinguished from real barcodes by shape alone. Redesigned around scan
+confidence instead of guessing — every trigger source tagged `"high"`
+(verified scanner timing, the hardware scanner library, camera decode, or an
+already-confirmed local match) or `"low"` (idle-settle typing, paste, a bare
+numeric-length heuristic); a match always auto-adds regardless of source, a
+miss only alarms the user for `"high"` confidence. Full regression green
+(227/227 files, 1158/1158 tests), committed as one commit (`bc4f33f`,
+cherry-picked to `stable`), user-retested live on staging across all
+scenarios. **A separate, related gap (search results not clearing when the
+search box is emptied, in Limit Search mode) was investigated and a fix
+designed the same day but deliberately NOT built this session — remains
+open.** Do not deploy this barcode work to production until the user
+confirms a physical hardware-scanner test at the store.
+
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
 
@@ -3636,3 +3665,209 @@ doctype/fixture/print-format touched, so no `migrate` needed) + `bench
 restart`, run by the user. **Confirmed working live on production by
 the user** with the same real barcode -- scan, hint, dialog, and
 selected-state chips all verified.
+
+## 34. Barcode scanning was digits-only and length-blind to real catalog data; two real bugs found live, redesigned around scan confidence instead of guessing (2026-08-25 → 2026-08-26)
+
+**Original report:** scanning/pasting a 13-digit barcode auto-added the
+item; a 10-digit one fell back to manual search results instead. Traced
+precisely (not guessed) into `keyboardScanMinLength` -- hardcoded to
+`12` in `useScannerInput.ts`, shared by both the paste-classification
+path (`classifyClipboardScanText`) and the real hardware-scanner
+rapid-keystroke path (`isLikelyKeyboardScan`). A 10-digit value failed
+both; a 13-digit value passed both. Confirmed via a real DB query that
+the backend lookup (`get_items_from_barcode()`, a parameterized
+`Item Barcode` exact-match) has zero length restriction at all -- the
+gate was a purely frontend heuristic, disconnected from any real
+registered barcode data.
+
+**Escalation: `isNumericString` (`/^\d+$/`) rejects ANY letter or
+space, at four separate, redundant gates** (`handleSearchKeydown`'s
+per-keystroke check -- the earliest and most fundamental, since it
+decides whether to even start buffering a rapid-keystroke sequence;
+`isSearchFieldPrimedForScan`; the same regex inside
+`isLikelyKeyboardScan`; and, for paste specifically, an *additional*
+bug where `sanitizeClipboardText` stripped ALL whitespace unconditionally,
+which would corrupt any barcode containing a meaningful internal space
+even if the charset gates were fixed). Confirmed via a physical example
+the user provided: Charlotte Wix's real barcode format is
+`"PA5 76LE"` -- letters and a space, not an edge case for that brand,
+its *only* format.
+
+**Real master-data analysis, all 9 brands, provided by the user (staging
+only ever had 1 of 9 brands loaded, so this had to come from outside
+this dev environment):** real barcode lengths range 7-14 characters
+across the catalog; FURLA/MARELLA/MAX&CO./PENNYBLACK/TEEMBE/UCB are pure
+numeric (12-14 digits); GEOX and LIU.JO DONNA are almost entirely
+numeric with a handful of alphanumeric exceptions (`"PYTSETPYTS10"`,
+lowercase `"dl0084003392"`); Charlotte Wix is alphanumeric for 100% of
+its 63 items, including a `"/"` character in at least one real barcode
+(`"FE1 10L/XL"`). No cross-brand barcode collisions. ~70 items across 3
+brands were actively affected by the combination of the numeric-only
+gates and the length≥12 threshold.
+
+**Fix, phase 1 (charset + length):**
+- `isNumericString` replaced with `isBarcodeCandidateChar`/
+  `isBarcodeCandidateString` (`/^[A-Za-z0-9 /]/`), covering every real
+  character class found in the actual catalog. Applied at all four
+  gates; dead code (`shouldResetScanOnInput`, unused anywhere) deleted.
+- `keyboardScanMinLength` lowered from `12` to `7` -- the real observed
+  catalog minimum (Charlotte Wix's shortest format), not padded lower,
+  since padding below a known real minimum only widens false-positive
+  surface with no benefit. Kept as one shared hardcoded constant rather
+  than building dynamic derivation from live registered-barcode data --
+  a deliberate scope decision (real minimum is now known, and building
+  a live-query/cache mechanism for a value that only changes on
+  deliberate brand-onboarding decisions was judged not worth the added
+  complexity for this codebase).
+- `sanitizeClipboardText` now only `.trim()`s (leading/trailing
+  whitespace) -- no longer collapses/strips internal whitespace, so a
+  barcode with a real internal space survives a paste intact. Confirmed
+  a no-op for every pure-numeric brand (no whitespace to strip in the
+  first place).
+- Real test items created on staging (`TEST-SCAN-CW-01/02`,
+  `TEST-SCAN-GEOX-01`, `TEST-SCAN-LIUJO-01`, using the exact real
+  barcode values above, clearly `[TEST SCAN]`-labeled, 10 units stock
+  each in the POS Profile's warehouse) and independently verified
+  against the real `get_items_from_barcode()` backend function --
+  confirming the backend was already correct before any frontend change
+  -- before building anything.
+- Full regression: frontend suite 226/226 files → 1142/1142 tests after
+  this phase (12 new tests covering real alphanumeric/space/`/` formats
+  at real lengths plus explicit regression proof the existing
+  pure-numeric brands behave identically).
+
+**Two real bugs found during the user's own live testing on staging,
+both traced live per explicit instruction, not guessed:**
+
+**Bug A -- premature-firing race.** Scanning the real Charlotte Wix
+barcode 89410444020014-adjacent-style item `"PA4 79SF"` (8 characters)
+correctly added the item, but a spurious "Item not found: PA4 79S"
+error dialog *also* appeared -- missing the final "F". Root cause:
+`handleSearchInput` (built for virtual/scripted input tools that update
+the field's value without firing real keydown events at all, per its
+own pre-existing comment) has no keystroke-speed check whatsoever -- it
+fires whenever the field's value hasn't changed for `keyboardScanProcessingDelay`
+(100ms), regardless of how it got there. At the old `minLength=12`,
+hitting exactly 12 characters mid-sequence with more still coming was a
+rare coincidence for 12-14 digit barcodes; at `minLength=7` with
+Charlotte Wix's 7-8 character format, "exactly at the threshold with
+one character still to go" is close to the normal case, and a routine
+human pause >100ms before the last character reads as "the value has
+settled" on the *incomplete* string. Fixed by deferring to
+`handleSearchKeydown`'s own timing-verified evaluation when its buffer
+is already tracking the identical value (only possible for genuinely
+fast, scanner-speed input -- real human typing keeps resetting that
+buffer via its own gap check), avoiding redundant double-scheduling of
+two independent evaluations for the same fast-typed moment. **Traced
+precisely, not assumed: this defer does NOT, by itself, stop a
+premature evaluation from firing during ordinary human typing** (a
+real >100ms pause mid-sequence can still trigger `handleSearchInput`'s
+idle check on its own, since the defer only applies when
+`handleSearchKeydown`'s buffer is tracking the value, which it never is
+for realistic human-paced typing) -- what actually makes that harmless
+is Bug B's confidence-based fix below, not this defer. A dedicated test
+("tags a premature idle-settle fire on human-paced typing as low
+confidence, never high") confirms the premature call does fire but is
+never tagged `"high"`.
+
+A second, related robustness gap found while validating this fix:
+`isLikelyKeyboardScan`'s *average*-interval-only check can be fooled by
+a fast-typed prefix diluting one slow gap below the threshold, even
+though no real human or working scanner would naturally produce that
+exact pattern (a genuine scanner sends every character uninterrupted at
+uniform speed; the pattern requires literally impossible sub-45ms/char
+sustained "human" typing followed by an artificial pause) -- added
+`maxGapObserved` tracking (the single worst inter-keystroke gap, not
+just the average) as a stricter, defensive check with its own direct
+unit tests (`keyboardScan.spec.ts`, new file).
+
+**Bug B -- classification gap, confirmed with real data, not
+hypothetical.** Searching for style code `"4524019703"` (10 digits,
+pure numeric -- a real internal style/reference code, not a registered
+barcode) triggered a Scan Error instead of showing search results.
+Confirmed via a direct DB query: `"4524019703"` is a real `Item` in the
+catalog (the style/template item), and it is literally a *prefix* of
+its own variant's real 14-digit registered barcode
+(`"45240197030024"`) -- a style-code search and an in-progress scan of
+one of its own variants can be character-for-character identical at
+any given moment. No length or charset rule can ever perfectly separate
+these; the codebase already demonstrated the correct pattern in one
+place (`_performSearch`'s `resolveItemByBarcode` branch: check a real,
+already-loaded local index first, only escalate on a confirmed match)
+but applied it inconsistently -- a second, separate, hardcoded
+`/^\d{12,}$/` branch in the same function committed blindly with no
+local pre-check at all, and the deeper, always-correct backend lookup
+(`get_items_from_barcode()`) had its "not found" outcome wired to
+*always* show the error dialog regardless of how confident the trigger
+was that this was a deliberate scan in the first place.
+
+**Redesign: confidence-based, not classification-based.** Rather than
+trying to guess better from shape (provably impossible given the real
+data above), every trigger source is tagged `"high"` or `"low"`
+confidence, and only a `"high"`-confidence miss shows the error dialog:
+- `"high"`: `handleSearchKeydown`'s verified scanner-speed timing
+  (`isLikelyKeyboardScan`), the `onScan.js` hardware-scanner library's
+  own independent document-level detection (`triggerOnScan`), a
+  camera-decoded barcode (a genuine scan of a real symbol -- found
+  while auditing every real caller of `onBarcodeScanned` for coverage,
+  not previously identified), and `resolveItemByBarcode`'s
+  already-locally-confirmed exact match.
+- `"low"`: `handleSearchInput`'s idle-settle path, paste, and the
+  `/^\d{12,}$/` heuristic -- none of these can distinguish a real
+  barcode from a shape-alike search term on their own.
+- On a match, behavior is unchanged regardless of source -- auto-add to
+  cart, exactly as before; this was never in question.
+- On a miss, only `"high"` shows the "Item not found" dialog. `"low"`
+  stays completely silent -- no dialog, no error tone -- and, for the
+  `/^\d{12,}$/` branch specifically, no longer returns early: normal
+  search now runs alongside the (silent, fire-and-forget) barcode
+  attempt, so a miss surfaces real search results instead of a dead
+  end, exactly matching what the user asked for ("search should still
+  happen").
+- The stock-shortage error path (`addScannedItemToInvoice`, a
+  completely different, legitimate error since the item *was* found)
+  is untouched -- confirmed via its own existing passing tests.
+
+**Full regression check, final state:** frontend suite **227/227
+files, 1158/1158 tests** (16 new across this phase: confidence tagging
+at all six real trigger sources, the timing-race defer, `maxGapObserved`,
+both miss/match paths in `useScanProcessor`, the `/^\d{12,}$/`
+fallthrough, and a new dedicated `keyboardScan.spec.ts` for
+`isLikelyKeyboardScan` in isolation). `bench build --app posawesome`
+clean. Backend: N/A, no Python touched across either phase. `bench
+migrate`: N/A. Security: no new input/auth surface -- confidence only
+changes which client-side heuristic path a value arrived through before
+reaching the same, already-safe, unchanged backend lookup.
+
+**Promoted to `develop-swan` as one commit** (`bc4f33f`) -- despite
+evolving through several iterations (initial charset/length fix →
+timing-race discovery → confidence redesign) within the same session,
+none of the intermediate states were ever separately committed or
+promoted, so it's recorded as one commit and one story here, matching
+this session's established precedent (section 33's sibling-hint feature
+did the same). User retested all scenarios live on staging before
+promotion was requested (Charlotte Wix scan-and-add, style-code search,
+real barcode paste, genuine scan failure still correctly alarming).
+
+**Explicitly NOT yet done, by the user's own choice:** a search-results-
+clear investigation happened the same day (dead `itemsSelectorSearch.clearSearch()`
+in `useItemsSelectorSearch.ts` -- correctly designed, including a
+`usesLimitSearch`-aware reset, but never wired to the UI, and internally
+broken besides since it reads through a `<script setup>` component
+proxy that never exposes the state it needs via `defineExpose`; the
+live "X" button instead calls a different, simpler `clearSearch()` in
+`useItemsSelectorSearchInput.ts` that only clears the text, never the
+underlying stale search-results state -- reproduces specifically in
+Limit Search mode, confirmed live via this store's actual POS Profile
+config). A fix was designed and reviewed but the user explicitly chose
+not to build it in this session, since it hadn't been separately
+stage-tested; it remains open for a future session.
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed to production.** The user has
+explicitly deferred production deployment until after a physical
+barcode-scanner test at the store against real Charlotte Wix stock
+(staff have both the scanner and the actual items on hand) -- staging
+testing used pasted/typed input and the real test items created above,
+not genuine hardware-scanner keystroke timing. Do not deploy to
+production until that physical test is confirmed by the user.
