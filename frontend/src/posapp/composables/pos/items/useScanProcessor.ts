@@ -15,6 +15,7 @@ import {
 } from "./scanProcessor/scanAssignment";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
 import itemService from "../../../services/itemService";
+import type { ScanConfidence } from "./useScannerInput";
 // @ts-ignore
 import placeholderImage from "../../../components/pos/placeholder-image.png";
 
@@ -439,7 +440,10 @@ export function useScanProcessor(context: ScanProcessorContext) {
 		}
 	};
 
-	const processScannedItem = async (scannedCode: string) => {
+	const processScannedItem = async (
+		scannedCode: string,
+		confidence: ScanConfidence = "low",
+	) => {
 		const mark = perfMarkStart("pos:scan-process");
 		logScanFlow("Start processing scan", { scannedCode });
 		pendingScanCode.value = scannedCode;
@@ -713,25 +717,39 @@ export function useScanProcessor(context: ScanProcessorContext) {
 			// Report Not Found
 			if (context.onItemNotFound) context.onItemNotFound(scannedCode);
 
-			showScanError({
-				message: `${__("Item not found")}: ${scannedCode}`,
-				code: scannedCode,
-				details: __(
-					"Please verify the barcode or check the item's availability.",
-				),
-			});
+			// Only "high" confidence (verified scanner-speed timing, or the
+			// onScan.js hardware library) means this was a genuine, deliberate
+			// scan -- a miss there is a real signal worth surfacing. "low"
+			// confidence input (idle-settle typing, paste, a bare numeric
+			// length heuristic) only looked barcode-shaped by charset/length;
+			// real search terms (style codes, item codes) can be
+			// indistinguishable from a real barcode by shape alone in this
+			// catalog, so a miss there just means "not a barcode" -- stay
+			// silent and let normal search proceed with the typed/pasted
+			// text undisturbed. See PROGRESS_NOTES.md section 34.
+			if (confidence === "high") {
+				showScanError({
+					message: `${__("Item not found")}: ${scannedCode}`,
+					code: scannedCode,
+					details: __(
+						"Please verify the barcode or check the item's availability.",
+					),
+				});
+			}
 			return;
 		} catch (e: any) {
 			console.error("Error fetching item from barcode:", e);
 			if (context.onItemNotFound) context.onItemNotFound(scannedCode);
 
-			showScanError({
-				message: `${__("Item not found")}: ${scannedCode}`,
-				code: scannedCode,
-				details: __(
-					"The system could not retrieve the item details. Please try again.",
-				),
-			});
+			if (confidence === "high") {
+				showScanError({
+					message: `${__("Item not found")}: ${scannedCode}`,
+					code: scannedCode,
+					details: __(
+						"The system could not retrieve the item details. Please try again.",
+					),
+				});
+			}
 			return;
 		} finally {
 			perfMarkEnd("pos:scan-process", mark);

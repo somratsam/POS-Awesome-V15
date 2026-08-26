@@ -259,6 +259,73 @@ describe("useScanProcessor serial scan handling", () => {
 		expect(addedItem.variant_of).toBe("3574023203");
 	});
 
+	// Real regression: real catalog data has legitimate numeric style/item
+	// codes (e.g. a 10-digit style code that's a literal prefix of one of its
+	// own variants' real registered barcode) in the same length/charset range
+	// as real barcodes -- a miss can genuinely be an ordinary search term, not
+	// a bad scan. Only "high" confidence (verified scanner-speed timing, or a
+	// locally pre-confirmed exact match) means this was a deliberate,
+	// definite scan, so only that source should alarm the user on a miss.
+	// See PROGRESS_NOTES.md section 34.
+	it("shows the scan-error dialog on a miss for high confidence (a genuine scanner-speed scan)", async () => {
+		const ctx = makeContext();
+		// getItemsFromBarcodeData already resolves to null by default (beforeEach).
+
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("4524019703", "high");
+
+		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(true);
+		expect(ctx.scannerInput.scanErrorCode.value).toBe("4524019703");
+		expect(ctx.scannerInput.scanErrorMessage.value).toContain(
+			"4524019703",
+		);
+	});
+
+	it("stays silent on a miss for low confidence (e.g. a numeric style-code search that only looked barcode-shaped)", async () => {
+		const ctx = makeContext();
+
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("4524019703", "low");
+
+		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+	});
+
+	it("defaults to low confidence (stays silent on a miss) when no confidence is passed", async () => {
+		const ctx = makeContext();
+
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("4524019703");
+
+		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+	});
+
+	it("still auto-adds on a match regardless of confidence -- low confidence never blocks a real match", async () => {
+		const ctx = makeContext();
+		itemServiceMocks.getItemsFromBarcodeData.mockResolvedValueOnce({
+			item_code: "TEST-SCAN-CW-01",
+			item_name: "[TEST SCAN] Charlotte Wix Sample 1",
+			barcode: "PA4 79SF",
+			rate: 50,
+			price_list_rate: 50,
+			uom: "Nos",
+			currency: "USD",
+			has_variants: 0,
+			item_group: "DRESS",
+			is_stock_item: 1,
+			has_serial_no: 0,
+			has_batch_no: 0,
+		});
+
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("PA4 79SF", "low");
+
+		expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+	});
+
 	it("blocks scanned items with insufficient stock for invoice flow", async () => {
 		const ctx = makeContext({
 			deferStockValidationToPayment: false,

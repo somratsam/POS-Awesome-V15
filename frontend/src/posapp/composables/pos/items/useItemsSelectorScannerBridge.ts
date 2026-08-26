@@ -1,12 +1,15 @@
 import { ref, type Ref } from "vue";
 
 import { resetNewItemDialogState } from "../../../components/pos/items/newItemDialogState";
+import type { ScanConfidence } from "./useScannerInput";
 
 type UseItemsSelectorScannerBridgeArgs = {
 	cameraScannerActive: Ref<boolean>;
 	startCameraScanning: () => void;
 	requestForegroundItemSearchFocus: () => void;
-	onBarcodeScannedFromScannerInput?: ((_code: string) => void) | null;
+	onBarcodeScannedFromScannerInput?:
+		| ((_code: string, _confidence?: ScanConfidence) => void)
+		| null;
 	reloadItems: () => Promise<unknown> | unknown;
 };
 
@@ -40,7 +43,9 @@ export function useItemsSelectorScannerBridge({
 		}
 
 		requestForegroundItemSearchFocus();
-		onBarcodeScannedFromScannerInput?.(code);
+		// A camera-decoded barcode is a genuine, definite scan of a real
+		// barcode symbol -- not a shape guess.
+		onBarcodeScannedFromScannerInput?.(code, "high");
 	};
 
 	const onScannerOpened = () => {

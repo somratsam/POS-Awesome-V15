@@ -306,6 +306,8 @@ export const useItemsSelectorSearch = ({
 		syncSearchInput(vm, trimmedQuery);
 
 		// The barcode index owns its memory threshold and large-catalog fallback.
+		// High confidence: resolveItemByBarcode already found an exact, real
+		// match in the loaded catalog -- this isn't a shape guess.
 		if (typeof resolveItemByBarcode === "function") {
 			if (resolveItemByBarcode(trimmedQuery)) {
 				// Guard: auto-add watcher already triggered scan pipeline for this code
@@ -313,22 +315,31 @@ export const useItemsSelectorSearch = ({
 					return;
 				}
 				if (typeof vm.onBarcodeScanned === "function") {
-					vm.onBarcodeScanned(trimmedQuery);
+					vm.onBarcodeScanned(trimmedQuery, "high");
 				} else if (scannerInput?.onBarcodeScanned) {
-					scannerInput?.onBarcodeScanned(trimmedQuery);
+					scannerInput?.onBarcodeScanned(trimmedQuery, "high");
 				}
 				return;
 			}
 		}
 
-		// If the input is a numeric string 12 characters or longer, treat it as a barcode
+		// A numeric string 12+ characters long only *looks* barcode-shaped --
+		// real catalog data has legitimate numeric style/item codes in this
+		// same length range (e.g. a 10-digit style code that's a literal
+		// prefix of one of its own variants' real 14-digit barcodes), so this
+		// is low confidence. Fire the (async, fire-and-forget) barcode lookup
+		// -- if it's a real match it auto-adds to cart exactly as before --
+		// but, unlike the confirmed-match branch above, deliberately do NOT
+		// return here: normal search below runs too, so a miss (silent, per
+		// ScanConfidence) just leaves the user looking at real search
+		// results for what was actually a search term all along, instead of
+		// a dead end. See PROGRESS_NOTES.md section 34.
 		if (/^\d{12,}$/.test(trimmedQuery)) {
 			if (typeof vm.onBarcodeScanned === "function") {
-				vm.onBarcodeScanned(trimmedQuery);
+				vm.onBarcodeScanned(trimmedQuery, "low");
 			} else if (scannerInput?.onBarcodeScanned) {
-				scannerInput?.onBarcodeScanned(trimmedQuery);
+				scannerInput?.onBarcodeScanned(trimmedQuery, "low");
 			}
-			return;
 		}
 
 		// Require a minimum of three characters before running a search
