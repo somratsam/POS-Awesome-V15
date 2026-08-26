@@ -8,6 +8,7 @@ import {
 } from "../../../utils/scaleBarcode.js";
 import {
 	getScanTimestamp,
+	isBarcodeCandidateChar,
 	isLikelyKeyboardScan,
 	isSearchFieldPrimedForScan,
 } from "../../../utils/keyboardScan.js";
@@ -22,8 +23,24 @@ declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
 declare const onScan: any;
 
+// "high" confidence means the trigger itself independently proves this was a
+// deliberate scan -- real scanner-hardware keystroke timing (isLikelyKeyboardScan,
+// or the onScan.js library's own document-level detection), or a locally
+// already-confirmed exact barcode match. A miss for these is a genuine signal
+// worth surfacing (a real scan of an unregistered/mislabeled item).
+// "low" confidence means the trigger only *looks* barcode-shaped by charset/
+// length (idle-settle typing, paste, or a blind numeric-length heuristic) --
+// real search terms (style codes, item codes) can be indistinguishable from a
+// real barcode by shape alone, so a miss here must not alarm the user; it
+// just means this wasn't a barcode, and normal search proceeds undisturbed.
+// See PROGRESS_NOTES.md section 34.
+export type ScanConfidence = "high" | "low";
+
 export interface ScannerInputOptions {
-	onScan?: (_code: string) => Promise<void> | void;
+	onScan?: (
+		_code: string,
+		_confidence?: ScanConfidence,
+	) => Promise<void> | void;
 	getSearchInput?: () => string;
 	setSearchInput?: (_val: string) => void;
 	clearSearch?: () => void;
@@ -38,7 +55,9 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	const clearSearchHandler = ref(options.clearSearch || null);
 	const focusSearchHandler = ref(options.focusSearch || null);
 
-	const setScanHandler = (fn: (_code: string) => Promise<void> | void) => {
+	const setScanHandler = (
+		fn: (_code: string, _confidence?: ScanConfidence) => Promise<void> | void,
+	) => {
 		onScanHandler.value = fn;
 	};
 	const setInputHandlers = (handlers: {
@@ -92,9 +111,19 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	const keyboardScanLastTime = ref(-1);
 	const keyboardScanStartTime = ref(-1);
 	const keyboardScanPendingValue = ref("");
+	// Largest single inter-keystroke gap seen in the current sequence -- see
+	// isLikelyKeyboardScan's maxGapObserved: an average-only check can be
+	// fooled by a fast-typed prefix followed by one human pause.
+	const keyboardScanMaxGapObserved = ref(0);
 
 	// Config
-	const keyboardScanMinLength = 12;
+	// 7, not a rounder-looking number: it's the real observed minimum
+	// barcode length across this store's full 9-brand catalog (Charlotte
+	// Wix's "PA1 9LF" and similar are 7 characters). Was previously 12,
+	// which assumed digits-only barcodes and silently excluded every
+	// Charlotte Wix item (their only format) plus a handful of GEOX/LIU.JO
+	// exceptions -- see PROGRESS_NOTES.md section 34.
+	const keyboardScanMinLength = 7;
 	const keyboardScanMaxInterval = 45;
 	const keyboardScanMaxDuration = 250;
 	const keyboardScanProcessingDelay = 100;
@@ -245,7 +274,10 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		pendingScanCode.value = sCode;
 
 		nextTick(() => {
-			onBarcodeScanned(sCode);
+			// The onScan.js library independently detects real hardware
+			// scanner keystroke patterns document-wide -- this is a genuine
+			// scan, not a shape guess.
+			onBarcodeScanned(sCode, "high");
 		});
 	};
 
@@ -286,7 +318,10 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	};
 
 	// --- Main Scan Handler ---
-	const onBarcodeScanned = (scannedCode: string) => {
+	const onBarcodeScanned = (
+		scannedCode: string,
+		confidence: ScanConfidence = "low",
+	) => {
 		resetKeyboardScanDetection();
 		const normalizedCode = String(scannedCode || "").trim();
 		if (!normalizedCode) return;
@@ -333,7 +368,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 				}
 
 				if (onScanHandler.value) {
-					await (onScanHandler.value as any)(code);
+					await (onScanHandler.value as any)(code, confidence);
 				}
 			} catch (error) {
 				handleScanPipelineError(error, code);
@@ -373,6 +408,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		keyboardScanLastTime.value = -1;
 		keyboardScanStartTime.value = -1;
 		keyboardScanPendingValue.value = "";
+		keyboardScanMaxGapObserved.value = 0;
 	};
 
 	const evaluateKeyboardScan = (currentInput: string) => {
@@ -402,7 +438,10 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		) {
 			resetKeyboardScanDetection();
 			if (code) {
-				onBarcodeScanned(code);
+				// isLikelyKeyboardScan already verified real scanner-speed
+				// keystroke timing (<=45ms/char average) -- a human cannot
+				// type that fast, so this is a genuine scan.
+				onBarcodeScanned(code, "high");
 			}
 			return true; // Detected
 		}
@@ -424,8 +463,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			return false;
 		}
 
-		// Only digits usually start a barcode scan in this context, but we can be broader
-		if (!/^\d$/.test(key)) {
+		// Real barcodes aren't digits-only (e.g. Charlotte Wix's "PA4 79SF") --
+		// this only rejects characters no real barcode format uses at all.
+		// Timing (isLikelyKeyboardScan below) is what actually distinguishes a
+		// real scan from ordinary typing now that charset can't.
+		if (!isBarcodeCandidateChar(key)) {
 			resetKeyboardScanDetection();
 			return false;
 		}
@@ -446,6 +488,14 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			// Gap too long, reset but start new buffer
 			keyboardScanBuffer.value = "";
 			keyboardScanStartTime.value = now;
+			keyboardScanMaxGapObserved.value = 0;
+		} else if (keyboardScanLastTime.value >= 0) {
+			// Track the worst single gap in this sequence, not just the
+			// eventual average -- see isLikelyKeyboardScan's maxGapObserved.
+			keyboardScanMaxGapObserved.value = Math.max(
+				keyboardScanMaxGapObserved.value,
+				now - keyboardScanLastTime.value,
+			);
 		}
 
 		if (!keyboardScanBuffer.value) {
@@ -485,6 +535,22 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			return false;
 		}
 
+		// If handleSearchKeydown's own per-keystroke tracking is already
+		// watching this exact value (only possible for genuinely fast,
+		// scanner-speed input -- real human typing keeps resetting that
+		// buffer via its own gap check), it will make its own, more
+		// rigorous, timing-verified decision once it settles. Don't also
+		// schedule a second, competing "has the value gone idle" evaluation
+		// for the same string here -- without this, a genuine fast scan
+		// could get evaluated twice, redundantly, by two independent
+		// mechanisms for the same moment. This does NOT, on its own, stop
+		// an idle-settle evaluation from ever firing on an incomplete value
+		// during ordinary human typing (a real, >100ms pause mid-sequence
+		// can still trigger one) -- what makes that harmless is that such a
+		// miss is tagged "low" confidence and stays silent (see
+		// ScanConfidence / PROGRESS_NOTES.md section 34), not this check.
+		const alreadyTrackedByKeydown = keyboardScanBuffer.value === currentValue;
+
 		const now = getScanTimestamp();
 		const previousValue = keyboardScanPendingValue.value || "";
 		const isAppend =
@@ -499,6 +565,10 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		keyboardScanBuffer.value = currentValue;
 		keyboardScanPendingValue.value = currentValue;
 		keyboardScanLastTime.value = now;
+
+		if (alreadyTrackedByKeydown) {
+			return currentValue.length >= keyboardScanMinLength;
+		}
 
 		if (keyboardScanTimer.value) {
 			clearTimeout(keyboardScanTimer.value);
@@ -523,9 +593,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			}
 
 			// Virtual scanners (for example AHK-based tools) often populate the
-			// field without reliable key timing, so fall back to idle-value detection.
+			// field without reliable key timing, so fall back to idle-value
+			// detection. Low confidence: shape-only, not a verified real scan --
+			// a miss here must not alarm the user (see ScanConfidence).
 			resetKeyboardScanDetection();
-			onBarcodeScanned(latestValue);
+			onBarcodeScanned(latestValue, "low");
 		}, keyboardScanProcessingDelay);
 
 		return currentValue.length >= keyboardScanMinLength;
@@ -549,7 +621,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 				(setSearchInputHandler.value as any)(pasteScan.sanitizedText);
 
 			nextTick(() => {
-				onBarcodeScanned(pasteScan.sanitizedText);
+				// Low confidence: a pasted value only looks barcode-shaped by
+				// charset/length, same as idle-settle typing -- e.g. a style
+				// code copied from a report is just as plausible as a real
+				// barcode. A miss must not alarm the user (see ScanConfidence).
+				onBarcodeScanned(pasteScan.sanitizedText, "low");
 			});
 		}
 	};

@@ -108,8 +108,48 @@ describe("useItemsSelectorSearch", () => {
 		await api._performSearch();
 
 		expect(resolveItemByBarcode).toHaveBeenCalledWith("BOX-001");
-		expect(scannerInput.onBarcodeScanned).toHaveBeenCalledWith("BOX-001");
+		expect(scannerInput.onBarcodeScanned).toHaveBeenCalledWith(
+			"BOX-001",
+			"high",
+		);
 		expect(vm.search).toBe("");
+	});
+
+	// Real catalog data has legitimate numeric style/item codes in the same
+	// 12+ digit length range as real barcodes (e.g. a style code that's a
+	// literal prefix of one of its own variants' real 14-digit barcode) -- a
+	// miss here can genuinely be an ordinary search term. Low confidence, and
+	// unlike the confirmed-local-match branch above, must NOT return early:
+	// normal search runs too, so a miss just leaves real search results
+	// showing instead of a dead end. See PROGRESS_NOTES.md section 34.
+	it("tags a bare 12+ digit numeric Enter as low confidence and still runs normal search alongside it", async () => {
+		const scannerInput = createScannerInput();
+		const searchItems = vi.fn().mockResolvedValue([]);
+		const vm = {
+			first_search: "452401970312",
+			search_input: "452401970312",
+			search: "",
+			search_from_scanner: false,
+			isBackgroundLoading: false,
+			pos_profile: { posa_use_limit_search: 1 },
+			itemsIntegration: { searchItems },
+		};
+
+		const api = useItemsSelectorSearch({
+			getVM: () => vm,
+			scannerInput,
+		});
+
+		await api._performSearch();
+
+		expect(scannerInput.onBarcodeScanned).toHaveBeenCalledWith(
+			"452401970312",
+			"low",
+		);
+		// Unlike the confirmed-match branch, this must fall through to
+		// normal search rather than returning early.
+		expect(searchItems).toHaveBeenCalledWith("452401970312");
+		expect(vm.search).toBe("452401970312");
 	});
 
 	it("selects the highlighted item when enter is pressed in limit search mode", async () => {
