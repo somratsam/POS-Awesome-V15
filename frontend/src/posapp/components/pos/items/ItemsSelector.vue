@@ -1878,6 +1878,11 @@ const {
 	focusItemSearch: () => itemsSelectorFocus.focusItemSearch(),
 	setActiveView: (view) => uiStore.setActiveView(view),
 	triggerItemSearchFocus: () => uiStore.triggerItemSearchFocus(),
+	isLimitSearchEnabled: () => usesLimitSearch.value,
+	resetLimitSearchResults: () => {
+		itemsIntegration.clearLimitSearchResults({ preserveItems: false });
+		resetBarcodeIndex();
+	},
 });
 const handleItemSearchFocusForPresentation = () => {
 	if (props.presentation === "counter-grid-dialog") {
@@ -1924,6 +1929,14 @@ const esc_event = () => {
 const onEnter = (e) => {
 	if (props.presentation === "counter-grid-dialog") {
 		void handleCounterResultEnter(e);
+		return;
+	}
+	// itemsSelectorSearch._performSearch's own empty-query early return
+	// (< 3 chars) never resets stale Limit Search results -- same gap as
+	// the "X" clear button, just reached via Enter on an emptied box
+	// instead. Route it through the same fixed clearSearch() instead.
+	if (!String(search_input.value || "").trim()) {
+		clearSearch();
 		return;
 	}
 	itemsSelectorSearch.onEnter(e);
