@@ -1321,7 +1321,15 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 				stores.uiStore.setLastInvoice(responseInvoiceName);
 			}
 
-			if (!waitForInvoiceProcessing) {
+			// No toast for a plain submit with no background work -- the
+			// natural screen transition after sale completion is sufficient
+			// confirmation, matching standard retail POS practice (Square,
+			// Clover, Toast, Shopify never show one either). The loading
+			// indicator below is kept: it's the only signal staff get that
+			// payment entries are still processing in the background after
+			// the visible submit completes, which nothing else communicates.
+			// See PROGRESS_NOTES.md section 36.
+			if (!waitForInvoiceProcessing && hasPostSubmitPaymentWork) {
 				const submittedDocumentType = resolvePosDocumentDoctype({
 					invoiceType: type,
 					posProfile: profile,
@@ -1338,26 +1346,18 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 							: __("Invoice {0} is Submitted", [
 									responseInvoiceName,
 								]);
-				stores?.toastStore?.show(
-					hasPostSubmitPaymentWork
-						? {
-								key: `invoice-processing::${responseInvoiceName}`,
-								title: __("Invoice Submitted"),
-								summary: submittedTitle,
-								detail: __(
-									"Processing payment entries for Invoice {0}",
-									[responseInvoiceName],
-								),
-								color: "info",
-								timeout: -1,
-								loading: true,
-							}
-						: {
-								key: `invoice-processing::${responseInvoiceName}`,
-								title: submittedTitle,
-								color: "success",
-							},
-				);
+				stores?.toastStore?.show({
+					key: `invoice-processing::${responseInvoiceName}`,
+					title: __("Invoice Submitted"),
+					summary: submittedTitle,
+					detail: __(
+						"Processing payment entries for Invoice {0}",
+						[responseInvoiceName],
+					),
+					color: "info",
+					timeout: -1,
+					loading: true,
+				});
 			}
 
 			if (frappe?.utils?.play_sound) {

@@ -512,6 +512,68 @@ describe("usePaymentSubmission", () => {
 		);
 	});
 
+	// Real change: a plain submit with no post-submit background work used
+	// to show a "Invoice {id} is Submitted" success toast on top of the
+	// natural screen transition (and receipt print) that already confirms
+	// completion -- removed entirely, matching standard retail POS practice
+	// (no replacement toast). The loading/processing toast above is a
+	// separate, deliberately-kept branch since it's the only signal for
+	// genuine background work. See PROGRESS_NOTES.md section 36.
+	it("shows no toast at all for a plain submit with no post-submit background work", async () => {
+		const invoiceService = (
+			await import("../src/posapp/services/invoiceService")
+		).default;
+		(invoiceService.submitInvoice as any).mockResolvedValue({
+			name: "ACC-SINV-0099",
+			doctype: "Sales Invoice",
+			docstatus: 1,
+		});
+
+		const invoiceDoc = ref<any>({
+			name: "ACC-SINV-0099",
+			doctype: "Sales Invoice",
+			is_return: 0,
+			items: [],
+			payments: [{ mode_of_payment: "Cash", amount: 100, type: "Cash" }],
+			rounded_total: 100,
+			grand_total: 100,
+		});
+		const toastShow = vi.fn();
+
+		const { submitInvoice } = usePaymentSubmission({
+			invoiceDoc,
+			posProfile: ref({
+				posa_allow_submissions_in_background_job: 0,
+				create_pos_invoice_instead_of_sales_invoice: 0,
+			}),
+			stockSettings: ref({}),
+			invoiceType: ref("Invoice"),
+			formatFloat: (value) => Number(value || 0),
+			stores: {
+				toastStore: { show: toastShow },
+				uiStore: {
+					setLastInvoice: vi.fn(),
+					setLastStockAdjustment: vi.fn(),
+				},
+				customersStore: { setSelectedCustomer: vi.fn() },
+				invoiceStore: { invoiceDoc: invoiceDoc.value },
+			},
+			isCashback: ref(false),
+			paidChange: ref(0),
+			creditChange: ref(0),
+			redeemedCustomerCredit: ref(0),
+			customerCreditDict: ref([]),
+			diff_payment: ref(0),
+		});
+
+		await submitInvoice(false, {
+			onFinishNavigation: vi.fn(),
+			onScheduleBackgroundCheck: vi.fn(),
+		});
+
+		expect(toastShow).not.toHaveBeenCalled();
+	});
+
 	it("includes gift card redemptions in the submit payload", async () => {
 		const invoiceService = (
 			await import("../src/posapp/services/invoiceService")
