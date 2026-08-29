@@ -31,6 +31,13 @@ type UseItemsSelectorSearchInputArgs = {
 	focusItemSearch: () => void;
 	setActiveView: (_view: string) => void;
 	triggerItemSearchFocus: () => void;
+	// In Limit Search mode, filteredItems/items hold whatever a prior server
+	// search returned -- merely clearing the text does nothing to that stale
+	// state, so the "empty" grid keeps showing the last search's results
+	// instead of the empty-browse-prompt state. Both optional so this
+	// composable still works standalone (e.g. in tests) without them.
+	isLimitSearchEnabled?: () => boolean;
+	resetLimitSearchResults?: () => void;
 };
 
 export function useItemsSelectorSearchInput({
@@ -45,6 +52,8 @@ export function useItemsSelectorSearchInput({
 	focusItemSearch,
 	setActiveView,
 	triggerItemSearchFocus,
+	isLimitSearchEnabled,
+	resetLimitSearchResults,
 }: UseItemsSelectorSearchInputArgs) {
 	const clearSearch = () => {
 		if (clearingSearch) {
@@ -52,6 +61,9 @@ export function useItemsSelectorSearchInput({
 		}
 		searchInput.value = "";
 		firstSearch.value = "";
+		if (isLimitSearchEnabled?.() && resetLimitSearchResults) {
+			resetLimitSearchResults();
+		}
 		if (clearingSearch) {
 			clearingSearch.value = false;
 		}
