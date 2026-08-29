@@ -29,6 +29,7 @@ export async function validate(context: any) {
 			context.toastStore.show({
 				title: __(`Return items must have negative quantities`),
 				color: "error",
+				key: "return-validation",
 			});
 
 			// Fix the quantities to be negative
@@ -46,6 +47,7 @@ export async function validate(context: any) {
 			context.toastStore.show({
 				title: __(`Return total must be negative`),
 				color: "warning",
+				key: "return-validation",
 			});
 		}
 	}

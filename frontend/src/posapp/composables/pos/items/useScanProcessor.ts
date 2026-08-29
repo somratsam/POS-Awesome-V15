@@ -1,5 +1,4 @@
 import { ref, type Ref, type ComputedRef } from "vue";
-import { useToastStore } from "../../../stores/toastStore";
 import { perfMarkStart, perfMarkEnd } from "../../../utils/perf";
 import {
 	formatStockShortageError,
@@ -94,7 +93,6 @@ export function useScanProcessor(context: ScanProcessorContext) {
 		scannerInput,
 		searchCache,
 		eventBus,
-		float_precision,
 		blockSaleBeyondAvailableQty,
 		// exchange_rate,
 		format_currency,
@@ -102,7 +100,6 @@ export function useScanProcessor(context: ScanProcessorContext) {
 		// customer,
 	} = context;
 
-	const toastStore = useToastStore();
 	// const uiStore = useUIStore();
 
 	const awaitingScanResult = ref(false);
@@ -387,37 +384,16 @@ export function useScanProcessor(context: ScanProcessorContext) {
 			}
 			pendingScanCode.value = "";
 
-			// Show success message
+			// No text notification here by design -- matches standard retail
+			// POS practice (Square, Clover, Toast, Shopify, Lightspeed): a
+			// successful scan is confirmed by the success tone above and the
+			// item visibly appearing in the cart, not a toast. See
+			// PROGRESS_NOTES.md section 36.
 			const itemName =
 				newItem.item_name ||
 				newItem.item_code ||
 				scannedCode ||
 				__("Item");
-			const rawPrecision = Number(float_precision.value);
-			const precision = Number.isInteger(rawPrecision)
-				? Math.min(Math.max(rawPrecision, 0), 6)
-				: 2;
-			const displayQty = Number.isInteger(requestedQty)
-				? requestedQty
-				: Number(requestedQty.toFixed(precision));
-
-			if (eventBus && eventBus.emit) {
-				toastStore.show({
-					title: __("Item {0} added to invoice", [itemName]),
-					summary: __("Items added to invoice"),
-					detail: __("{0} (Qty: {1})", [itemName, displayQty]),
-					color: "success",
-					key: "invoice-item-added",
-				});
-			} else if (typeof frappe !== "undefined" && frappe.show_alert) {
-				frappe.show_alert(
-					{
-						message: `Added: ${itemName}`,
-						indicator: "green",
-					},
-					3,
-				);
-			}
 
 			// Surface the "other sizes/colors" hint for a scanned variant, or
 			// clear a stale one from a previous scan -- purely informational,
