@@ -613,6 +613,50 @@ confirmed it wouldn't have worked regardless. The real fix used state
 already directly in scope in `ItemsSelector.vue` instead of trying to
 rescue the `vm`-based function. See `PROGRESS_NOTES.md` sections 34-35.
 
+## Two `toastStore.show()` Calls With Different Keys Don't Just Look Noisy — They Queue Sequentially and Can Add Real Delay
+
+`toastStore.ts`'s snackbar shows exactly one notification at a time.
+Notifications sharing the same `key` merge in place (the mechanism
+`socketStore.ts` already uses correctly for its own progress→result toast
+pairs); notifications with *different* keys — including no explicit key,
+which defaults to `` `${color}::${title}` `` — get queued and shown one
+after another, never overlapping. Before assuming a second toast right
+after a first one is merely "a bit noisy," check whether they share a key.
+If they don't, the first toast's full `timeout` must elapse (plus a fixed
+300ms animation gap) before the second can even begin showing — meaning an
+unnecessary "in progress" toast doesn't just clutter the screen, it
+actively delays whatever *meaningful* toast comes after it, every single
+time the flow runs. This is easy to miss by reading the two `show()` calls
+in isolation; it only becomes obvious by reading `toastStore.ts`'s actual
+`processNext()`/`show()` queueing logic.
+
+Concrete example that happened in this repo: scanning a barcode fired a
+"Scanning for: {barcode}" toast (`timeout: 2000`, `key: "scanner-progress"`)
+immediately followed by an "Item added" success toast (default
+`timeout: 3000`, `key: "invoice-item-added"`) — different keys, so on every
+single scan the full 2-second progress toast played out before the real
+confirmation could start, adding 2+ seconds of pure, avoidable delay to
+what should be near-instant scan feedback. The fix wasn't to give them a
+shared key (a progress-then-result pair for a scan isn't the same kind of
+update as an invoice's processing lifecycle) — it was to recognize the
+progress toast added no value at all (the lookup is normally near-instant,
+and the app already had a success tone plus a visible cart update) and
+remove it entirely, matching standard retail POS practice (Square, Clover,
+Toast, Shopify show no toast at all for a successful scan). A broader
+sweep of all 216 `toastStore.show()` call sites in this app then found two
+more real cases of the *same-event, different-keys* pattern — `Navbar.vue`'s
+offline-sync notifications and a return-invoice validation message in
+`invoice_utils/validation.ts` — both fixed by giving the existing calls a
+shared key instead, since in those cases (unlike the scan case) each
+individual message was still worth keeping, just not as separate stacked
+toasts. See `PROGRESS_NOTES.md` section 36 for the full investigation,
+including a fourth case (a post-sale "Invoice is Submitted" toast)
+that needed a different fix again — removed entirely because a receipt
+print and screen transition already confirm sale completion more strongly
+than a toast ever could, while a *different* branch in that same function
+(a background-processing loading indicator) was correctly left alone since
+it was the only feedback mechanism for a real in-progress state.
+
 ## Build Commands
 
 ### Main Build Commands

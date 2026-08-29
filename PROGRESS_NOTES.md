@@ -155,6 +155,34 @@ isolated units). Committed to `develop-swan` (`fb20edc`), cherry-picked to
 Enter-on-empty now correctly drop back to the empty-browse prompt instead of
 showing stale results.
 
+**Notification cleanup (section 36) — DONE, staging-verified, promoted to
+`develop-swan`/`stable`, production deployment bundled with sections 34-35,
+pending the same physical scanner test.** Triggered by a real bug: scanning
+a barcode showed two sequential toasts on every scan, and tracing
+`toastStore.ts`'s actual queue mechanics found this wasn't just noise — it
+added 2+ seconds of real delay to scan feedback every time, since
+differently-keyed toasts queue sequentially rather than overlapping.
+Removed both scan toasts entirely (no replacement — matches Square/Clover/
+Toast/Shopify, which show no text confirmation for a scan; the existing
+success tone and visible cart update already confirm it). An app-wide sweep
+of all 216 `toastStore.show()` call sites (delegated, then personally
+verified) found two more real stacking cases fixed the same way — a shared
+key so they merge instead of stacking, the pattern `socketStore.ts` already
+proves works: `Navbar.vue`'s offline-sync pending/synced notifications, and
+`invoice_utils/validation.ts`'s return-invoice validation toasts. A third,
+weaker candidate (`useBarcodePrintOutput.ts`'s fallback-printer toasts) was
+explicitly scoped out at the user's request. Separately, investigated and
+removed the post-sale "Invoice {id} is Submitted" toast (a raw internal
+accounting ID, redundant with the automatic receipt print + screen
+transition) — deliberately kept the *other* branch in the same code path,
+a loading indicator for genuine background payment-entry processing, since
+it's the only signal for that in-progress state. "Select a customer" was
+investigated and confirmed as a correct, necessary, already-well-behaved
+validation gate — left untouched. Full regression green both phases
+(230/230 files, 1169/1169 then 1170/1170 tests), committed as two commits
+(`36d532f`, `6d6d5bf` — no file overlap, separate investigate/approve/build
+cycles), cherry-picked to `stable`, user-retested live on staging.
+
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
 
@@ -3977,3 +4005,142 @@ stale results), cherry-picked to `stable`, both branches pushed.
 `stable` only -- NOT yet deployed.** Bundled with section 34's barcode
 fix for a single combined production deployment, pending the same
 physical hardware-scanner test at the store.
+
+## 36. Notification cleanup: a genuine double-toast bug on every scan, two stacking patterns found app-wide, and a redundant sale-completion toast (2026-08-26)
+
+**Trigger:** the user noticed scanning a barcode showed two sequential
+toasts every time -- "Scanning for: {barcode}" then "Item {name} added
+to invoice" -- and asked for a broader app-wide review of notification
+practice, not just this one case.
+
+**Root cause, traced precisely into `toastStore.ts`'s actual queue
+mechanics, not assumed:** the snackbar shows one notification at a
+time; notifications with the *same* `key` merge in place, but different
+keys queue sequentially rather than overlapping. The "Scanning for"
+toast (`key: "scanner-progress"`, `timeout: 2000`) and the "Item added"
+toast (`key: "invoice-item-added"`, default `timeout: 3000`) had
+different keys -- so on every scan, the full 2-second progress toast
+had to finish (plus a 300ms animation gap) *before* the real
+confirmation could even start showing. This wasn't just visual noise;
+it actively delayed the meaningful feedback by 2+ seconds on every
+single scan, for an operation (a local-index barcode lookup) that's
+normally near-instant.
+
+**Industry comparison requested and given honestly:** Square, Clover,
+Toast, and Shopify POS show no text confirmation at all for a
+successful scan -- the cart visibly updating plus a success tone are
+the confirmation. This app already has both (`playScanTone("success")`
+and the item appearing in the invoice), making the toast layer
+redundant on top of two already-sufficient signals, not just poorly
+timed.
+
+**Fix, phase 1 -- approved and built together, one round:**
+- Removed the "Scanning for" progress toast from
+  `useScannerInput.ts`'s `runScanPipeline` entirely -- no replacement.
+- Removed the "Item {name} added to invoice" success toast (both the
+  `toastStore` branch and its `frappe.show_alert` fallback) from
+  `useScanProcessor.ts`'s `addScannedItemToInvoice` -- no replacement.
+  A successful scan now shows zero text notifications; only the
+  existing success tone and the visible cart update remain. The
+  high-confidence scan-error path (`showScanError`/`scanErrorDialog`,
+  from section 34's confidence-based fix) is a completely separate
+  mechanism (a dedicated dialog ref, not `toastStore`) and was traced
+  and confirmed untouched.
+- Both now-unused `useToastStore()` imports removed from those two
+  files as a direct, minor consequence.
+
+**Broader app-wide sweep, done rather than assumed clean:** delegated a
+systematic search across all 216 `toastStore.show(` call sites in ~44
+files for the same class of problem (a progress-style toast immediately
+followed by a result toast for the same action, or multiple toasts
+describing one underlying event with no shared key), then personally
+verified every finding by reading the actual code rather than trusting
+the search summary. Found:
+- **`Navbar.vue`'s `handleSyncTotalsNotification`** (verified directly):
+  pending-count and synced-count are two sides of the same sync event
+  (pending drops *because* synced rises), but three independent,
+  non-exclusive `if` blocks each fired their own unkeyed toast --
+  routinely stacking 2 toasts for one real event.
+- **`invoice_utils/validation.ts`'s return-invoice `validate()`**
+  (verified directly): a positive-qty return item and a positive
+  subtotal are the same root cause (the item's positive qty IS what
+  keeps the subtotal positive) but fired as two separate unkeyed
+  toasts.
+- **A weaker candidate, explicitly scoped out at the user's request:**
+  `useBarcodePrintOutput.ts`'s fallback-printer retry toasts show the
+  same shape but are a rare, already-slow, explicit user action where a
+  progress toast has more legitimate value -- not fixed.
+
+Both confirmed cases were fixed identically: giving the existing
+`toastStore.show()` calls a shared key (`"offline-sync-status"`,
+`"return-validation"`) so they merge in place instead of stacking --
+the exact same pattern this codebase already proves works correctly in
+`socketStore.ts`'s own progress/result toast pairs (`` `invoice-processing::${invoice}` ``),
+just not applied consistently everywhere.
+
+**A second, separately-investigated finding: the post-sale "Invoice
+{id} is Submitted" toast.** Traced to `usePaymentSubmission.ts` --
+POS Awesome's own code (not a generic Frappe/ERPNext framework
+message), branching on doctype (Sales Order / Quotation / Invoice).
+Assessed differently from the scan case on purpose: completing a sale
+happens once per transaction, not repeatedly, so the *frequency* cost
+is low -- but the *content* (a raw internal accounting naming-series ID
+like `ACC-SINV-2026-00092`) reads as a technical/ERP message, and the
+moment already has two stronger confirmation signals a toast would be
+redundant with: an automatic receipt print (`onPrint(...)`, already
+wired into the same code path) and the screen transitioning for the
+next sale. None of Square, Clover, Toast, or Shopify POS show a toast
+at this exact moment either, for the same reason.
+
+**Fix, phase 2 -- separate investigation, separate approval, built
+after phase 1 was already staging-verified:** removed the plain-success
+toast branch entirely, no replacement. Explicitly kept the *other*
+branch in the same code path -- a `loading: true` progress toast shown
+only when payment entries process asynchronously after submit
+(`hasPostSubmitPaymentWork`) -- since it's the only signal staff get
+that background work is still running after the visible submit
+completes; nothing else communicates that. This distinction was
+surfaced back to the user before building (their initial approval
+phrasing didn't address it) rather than assumed either way. That
+branch already used the same shared-key merge pattern
+(`` `invoice-processing::${invoice}` ``, resolved elsewhere by
+`socketStore.ts`) and was left byte-for-byte unchanged.
+
+**"Select a customer" investigated and confirmed correct, not
+touched.** Fires from `invoice_utils/dialogs.ts`'s `show_payment()` --
+a genuine validation gate blocking checkout when no customer is
+selected, triggered only by an explicit user action (clicking to open
+payment), matching standard retail POS practice (Square/Clover/Toast
+all block checkout on a missing required field). Already correctly
+de-duplicated: no explicit `key` was needed since its stable default
+key (`` `${color}::${title}` ``) already causes repeated clicks to
+merge rather than stack. No change made.
+
+**Full regression check, both phases:** frontend suite 227/227 → 230/230
+files across the two rounds (phase 1: 230/230 files, 1169/1169 tests,
+11 new; phase 2: 230/230 files, 1170/1170 tests, 1 new). `bench build
+--app posawesome` clean both times. Backend: N/A, no Python touched
+either phase. `bench migrate`: N/A. Security: N/A, no new input/auth
+surface -- purely client-side notification removal/merging. Confirmed
+untouched: the scan-error dialog, the return-quantity auto-correction
+logic, the stock-shortage error toast (a different, legitimate error --
+the item *was* found), and the post-submit background-processing
+loading indicator and its `socketStore.ts` resolution.
+
+**Promoted:** phase 1 committed as `36d532f`, phase 2 as `6d6d5bf` --
+kept as two separate commits (no file overlap between them, and each
+went through its own investigate → propose → approve → build → stage-test
+cycle rather than being approved together, matching this session's
+established one-concern-per-commit convention). User retested both
+live on staging before either commit (scan: sound + cart update, no
+lingering popup; sync and return-validation: one clean updating
+notification instead of stacking; sale completion: no popup for a
+plain sale, processing toast still correct for the credit/cashback
+scenario).
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed.** This is the third set of changes
+staged on `stable` today (barcode fix, section 34; search-clear fix,
+section 35; this notification cleanup) -- all bundled for one combined
+production deployment, pending the user's physical hardware-scanner
+test at the store.
