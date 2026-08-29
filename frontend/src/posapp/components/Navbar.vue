@@ -1077,6 +1077,7 @@ export default {
 							normalized.drafted,
 						]),
 						color: normalized.pending ? "warning" : "success",
+						key: "offline-sync-status",
 					});
 				}
 				return;
@@ -1101,6 +1102,7 @@ export default {
 						normalized.pending,
 					]),
 					color: normalized.pending ? "warning" : "success",
+					key: "offline-sync-status",
 				});
 			}
 
@@ -1109,6 +1111,7 @@ export default {
 					title: this.__("{0} offline invoice{1} synced", [diffSynced, diffSynced > 1 ? "s" : ""]),
 					detail: this.__("Pending: {0}", [normalized.pending]),
 					color: "success",
+					key: "offline-sync-status",
 				});
 			}
 
@@ -1120,6 +1123,7 @@ export default {
 					]),
 					detail: this.__("Pending: {0}", [normalized.pending]),
 					color: "warning",
+					key: "offline-sync-status",
 				});
 			}
 
@@ -1128,6 +1132,7 @@ export default {
 					title: this.__("Offline invoices synced"),
 					detail: this.__("All pending invoices are up to date"),
 					color: "success",
+					key: "offline-sync-status",
 				});
 			}
 

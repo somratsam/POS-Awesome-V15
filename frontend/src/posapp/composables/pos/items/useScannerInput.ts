@@ -1,5 +1,4 @@
 import { ref, nextTick, onMounted, onUnmounted } from "vue";
-import { useToastStore } from "../../../stores/toastStore";
 import {
 	normalizeScaleBarcodeSettings,
 	parseScaleBarcodeSettingsResponse,
@@ -71,8 +70,6 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		if (handlers.clear) clearSearchHandler.value = handlers.clear;
 		if (handlers.focus) focusSearchHandler.value = handlers.focus;
 	};
-
-	const toastStore = useToastStore();
 
 	// State
 	const scannerLocked = ref(false);
@@ -354,18 +351,6 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 				console.log("Barcode scanned:", code);
 				pendingScanCode.value = code;
 				searchFromScanner.value = true;
-
-				// Show feedback
-				if (toastStore) {
-					toastStore.show({
-						title: __("Scanning for: {0}", [code]),
-						summary: __("Scanning items"),
-						detail: code,
-						color: "info",
-						timeout: 2000,
-						key: "scanner-progress",
-					});
-				}
 
 				if (onScanHandler.value) {
 					await (onScanHandler.value as any)(code, confidence);
