@@ -574,6 +574,45 @@ was the same principle applied one level down: a premature low-confidence
 guess is fine to let through as long as its failure mode is silent, not
 that it needs to never fire at all.
 
+## `<script setup>`'s Public Instance Proxy Only Exposes What's in `defineExpose` — Code Reading `vm = getCurrentInstance()?.proxy` Can Silently No-Op
+
+A composable or helper function that takes a `getVM: () => vmInstance?.proxy`
+callback and reads/writes properties on that `vm` (e.g. `vm.first_search`,
+`vm.items`, `vm.clearLimitSearchResults`) is only reading/writing real
+component state if every one of those properties is listed in the
+component's own `defineExpose({...})` call. `<script setup>` components do
+NOT automatically expose their top-level `const`/`ref` bindings to the
+public instance the way Options API components expose `data()`/`methods` --
+only `defineExpose`'d names are reachable through it. A property not listed
+there resolves to `undefined` on read and creates a stray, disconnected
+property on write (no error, no warning) — the function can look completely
+correct in isolation while being fully inert against the real, live
+component state used everywhere else.
+
+Before trusting that a `vm.*`-based function actually does anything, grep
+the component's `defineExpose({...})` block for every property that
+function reads or writes. If even one is missing, don't assume the others
+work either — check each one, since a partially-correct function (some
+properties bridged via other override callbacks, some not) is exactly the
+trap: it can appear to work for its main path while being silently broken
+for a different branch.
+
+Concrete example that happened in this repo: `ItemsSelector.vue` (`<script
+setup>`) has a `useItemsSelectorSearch({ getVM: () => vmInstance?.proxy,
+... })` call whose `_performSearch`/`onEnter` functions mostly work because
+they were *also* given explicit override callbacks (`getSearchInput`,
+`isLimitSearchEnabled`, `runLimitSearch`) that bypass the broken `vm.*`
+reads for their main path — but that same composable's `clearSearch()`
+function has no such overrides and depends entirely on `vm.first_search`,
+`vm.items`, `vm.clearLimitSearchResults`, `vm.resetBarcodeIndex`, and
+`vm.eventBus` — none of which are in `ItemsSelector.vue`'s `defineExpose`
+block. The function was correctly designed (including a proper
+`usesLimitSearch`-aware branch) and was never even the reason it went
+unused — it was simply never wired to the UI at all, and tracing precisely
+confirmed it wouldn't have worked regardless. The real fix used state
+already directly in scope in `ItemsSelector.vue` instead of trying to
+rescue the `vm`-based function. See `PROGRESS_NOTES.md` sections 34-35.
+
 ## Build Commands
 
 ### Main Build Commands

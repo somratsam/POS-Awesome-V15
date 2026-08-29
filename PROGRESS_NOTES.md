@@ -126,10 +126,34 @@ miss only alarms the user for `"high"` confidence. Full regression green
 (227/227 files, 1158/1158 tests), committed as one commit (`bc4f33f`,
 cherry-picked to `stable`), user-retested live on staging across all
 scenarios. **A separate, related gap (search results not clearing when the
-search box is emptied, in Limit Search mode) was investigated and a fix
-designed the same day but deliberately NOT built this session — remains
-open.** Do not deploy this barcode work to production until the user
-confirms a physical hardware-scanner test at the store.
+search box is emptied, in Limit Search mode) was investigated the same day,
+then built and promoted the next day (section 35) — see below.** Do not
+deploy either fix to production until the user confirms a physical
+hardware-scanner test at the store; both are planned to deploy together in
+one go once that test passes.
+
+**Search results never reset when the search box was cleared, in Limit
+Search mode (section 35) — DONE, staging-verified, promoted to
+`develop-swan`/`stable`, production deployment bundled with section 34's
+barcode fix, pending the same physical scanner test.** The fix proposed in
+section 34's investigation, built the next session: `useItemsSelectorSearchInput.ts`'s
+`clearSearch()` (the one actually wired to the "X" button) now takes
+optional `isLimitSearchEnabled`/`resetLimitSearchResults` callbacks and
+calls the latter in Limit Search mode, wired to real already-in-scope state
+in `ItemsSelector.vue` (`usesLimitSearch`, `itemsIntegration.clearLimitSearchResults`,
+`resetBarcodeIndex`) rather than resurrecting the dead, vm-proxy-broken
+`clearSearch()` in `useItemsSelectorSearch.ts` (left untouched, as decided).
+Also fixed the identical gap reached via Enter on an emptied search box
+(`onEnter`'s wrapper now routes an empty trimmed query through the same
+fixed `clearSearch()` instead of `_performSearch`'s own empty-query early
+return, which never reset anything either). Full regression: frontend suite
+228/228 files, 1165/1165 tests (7 new, `useItemsSelectorSearchInput.spec.ts`,
+plus the 5 existing component-mount test files for `ItemsSelector.vue` itself
+re-run to confirm the real component still wires correctly, not just
+isolated units). Committed to `develop-swan` (`fb20edc`), cherry-picked to
+`stable`, user-retested live on staging: both the "X" button and
+Enter-on-empty now correctly drop back to the empty-browse prompt instead of
+showing stale results.
 
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
@@ -3849,19 +3873,19 @@ did the same). User retested all scenarios live on staging before
 promotion was requested (Charlotte Wix scan-and-add, style-code search,
 real barcode paste, genuine scan failure still correctly alarming).
 
-**Explicitly NOT yet done, by the user's own choice:** a search-results-
-clear investigation happened the same day (dead `itemsSelectorSearch.clearSearch()`
-in `useItemsSelectorSearch.ts` -- correctly designed, including a
-`usesLimitSearch`-aware reset, but never wired to the UI, and internally
-broken besides since it reads through a `<script setup>` component
-proxy that never exposes the state it needs via `defineExpose`; the
-live "X" button instead calls a different, simpler `clearSearch()` in
-`useItemsSelectorSearchInput.ts` that only clears the text, never the
-underlying stale search-results state -- reproduces specifically in
-Limit Search mode, confirmed live via this store's actual POS Profile
-config). A fix was designed and reviewed but the user explicitly chose
-not to build it in this session, since it hadn't been separately
-stage-tested; it remains open for a future session.
+**A search-results-clear investigation happened the same day** (dead
+`itemsSelectorSearch.clearSearch()` in `useItemsSelectorSearch.ts` --
+correctly designed, including a `usesLimitSearch`-aware reset, but never
+wired to the UI, and internally broken besides since it reads through a
+`<script setup>` component proxy that never exposes the state it needs
+via `defineExpose`; the live "X" button instead calls a different,
+simpler `clearSearch()` in `useItemsSelectorSearchInput.ts` that only
+clears the text, never the underlying stale search-results state --
+reproduces specifically in Limit Search mode, confirmed live via this
+store's actual POS Profile config). A fix was designed and reviewed but
+the user explicitly chose not to build it in *this* session, since it
+hadn't been separately stage-tested -- built the next session instead,
+see section 35.
 
 **Production status: staging-verified and promoted to `develop-swan`/
 `stable` only -- NOT yet deployed to production.** The user has
@@ -3871,3 +3895,85 @@ barcode-scanner test at the store against real Charlotte Wix stock
 testing used pasted/typed input and the real test items created above,
 not genuine hardware-scanner keystroke timing. Do not deploy to
 production until that physical test is confirmed by the user.
+
+## 35. Search results not resetting on clear (Limit Search mode): built and promoted, one day after being investigated and deliberately deferred (2026-08-26)
+
+**Context:** section 34 investigated this gap as a side finding while
+building the barcode fix -- diagnosed precisely and a fix was designed
+and reviewed, but the user explicitly chose not to build it in that
+session since it hadn't been separately stage-tested, and didn't want
+it bundled into the barcode promotion sight-unseen. Built the next day,
+exactly per the design already reviewed.
+
+**Root cause, confirmed via code trace, not assumed:** the search box's
+"X" clear button and Enter-on-empty both only ever reset the text refs
+(`search_input`/`first_search`). In Limit Search mode (confirmed live
+on this store's actual POS Profile: `pose_use_limit_search = 1`),
+`filteredItems`/`items` hold whatever a prior server search returned --
+merely emptying the text does nothing to that state. Traced into
+`filterAndPaginate` (`useItemSearch.ts`): with an empty search term, it
+returns `items.slice(0, limit)` -- the stale results, unfiltered, not
+empty -- so the grid kept showing the last search's results
+indefinitely instead of dropping back to the existing "Scan a tag or
+search to begin" empty-browse-prompt state (section 10's
+`BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY` design, already correctly
+conditioned on `displayedItems.length === 0`, just never reached).
+
+A correctly-designed reset already existed --
+`itemsSelectorSearch.clearSearch()` in `useItemsSelectorSearch.ts`, with
+a proper `usesLimitSearch`-aware branch calling `clearLimitSearchResults()`
+-- but was never wired to the UI, and would not have worked even if it
+were: it reads/writes through `vm = vmInstance?.proxy`, and since
+`ItemsSelector.vue` uses `<script setup>`, that public proxy only
+exposes exactly what's listed in its `defineExpose({...})` block --
+confirmed by reading that block in full: `first_search`, `items`,
+`clearingSearch`, `search_backup`, `clearLimitSearchResults`,
+`resetBarcodeIndex`, and `eventBus` are all absent from it. Per the
+user's explicit instruction, this dead code and its vm-proxy issue were
+left completely untouched -- the real fix uses state already correctly
+in scope in `ItemsSelector.vue` instead of resurrecting it.
+
+**Fix, two call sites, same underlying mechanism:**
+- `useItemsSelectorSearchInput.ts`'s `clearSearch()` -- the function
+  actually wired to the "X" button -- now takes optional
+  `isLimitSearchEnabled`/`resetLimitSearchResults` callbacks (both
+  optional, so the composable still works standalone without them) and
+  calls the latter when in Limit Search mode. Wired in
+  `ItemsSelector.vue` to real, already-in-scope state:
+  `isLimitSearchEnabled: () => usesLimitSearch.value`,
+  `resetLimitSearchResults` calling
+  `itemsIntegration.clearLimitSearchResults({ preserveItems: false })`
+  (matching this store's actual `BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY =
+  true` policy -- clear means empty, not "fall back to a cached browse
+  set") plus `resetBarcodeIndex()`.
+- The identical gap reached via Enter on an emptied box (`onEnter`'s
+  wrapper delegates to `_performSearch`, whose own empty-query early
+  return -- `< 3 chars` -- never reset anything either) fixed by
+  checking for an empty trimmed `search_input` first and routing
+  through the same fixed `clearSearch()` instead of
+  `itemsSelectorSearch.onEnter(e)`.
+
+**Full regression check:** frontend suite **228/228 files, 1165/1165
+tests** (7 new, `useItemsSelectorSearchInput.spec.ts` -- covers the
+reset firing/not-firing based on limit-search mode, working correctly
+with the new deps omitted entirely, and firing through both of the
+composable's other internal callers of `clearSearch` --
+`prepareSearchInjection` and `handleItemSearchFocus`). Also re-ran the
+5 existing test files that mount `ItemsSelector.vue` as a real
+component (`itemsSelectorContainerRefWiring`, `itemsSelectorStockWiring`,
+`posNarrowSplitBand`, `posLayoutSplitRatio`, `useItemSelectorLayout` --
+23 tests) specifically to confirm the real component still wires and
+renders correctly after this change, not just that isolated units
+pass -- all green. `bench build --app posawesome` clean. Backend: N/A.
+`bench migrate`: N/A. Security: no new input/auth surface -- purely
+resets already-loaded client-side state.
+
+**Promoted:** committed to `develop-swan` (`fb20edc`), user-retested
+live on staging first (both the "X" button and Enter-on-empty now
+correctly drop back to the empty-browse prompt instead of showing
+stale results), cherry-picked to `stable`, both branches pushed.
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed.** Bundled with section 34's barcode
+fix for a single combined production deployment, pending the same
+physical hardware-scanner test at the store.
