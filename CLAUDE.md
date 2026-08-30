@@ -133,6 +133,34 @@ was checked directly rather than assumed from the `insert_after` value
 looking reasonable. Moved to an existing, correctly-labeled POS Awesome
 section instead.
 
+**Addendum — fix the fixture file itself, not just the live database.**
+If the field is tracked in `posawesome/fixtures/custom_field.json` (most
+are), a correction applied only via `bench console`/direct DB update
+will not survive the next `bench migrate` — Frappe's fixture sync
+(`frappe/utils/fixtures.py`'s `import_fixtures()`) reimports the whole
+file with `force=True` on every migrate, overwriting `insert_after`
+(and every other tracked property) for every Custom Field in the file
+from whatever the JSON says, not just the one being changed in a given
+session. Verify the field's *current* correct anchor live first
+(`frappe.get_meta()`, not the fixture's stale value), then hand-edit
+the matching entry in `custom_field.json` directly — never re-run
+`bench export-fixtures` on this file, see the caution above — and
+confirm with two consecutive `bench migrate` runs that the position is
+both correct and idempotent.
+
+Concrete example that happened in this repo: relocating
+`posa_allow_zero_rated_items` from an undiscoverable section to "Sales
+and Return Controls" was done this way — verified the section's actual
+last live field via `frappe.get_meta("POS Profile")`
+(`posa_allow_partial_payment`), hand-edited the fixture's
+`insert_after` to match, and confirmed via two migrate runs that the
+field landed correctly and stayed put. See `PROGRESS_NOTES.md` section
+37. (A suspected case of a *different* field having drifted from a
+live-only fix, checked during the same investigation, turned out on
+careful re-verification to be a false alarm — its fixture and live
+state already agreed — but the underlying mechanism this addendum
+describes is real and confirmed by reading Frappe's own source.)
+
 ## Adding a Prop to a Shared Component? Verify Every Real Caller Forwards It
 
 A prop declared and used correctly inside a component (e.g. gating a

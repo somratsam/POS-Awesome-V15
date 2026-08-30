@@ -4144,3 +4144,127 @@ staged on `stable` today (barcode fix, section 34; search-clear fix,
 section 35; this notification cleanup) -- all bundled for one combined
 production deployment, pending the user's physical hardware-scanner
 test at the store.
+
+## 37. Zero valuation rate blocking checkout for Swan's deliberate zero-rate items: three related fixes (2026-08-29 → 2026-08-30)
+
+**Trigger:** after clicking Pay, checkout showed "Row #1: Item
+35740232030013 has zero rate but 'Allow Zero Valuation Rate' is not
+enabled." Swan's business model deliberately uses zero valuation rate
+on every item (an opening-stock model with no formal PO/Supplier cost
+tracking -- see section 20 and the top of this file for the original
+model). The user asked for the actual code/data to be investigated
+first, not guessed at.
+
+**Investigation, not guessing:** `allow_zero_valuation_rate` is a
+per-line `Check` field on `Sales Invoice Item`/`POS Invoice Item`, read
+by two independent places in ERPNext core -- `stock_controller.py`'s
+`check_zero_rate()` (hooked to `on_update()`, non-blocking, just
+`frappe.toast()`, no `throw`) and `stock_ledger.py`'s fallback
+valuation lookup (`get_valuation_rate(raise_error_if_no_rate=True)`,
+a genuine hard block when no warehouse valuation rate exists at all).
+POS Awesome never set this field anywhere in invoice construction.
+Checked real Stock Ledger Entry history for the reported item and
+confirmed most prior sales had been hitting only the non-blocking
+warning path (many successful `docstatus=1` invoices with
+`valuation_rate=0` spanning weeks) -- so the bug wasn't new, it had
+just been silently tolerable until now. A related but genuinely
+separate and unfixed finding surfaced during this same check: one
+return transaction had polluted the item's valuation with a real
+non-zero incoming rate that drifted its moving average to ~4.86 --
+reported to the user as out of scope, not folded into this fix.
+
+**Fix 1 -- `apply_zero_valuation_rate_defaults()`, matching how
+ERPNext's own POS already behaves by default:** added to
+`invoice_processing/utils.py`. Reads
+`POS Profile.posa_allow_zero_rated_items` (a pre-existing field that
+had never been wired to anything) and, when enabled, sets
+`allow_zero_valuation_rate = 1` on every item row. Wired into every
+code path that independently constructs a submittable invoice item
+list: `submit_invoice()` (`creation.py`), submitted-invoice amendments
+(`submitted_invoice_edits.py`'s `build_submitted_invoice_amendment_payload()`
+-- the field isn't in `ITEM_EDITABLE_FIELDS` so it never survives a
+copy from the original invoice's rows without this), and (fix 3 below)
+`update_invoice()`'s intermediate draft save. 6 new unit tests in a new
+`invoice_processing/test_utils.py`, all passing.
+
+**Fix 2 -- `posa_allow_zero_rated_items` relocated to a discoverable
+section.** The field existed but sat in an unrelated location, making
+it effectively undiscoverable to enable on a POS Profile. Verified via
+live `frappe.get_meta("POS Profile")` query (not the fixture's
+`insert_after`, following the [[posa_walkin_customer]] "Campaign"
+section lesson already in `CLAUDE.md`) that "Sales and Return
+Controls" was the correct home and `posa_allow_partial_payment` its
+last live field. Hand-edited `custom_field.json`'s
+`posa_allow_zero_rated_items` entry directly (never `bench
+export-fixtures`, per this repo's own documented caution) --
+`insert_after: "posa_display_item_code"` -> `"posa_allow_partial_payment"`.
+Verified via `git diff --stat` this was a clean, minimal 4-line diff.
+Ran `bench migrate` twice on staging: field landed at the correct
+position both times (idempotent), and the live `posa_allow_zero_rated_items=1`
+value already set on "Test Pos" survived both runs untouched (fixture
+sync rewrites field *definitions*, never document data).
+
+A suspected side effect -- `posa_walkin_customer` appearing to shift
+position during this same migrate -- was investigated and turned out
+to be a false alarm from an incomplete first query (the console session
+had been cut off mid-command). A clean re-query confirmed
+`posa_walkin_customer`'s fixture entry (`insert_after:
+"posa_fetch_coupon"`) already matches its live position exactly, inside
+the correctly-labeled "Sales and Return Controls" section -- no drift,
+nothing to fix. Retracted to the user immediately once caught rather
+than left standing.
+
+**Fix 3 -- the same warning still showing at click-Pay, before final
+submit.** The user retested fix 1 and reported the core checkout error
+was gone, but the *warning* toast still appeared the moment "Pay" was
+clicked, just not after final submission. Traced precisely (not
+assumed) via a full click-to-backend trace: `Pos.vue` -> `show_payment()`
+-> `process_invoice()` -> `posawesome.posawesome.api.invoices.update_invoice`,
+which does an intermediate `docstatus=0` draft save
+(`invoice_doc.save()`) *before* payment/submission -- a second,
+independent code path building invoice item rows that fix 1 didn't
+reach, since `apply_zero_valuation_rate_defaults()` was only wired
+into `submit_invoice()` and the amendment path. `on_update()` (which
+fires `check_zero_rate()`) runs on every save, draft or submit, so it
+fired identically at this earlier step. Fixed by adding the same
+`apply_zero_valuation_rate_defaults()` call to `update_invoice()`
+(`creation.py`), applied to `data["items"]` before
+`_get_mutable_invoice_doc()` builds the doc -- confirmed via reading
+that function's three internal branches (new invoice, stale/submitted
+doc, existing draft) that all three read from the same `data["items"]`
+list, so mutating it in place beforehand reaches every case. Added a
+new regression test verifying the mutation actually reaches the
+constructed payload, not just that the function gets called -- proved
+it was a genuine guard by temporarily reverting the fix and confirming
+the test failed (`KeyError`) before restoring it. Framing check with
+the user: this was treated as completing fix 1's own coverage (a
+missed code path), not as "notification cleanup" like section 36 --
+the toast disappears as a side effect of the underlying condition no
+longer being true, not because anything was suppressed at the UI layer.
+
+**Full regression check, all three fixes combined:** frontend suite
+230/230 files, 1170/1170 tests (fixes 1-3 are backend/fixture-only, ran
+anyway per standing convention). Backend: `test_creation.py` 69/69 run,
+8 errors -- confirmed via `git stash` comparison these are the exact
+same pre-existing, unrelated errors as baseline (a mix of
+`mode_of_payment` `AttributeError`s and an un-stubbed `frappe.local` in
+one test class, none touched by this work); `test_utils.py` 6/6 pass;
+`test_invoices.py` unchanged pre-existing `ImportError`.
+`bench build`: N/A, no frontend files touched. `bench migrate`: run
+twice for fix 2, clean and idempotent both times. Security: N/A, no
+user input/auth/data-access surface -- fix 1/3 only change which
+already-authorized invoice's own default field values get set; fix 2
+is a pure UI field-placement change. Confirmed untouched: `submit_invoice()`'s
+own use of the function, and the other `update_invoice()` tests in the
+same class (customer-field-clearing, stale-doc handling, manual-posting-date
+preservation) all pass/fail identically to baseline.
+
+User confirmed live on staging: no warning at click-Pay or at
+submission, sale completes cleanly with a zero-rate item.
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed.** This is the fourth set of changes
+staged on `stable` today (barcode fix, section 34; search-clear fix,
+section 35; notification cleanup, section 36; this zero-valuation-rate
+fix) -- all bundled for one combined production deployment, pending the
+user's physical hardware-scanner test at the store.
