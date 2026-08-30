@@ -73,6 +73,7 @@ def _install_frappe_stub():
     invoice_processing_utils.get_latest_rate = lambda *args, **kwargs: (1, "2026-04-04")
     invoice_processing_utils.get_price_list_currency = lambda *args, **kwargs: "PKR"
     invoice_processing_utils.get_available_currencies = lambda *args, **kwargs: ["PKR"]
+    invoice_processing_utils.apply_zero_valuation_rate_defaults = lambda *args, **kwargs: None
     sys.modules["posawesome.posawesome.api.invoice_processing.utils"] = invoice_processing_utils
 
     invoice_processing_stock = types.ModuleType("posawesome.posawesome.api.invoice_processing.stock")

@@ -16,6 +16,9 @@ from posawesome.posawesome.api.invoice_processing.creation import (
     submit_invoice,
     trusted_invoice_shift_reassignment,
 )
+from posawesome.posawesome.api.invoice_processing.utils import (
+    apply_zero_valuation_rate_defaults,
+)
 from posawesome.posawesome.api.utils import assert_pos_profile_write_allowed
 
 
@@ -330,6 +333,11 @@ def build_submitted_invoice_amendment_payload(original_doc, correction_data=None
             amended[fieldname] = correction.get(fieldname)
 
     amended["items"] = _item_rows_from_correction(original_doc, correction)
+    # allow_zero_valuation_rate isn't in ITEM_EDITABLE_FIELDS, so it never
+    # survives the copy from the original invoice's rows -- reapply it here
+    # the same way a fresh submission would (see
+    # invoice_processing.creation.submit_invoice).
+    apply_zero_valuation_rate_defaults(amended["items"], amended.get("pos_profile"))
     amended["payments"] = _payment_rows_from_correction(original_doc, correction)
 
     if doctype_supports_client_request_id(original_doc.doctype):

@@ -15,6 +15,7 @@ from posawesome.posawesome.api.invoice_processing.utils import (
     _build_invoice_remarks,
     _set_return_valid_upto,
     resolve_erpnext_currency_rates,
+    apply_zero_valuation_rate_defaults,
 )
 from posawesome.posawesome.api.invoice_processing.stock import (
     _strip_client_freebies_from_payload,
@@ -1684,6 +1685,11 @@ def update_invoice(data):
     profile_doc = _resolve_authorized_invoice_profile(data)
     pos_profile = profile_doc.get("name")
     company = profile_doc.get("company")
+    # Pay-click draft save (docstatus=0) triggers ERPNext core's on_update()
+    # zero-rate warning toast the same way final submission does -- apply
+    # the same defaults here so it doesn't fire prematurely for profiles
+    # that intentionally allow zero-rated items (see submit_invoice()).
+    apply_zero_valuation_rate_defaults(data.get("items"), pos_profile)
     ignore_pricing_rule = _profile_ignore_pricing_rule(profile_doc)
     # Never trust a stale/client-edited copy of this POS Profile setting.
     data["ignore_pricing_rule"] = ignore_pricing_rule
@@ -1934,6 +1940,7 @@ def submit_invoice(invoice, data, submit_in_background=False):
     profile_doc = _resolve_authorized_invoice_profile(invoice, data)
     pos_profile = profile_doc.get("name")
     company = profile_doc.get("company")
+    apply_zero_valuation_rate_defaults(invoice.get("items"), pos_profile)
     forced_doctype = invoice.pop("_force_invoice_doctype", None) or data.pop("_force_invoice_doctype", None)
     doctype = "Sales Invoice"
     if forced_doctype in {"Sales Invoice", "POS Invoice"}:
