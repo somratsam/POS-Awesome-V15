@@ -68,6 +68,37 @@ def _validate_return_window(invoice_doc, doctype, enabled):
         frappe.throw(_("Returns are only allowed until {0}").format(formatdate(validity_date)))
 
 
+def pos_profile_allows_zero_rated_items(pos_profile_name):
+    """POS Profile-level "Allow Zero Rated Items" (posa_allow_zero_rated_items)
+    -- a pre-existing custom field that was never wired to anything. Swan's
+    business model deliberately uses zero valuation rate on every item
+    (opening-stock model, no formal PO/Supplier cost tracking -- see
+    PROGRESS_NOTES.md section 37), so every invoice line needs
+    allow_zero_valuation_rate set for stores using this model."""
+    if not pos_profile_name:
+        return False
+    return bool(cint(frappe.db.get_value("POS Profile", pos_profile_name, "posa_allow_zero_rated_items")))
+
+
+def apply_zero_valuation_rate_defaults(items, pos_profile_name):
+    """Sets allow_zero_valuation_rate=1 on every item row when the POS
+    Profile has Allow Zero Rated Items enabled. ERPNext core's own
+    zero-rate check (stock_controller.py's check_zero_rate) and the stock
+    ledger's own fallback valuation lookup (stock_ledger.py) both read this
+    field per invoice line -- there is no global or Item-level equivalent.
+    Call this on every code path that constructs a submittable invoice
+    payload from item rows (new sales, returns, and submitted-invoice
+    amendments alike), since each builds its own items list independently.
+    """
+    if not isinstance(items, list):
+        return
+    if not pos_profile_allows_zero_rated_items(pos_profile_name):
+        return
+    for item in items:
+        if isinstance(item, dict):
+            item["allow_zero_valuation_rate"] = 1
+
+
 def _sanitize_item_name(name: str) -> str:
     """Strip HTML and limit length for item names."""
     if not name:

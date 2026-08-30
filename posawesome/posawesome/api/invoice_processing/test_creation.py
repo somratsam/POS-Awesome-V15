@@ -172,6 +172,7 @@ def _install_dependency_stubs():
         "plc_conversion_rate": 1.0,
         "exchange_rate_date": None,
     }
+    processing_utils.apply_zero_valuation_rate_defaults = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.invoice_processing.utils"] = processing_utils
 
     stock_module = types.ModuleType("posawesome.posawesome.api.invoice_processing.stock")
@@ -751,6 +752,66 @@ class TestStaleNamedInvoiceHandling(unittest.TestCase):
         self.assertEqual(len(created_payloads), 1)
         self.assertNotIn("name", created_payloads[0])
         self.assertEqual(result["docstatus"], 0)
+
+    def test_update_invoice_applies_zero_valuation_rate_defaults_before_draft_save(self):
+        # The Pay-click draft save (docstatus=0, via update_invoice) triggers
+        # the same ERPNext on_update() zero-rate warning as final submission
+        # -- apply_zero_valuation_rate_defaults must run on data["items"]
+        # before _get_mutable_invoice_doc() reads it, same as submit_invoice.
+        original_apply_defaults = self.creation.apply_zero_valuation_rate_defaults
+        self.addCleanup(
+            setattr,
+            self.creation,
+            "apply_zero_valuation_rate_defaults",
+            original_apply_defaults,
+        )
+
+        fresh_doc = self._build_invoice_doc()
+        created_payloads = []
+
+        def fake_get_doc(*args):
+            payload = dict(args[0])
+            created_payloads.append(payload)
+            return fresh_doc
+
+        def fake_apply_zero_valuation_rate_defaults(items, pos_profile_name):
+            if pos_profile_name == "Main POS":
+                for item in items:
+                    item["allow_zero_valuation_rate"] = 1
+
+        # This test class's frappe stub doesn't set up frappe.local (only
+        # TestUpdateInvoiceReturnPayments does) -- update_invoice() reads
+        # frappe.local.message_log a few lines after our new call, so it
+        # needs a minimal stub here too, independent of this test's own point.
+        original_local = getattr(self.creation.frappe, "local", None)
+        self.creation.frappe.local = types.SimpleNamespace(message_log=[])
+        self.addCleanup(setattr, self.creation.frappe, "local", original_local)
+
+        self.creation.frappe.db.exists = lambda doctype, name: False
+        self.creation.frappe.get_doc = fake_get_doc
+        self.creation.frappe.get_cached_value = lambda *args, **kwargs: 0
+        self.creation._save_draft_with_latest_timestamp = lambda doc: doc
+        self.creation.apply_zero_valuation_rate_defaults = (
+            fake_apply_zero_valuation_rate_defaults
+        )
+
+        self.creation.update_invoice(
+            json.dumps(
+                {
+                    "doctype": "Sales Invoice",
+                    "name": "SINV-NEW",
+                    "pos_profile": "Main POS",
+                    "company": "Test Company",
+                    "currency": "USD",
+                    "posting_date": "2026-03-21",
+                    "items": [{"item_code": "ITEM-1", "rate": 0}],
+                    "payments": [],
+                }
+            )
+        )
+
+        self.assertEqual(len(created_payloads), 1)
+        self.assertEqual(created_payloads[0]["items"][0]["allow_zero_valuation_rate"], 1)
 
     def test_update_invoice_clears_stale_party_fields_when_customer_changes(self):
         existing_doc = self._build_invoice_doc(
