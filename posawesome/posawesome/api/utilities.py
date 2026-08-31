@@ -487,6 +487,7 @@ def get_pos_profile_tax_inclusive(pos_profile: str):
 
 @frappe.whitelist()
 def get_database_usage():
+    frappe.only_for("System Manager")
     db_size = None
     db_connections = None
     db_slow_queries = None
@@ -574,6 +575,7 @@ def get_database_usage():
 
 @frappe.whitelist()
 def get_server_usage():
+    frappe.only_for("System Manager")
     global _PSUTIL_MISSING_LOGGED
 
     cpu_percent = None

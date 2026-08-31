@@ -106,6 +106,7 @@
 				</div>
 
 				<NavbarInfoGadgets
+					v-if="systemStatusVisible"
 					:class="['info-gadgets-wrapper', isRtl ? 'rtl-info-gadgets' : 'ltr-info-gadgets']"
 				>
 					<!-- Cache Usage Meter -->
@@ -233,6 +234,7 @@
 import { useRtl } from "../../composables/core/useRtl";
 import { resolvePosBranding } from "../../config/branding";
 import { isCounterGridTemplate } from "../../utils/posUiTemplate";
+import { canShowSystemStatus } from "../../utils/systemStatusPermission";
 import posLogo from "../pos/pos.png";
 import NavbarInfoGadgets from "./NavbarInfoGadgets.vue";
 
@@ -369,6 +371,10 @@ export default {
 
 		isCounterGrid() {
 			return isCounterGridTemplate(this.posProfile, this.windowWidth);
+		},
+
+		systemStatusVisible() {
+			return canShowSystemStatus();
 		},
 	},
 
