@@ -685,6 +685,42 @@ than a toast ever could, while a *different* branch in that same function
 (a background-processing loading indicator) was correctly left alone since
 it was the only feedback mechanism for a real in-progress state.
 
+## A `@frappe.whitelist()` Method Is Reachable by Any Authenticated User Until Something Explicitly Says Otherwise
+
+Frappe does not restrict a whitelisted method by who the UI shows its button
+to — `@frappe.whitelist()` alone makes it callable by any authenticated
+session, including a plain cashier/POS User account, regardless of whether
+the button that triggers it from the POS UI is visible to them. A frontend
+`v-if` hiding a button is a UX improvement, not a security boundary — the
+method is still directly reachable via `frappe.call()` from any logged-in
+session unless the method itself checks the caller's role. Before treating
+any diagnostic, admin-facing, or supervisor-only feature as "restricted"
+because only certain UI elements expose it, check whether the whitelisted
+method(s) behind it have their own server-side role check — grep for
+`@frappe.whitelist()` on the relevant function and read what, if anything,
+runs immediately after it. This app already has an established pattern for
+this: `pos_access.py`'s `POS_PRIVILEGED_MANAGER_ROLES`/`user_is_pos_supervisor()`
+helpers for POS-business-manager-level actions, and plain
+`frappe.only_for("<Role>")` (Frappe core's own idiomatic one-liner, which
+auto-allows Administrator) for anything narrower — pick whichever role set
+actually matches the *sensitivity of the data*, not just whichever pattern
+is closest at hand: infrastructure/server internals and POS business
+overrides are not the same sensitivity level even though both currently sit
+behind "management" roles in this app.
+
+Concrete example that happened in this repo: the System Status panel (the
+info button in the POS header — server CPU/RAM, DB table sizes and row
+counts, uptime) had been visible and functional for every cashier since it
+was originally built. Its two backend endpoints,
+`utilities.py`'s `get_server_usage()` and `get_database_usage()`, were
+`@frappe.whitelist()` with no role check at all — confirmed reachable
+directly regardless of what the navbar showed. Fixed by adding
+`frappe.only_for("System Manager")` to both (chosen over reusing
+`POS_PRIVILEGED_MANAGER_ROLES`, since server/DB internals are IT-admin data,
+not a store-management concern) plus a matching client-side `v-if` so the
+button itself disappears cleanly for anyone without the role, rather than
+being visible and then failing. See `PROGRESS_NOTES.md` section 38.
+
 ## Build Commands
 
 ### Main Build Commands

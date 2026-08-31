@@ -4268,3 +4268,71 @@ staged on `stable` today (barcode fix, section 34; search-clear fix,
 section 35; notification cleanup, section 36; this zero-valuation-rate
 fix) -- all bundled for one combined production deployment, pending the
 user's physical hardware-scanner test at the store.
+
+## 38. System Status panel exposed server/DB internals to any cashier; restricted to System Manager (2026-08-30)
+
+**Trigger:** the user confirmed regular cashier/POS User accounts could
+open the System Status panel (the info button in the POS header --
+server CPU/RAM usage, DB table sizes and row counts, uptime) via
+`NavbarInfoGadgets.vue` -- unrestricted since it was originally built.
+
+**Investigation:** traced the panel to two backend endpoints in
+`posawesome/api/utilities.py`, `get_server_usage()` and
+`get_database_usage()` -- both `@frappe.whitelist()` with zero
+server-side permission check, confirmed reachable by any authenticated
+session regardless of whether the button was visible in the UI. Found
+this app's own established pattern for this exact class of problem:
+`pos_access.py`'s `POS_PRIVILEGED_MANAGER_ROLES`/`user_is_pos_supervisor()`
+helpers, used elsewhere to gate supervisor-only POS actions server-side
+-- but that role set (System Manager, Accounts Manager, Sales Manager,
+Stock Manager, POS Manager) was designed for *business* overrides
+(discounts, credit approvals), not *infrastructure* visibility (raw
+server internals). Asked the user which fit better before building;
+they chose System Manager only -- the narrowest option, treating this
+as IT-admin data rather than a store-management concern.
+
+**Fix, both layers, per this repo's established fixes #15/#16 pattern
+(a hidden button alone is not real security if the API call underneath
+is still reachable):**
+- **Server-side (the actual boundary):** `frappe.only_for("System
+  Manager")` added to both `get_server_usage()` and
+  `get_database_usage()` -- the same idiomatic Frappe guard used
+  throughout core for role-gated whitelisted methods (Administrator
+  bypasses by its own built-in short-circuit, same as every other
+  `only_for()` call in the framework).
+- **Client-side (UX, not the security boundary):** new
+  `frontend/src/posapp/utils/systemStatusPermission.ts`, mirroring the
+  existing `itemQuickEditPermission.ts` pattern exactly (reads
+  `frappe.boot.user.roles`, the canonical source at desk boot). Wired
+  into `NavbarAppBar.vue` as `v-if="systemStatusVisible"` on
+  `<NavbarInfoGadgets>` -- the whole info-button menu (cache usage, DB
+  usage, CPU/RAM gadgets), not just one gadget inside it.
+
+**Cashier experience, confirmed:** `v-if` fully prevents the component
+from mounting, so `ServerUsageGadget.vue`/`DatabaseUsageGadget.vue` and
+their auto-polling composables (`useServerStats`, `useDatabaseStats`)
+never mount and never fire their `frappe.call`s for a non-System-Manager
+user -- the button is simply absent, no failed request, no error toast.
+
+**Full regression check:** frontend suite 231/231 files, 1174/1174
+tests (4 new: `systemStatusPermission.spec.ts`). Backend: new
+`test_system_status_permission.py`, 5/5 pass against real staging via
+`bench run-tests` -- verified as a genuine guard, not a tautology, by
+temporarily removing the `only_for` call and confirming the
+corresponding test failed (`AssertionError: PermissionError not
+raised`) before restoring it. `bench build --app posawesome`: clean,
+exit 0, including the `vue-tsc` type check. `bench migrate`: N/A, no
+doctype/fixture/print-format files touched. Security review: this
+change *is* the security fix -- both endpoints took no arguments (no
+injection surface), and the only gap was the missing role check itself,
+now closed server-side independent of the frontend. Confirmed
+untouched: no other navbar gadget, slot, or the mobile app-bar branch
+(which never rendered this panel to begin with); the only template
+change is the single `v-if` addition.
+
+**Promoted:** committed to `develop-swan`, cherry-picked to `stable`,
+both pushed. Unlike sections 34-37 (still deliberately held for a
+combined deployment pending the user's physical scanner test), this fix
+closes a real, currently-live access-control gap and was treated as its
+own, separately expedited production promotion rather than bundled with
+the others.
