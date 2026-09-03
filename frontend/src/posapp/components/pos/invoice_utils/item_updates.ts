@@ -329,7 +329,29 @@ export function _applyItemDetailPayload(
 			data.locked_price === "1";
 	item.description = data.description;
 	item.item_tax_template = data.item_tax_template;
-	if (!lockReturnPricing) {
+
+	const incomingDiscountPct = Number.parseFloat(
+		String(data.discount_percentage ?? 0),
+	);
+	const currentDiscount = Number.parseFloat(
+		String(item.discount_amount ?? 0),
+	);
+	const currentBaseDiscount = Number.parseFloat(
+		String(item.base_discount_amount ?? 0),
+	);
+	// item.discount_amount/base_discount_amount reflect the cart's current
+	// state here, before anything below this point touches them (confirmed:
+	// _applyPriceListRate below only writes price_list_rate/base_price_list_rate).
+	// A discount the cashier set while this item-detail refresh was in
+	// flight (e.g. from expanding the row, which triggers update_item_detail)
+	// must not be clobbered by this response's server-default percentage --
+	// same rule the "preserve existing discounts" block below already
+	// applies to rate/discount_amount; discount_percentage needs it too.
+	const hasExistingDiscount =
+		(Number.isFinite(currentDiscount) && currentDiscount > 0) ||
+		(Number.isFinite(currentBaseDiscount) && currentBaseDiscount > 0);
+
+	if (!lockReturnPricing && !hasExistingDiscount) {
 		item.discount_percentage = data.discount_percentage;
 	}
 	item.warehouse = data.warehouse || item.warehouse;
@@ -421,19 +443,8 @@ export function _applyItemDetailPayload(
 		}
 	}
 
-	const incomingDiscountPct = Number.parseFloat(
-		String(data.discount_percentage ?? 0),
-	);
-	const currentDiscount = Number.parseFloat(
-		String(item.discount_amount ?? 0),
-	);
-	const currentBaseDiscount = Number.parseFloat(
-		String(item.base_discount_amount ?? 0),
-	);
-	const hasExistingDiscount =
-		(Number.isFinite(currentDiscount) && currentDiscount > 0) ||
-		(Number.isFinite(currentBaseDiscount) && currentBaseDiscount > 0);
-
+	// incomingDiscountPct/hasExistingDiscount computed earlier, above the
+	// discount_percentage assignment -- reused here unchanged.
 	// Preserve existing discounts, but apply server percentage when no explicit discount is present.
 	if (
 		!item.locked_price &&
