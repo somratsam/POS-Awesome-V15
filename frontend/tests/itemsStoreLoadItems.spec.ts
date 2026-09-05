@@ -414,15 +414,16 @@ describe("itemsStore loadItems", () => {
 		expect(store.filteredItemsSearchTerm).toBe("item");
 	});
 
-	it("an unscoped manual reload clears the grid via the browse-without-search gate instead of re-fetching", async () => {
-		// Before BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY (itemsStore.ts), an unscoped
-		// reload (preserveSearch: false, so activeSearch is always "") re-fetched
-		// the whole catalog and, if the server unexpectedly returned empty, kept
-		// showing the previous results rather than flashing blank. That
-		// "re-fetch the whole catalog" step is itself now gated -- an unscoped
-		// reload has no search term, so it never reaches the network at all and
-		// goes straight to the same empty, waiting-for-a-query state as any other
-		// browse-all path. It does not matter what was on screen before.
+	it("an unscoped manual reload always performs a real fetch, even with no search term", async () => {
+		// Real bug, fixed: recoverItemCatalog() (the "Reload Items" button)
+		// used to inherit the same BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY gate
+		// as ordinary idle browsing -- an unscoped reload (preserveSearch:
+		// false, so activeSearch is always "") never reached the network at
+		// all and silently wiped the catalog to empty, with no error and no
+		// loading indicator. An explicit reload/recovery request must always
+		// perform a real fetch regardless of the current search box state
+		// (loadItems' bypassBrowseGate option, set unconditionally by
+		// recoverItemCatalog()).
 		const store = useItemsStore();
 		await store.initialize({
 			name: "POS-1",
@@ -432,7 +433,8 @@ describe("itemsStore loadItems", () => {
 			item_groups: [],
 		} as any);
 		// Seed a populated catalog the way it actually happens now -- via a real
-		// search -- so this proves the reload clears it, not that it was already empty.
+		// search -- so this proves the reload genuinely re-fetches, not that
+		// the catalog was already populated from before.
 		await store.loadItems({ forceServer: true, searchValue: "seed" });
 		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
 		itemServiceMocks.getItemsData.mockClear();
@@ -442,17 +444,16 @@ describe("itemsStore loadItems", () => {
 			preserveSearch: false,
 		});
 
-		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
-		expect(store.items).toEqual([]);
-		expect(store.filteredItems).toEqual([]);
+		expect(itemServiceMocks.getItemsData).toHaveBeenCalled();
+		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
 	});
 
-	it("reloading with only an item-group filter (no search term) also clears via the browse-without-search gate", async () => {
+	it("reloading with only an item-group filter (no search term) also performs a real fetch", async () => {
 		// Selecting a group tab is browsing a subset, not "actual search/scan" --
 		// recoverItemCatalog()'s activeSearch is searchTerm.value regardless of
-		// preserveSearch, and no search term was ever typed here, so this reload
-		// has no search value either and goes through the same gate as any other
-		// browse-all path (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY, itemsStore.ts).
+		// preserveSearch, and no search term was ever typed here either. Same
+		// fix as the unscoped-reload case above: the reload must still reach
+		// the network rather than being caught by the empty-search browse gate.
 		const store = useItemsStore();
 		await store.initialize({
 			name: "POS-1",
@@ -461,8 +462,6 @@ describe("itemsStore loadItems", () => {
 			currency: "PKR",
 			item_groups: [],
 		} as any);
-		// Seed a populated catalog the way it actually happens now -- via a real
-		// search -- so this proves the reload clears it, not that it was already empty.
 		await store.loadItems({ forceServer: true, searchValue: "seed" });
 		await store.filterByGroup("Medicines");
 		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
@@ -473,9 +472,8 @@ describe("itemsStore loadItems", () => {
 			preserveSearch: true,
 		});
 
-		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
-		expect(store.items).toEqual([]);
-		expect(store.filteredItems).toEqual([]);
+		expect(itemServiceMocks.getItemsData).toHaveBeenCalled();
+		expect(store.items.map((item) => item.item_code)).toEqual(["ITEM-1"]);
 	});
 
 	it("does not insert a quick-edited item that no longer matches the active search", () => {

@@ -9,6 +9,13 @@ export interface LoadItemsOptions {
 	limit?: number | null;
 	commitToCatalog?: boolean;
 	preserveCatalogOnEmpty?: boolean;
+	// Skip the BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY short-circuit (itemsStore.ts)
+	// even when searchValue is empty. That gate exists to avoid populating a
+	// full browse grid from idle, query-less state -- it should never apply to
+	// an explicit "make sure the catalog is actually correct now" recovery/
+	// reload request, which must always perform a real fetch regardless of
+	// whatever happens to be in the search box at the moment it's triggered.
+	bypassBrowseGate?: boolean;
 }
 
 export interface BuildLoadItemsRequestInput {
