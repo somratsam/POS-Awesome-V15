@@ -45,11 +45,22 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 	// redemption is held at 0 and a banner/toast explains why, without
 	// switching the toggle back off (see PaymentOptions.vue).
 	const customer_credit_blocked = ref(false);
-	const available_customer_credit = computed(() => {
-		return customer_credit_dict.value.reduce(
-			(total, row) => total + normalizeFloat(row?.total_credit || 0),
+	// Sum the raw total_credit values first, then round once at the end --
+	// matching creation.py's _validate_customer_credit_redemption() exactly
+	// (real_total = sum(flt(row.total_credit) for row in ...), rounded only
+	// at the final comparison). Rounding each row before summing can disagree
+	// with the backend's own figure whenever a row's true value isn't already
+	// clean at currency precision (e.g. a return split evenly across two
+	// lines, 2.2055 + 2.2055 -- true sum 4.411, but 2.21 + 2.21 = 4.42).
+	// get_available_credit() never rounds outstanding_amount-derived rows at
+	// all, so this isn't a rare edge case -- see PROGRESS_NOTES.md.
+	const sumRawCredit = (rows: any[]) =>
+		(Array.isArray(rows) ? rows : []).reduce(
+			(total, row) => total + (Number(row?.total_credit) || 0),
 			0,
 		);
+	const available_customer_credit = computed(() => {
+		return normalizeFloat(sumRawCredit(customer_credit_dict.value));
 	});
 
 	const available_points_amount = computed(() => {
@@ -165,6 +176,7 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 	// moment the toggle was first switched on.
 	const normalizeCustomerCreditAllocations = () => {
 		const rows = Array.isArray(customer_credit_dict.value) ? customer_credit_dict.value : [];
+		const available_total = normalizeFloat(sumRawCredit(rows));
 
 		// Only re-derive eligibility for rows that came from a genuine balance
 		// redemption (applyCreditRows already set one of these flags true).
@@ -175,10 +187,6 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 			customer_credit_redemption_requested.value || customer_credit_blocked.value;
 
 		if (inGenuineRedemptionMode && rows.length) {
-			const available_total = rows.reduce(
-				(total, row) => total + normalizeFloat(row?.total_credit || 0),
-				0,
-			);
 			const max_redeemable = getMaxRedeemableCustomerCredit();
 			const eligible = normalizeFloat(available_total) <= normalizeFloat(max_redeemable);
 
@@ -199,8 +207,19 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 		}
 
 		let remainingAllowed = getMaxRedeemableCustomerCredit();
+		const isFullRedemption = customer_credit_redemption_requested.value && rows.length > 0;
 
-		rows.forEach((row: any) => {
+		// Compute each row's final credit_to_redeem into a plain local array
+		// first -- NOT onto the reactive row objects yet. row.credit_to_redeem
+		// is written exactly once per row, below, already at its final value.
+		// (An earlier version wrote the naive per-row-rounded value onto the
+		// row first and then patched one row a second time to fix the
+		// rounding-allocation mismatch below -- two real, different writes to
+		// the same reactive property, each one re-triggering the deep watcher
+		// on customer_credit_dict that calls this very function, so the
+		// "naive" and "patched" values kept overwriting each other forever.
+		// Computing locally and writing once avoids that entirely.)
+		const computed_credit_to_redeem: number[] = rows.map((row: any) => {
 			const available = Math.max(normalizeFloat(row?.total_credit || 0), 0);
 			let requested: number;
 			if (customer_credit_redemption_requested.value) {
@@ -217,15 +236,50 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 				requested = Math.max(normalizeFloat(row?.credit_to_redeem || 0), 0);
 			}
 			const allowed = Math.min(requested, available, Math.max(remainingAllowed, 0));
-			row.credit_to_redeem = normalizeFloat(allowed);
-			remainingAllowed = normalizeFloat(Math.max(remainingAllowed - row.credit_to_redeem, 0));
+			const rounded = normalizeFloat(allowed);
+			remainingAllowed = normalizeFloat(Math.max(remainingAllowed - rounded, 0));
+			return rounded;
 		});
 
-		const total = rows.reduce(
-			(sum, row) => sum + normalizeFloat(row?.credit_to_redeem || 0),
-			0,
+		// Redeeming the full available balance must land on the exact same
+		// total the backend independently computes (available_total, above --
+		// which now matches _validate_customer_credit_redemption()'s
+		// real_total exactly, since both sum raw values and round once).
+		// Rounding each row separately, as the map above just did, can still
+		// under/overshoot that total even with correct rounding: "round each
+		// part, then sum" and "sum, then round once" are different operations
+		// whenever a row's raw value sits close to a rounding boundary (e.g.
+		// two rows of 2.2055 each round to 2.206 individually, summing to
+		// 4.412, while the true total 4.411 rounds cleanly on its own). Patch
+		// the discrepancy onto the last row with enough headroom to absorb it
+		// (not always literally the last row -- it may have no available
+		// credit of its own to give back) before ever writing to the row
+		// objects, so the backend's exact-match check on
+		// redeemed_customer_credit can never fail on rounding alone.
+		if (isFullRedemption) {
+			const allocatedSoFar = normalizeFloat(
+				computed_credit_to_redeem.reduce((sum, value) => sum + value, 0),
+			);
+			const delta = normalizeFloat(available_total - allocatedSoFar);
+			if (delta !== 0) {
+				for (let i = rows.length - 1; i >= 0; i -= 1) {
+					const rowAvailable = Math.max(normalizeFloat(rows[i]?.total_credit || 0), 0);
+					const adjusted = normalizeFloat((computed_credit_to_redeem[i] ?? 0) + delta);
+					if (adjusted >= 0 && adjusted <= rowAvailable) {
+						computed_credit_to_redeem[i] = adjusted;
+						break;
+					}
+				}
+			}
+		}
+
+		rows.forEach((row: any, index: number) => {
+			row.credit_to_redeem = computed_credit_to_redeem[index];
+		});
+
+		redeemed_customer_credit.value = normalizeFloat(
+			computed_credit_to_redeem.reduce((sum, value) => sum + value, 0),
 		);
-		redeemed_customer_credit.value = normalizeFloat(total);
 	};
 
 	watch(redeemed_customer_credit, (newVal) => {

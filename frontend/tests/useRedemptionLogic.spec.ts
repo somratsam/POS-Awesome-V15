@@ -182,4 +182,64 @@ describe("useRedemptionLogic", () => {
 		expect(customer_credit_dict.value[0].credit_to_redeem).toBe(100);
 		expect(redeemed_customer_credit.value).toBe(100);
 	});
+
+	it("sums raw total_credit values before rounding, matching the backend's real 4.411 rather than a rounded-per-row 4.42", async () => {
+		// Real production case: two return-credit rows of 2.2055 each (a
+		// proportional split that leaves a genuine 4th-decimal remainder --
+		// get_available_credit() never rounds outstanding_amount-derived
+		// rows) plus a zero row. Rounding each row to 3 decimals before
+		// summing gives 2.206 + 2.206 + 0.000 = 4.412; the backend's own
+		// _validate_customer_credit_redemption() sums the raw values first
+		// and rounds once, landing on 4.411 instead.
+		(globalThis as any).frappe.call = vi.fn(async () => ({
+			message: [
+				{ type: "Invoice", credit_origin: "SINV-1", total_credit: 2.2055, credit_to_redeem: 0 },
+				{ type: "Invoice", credit_origin: "SINV-2", total_credit: 2.2055, credit_to_redeem: 0 },
+				{ type: "Invoice", credit_origin: "SINV-3", total_credit: 0, credit_to_redeem: 0 },
+			],
+		}));
+
+		const invoiceDoc = ref<any>({
+			customer: "JUMA",
+			rounded_total: 10,
+			grand_total: 10,
+			currency: "OMR",
+			conversion_rate: 1,
+		});
+
+		const {
+			available_customer_credit,
+			redeemed_customer_credit,
+			customer_credit_dict,
+			get_available_credit,
+		} = useRedemptionLogic({
+			invoiceDoc,
+			posProfile: ref({ company: "Test Co", currency: "OMR" }),
+			customerInfo: ref({}),
+			currencyPrecision: ref(3),
+			// Round-half-up without plain .toFixed()'s binary-representation
+			// quirk (e.g. (2.2055).toFixed(3) === "2.205" in every JS engine,
+			// since 2.2055 is actually stored as ...499999...) -- mirrors
+			// what useInvoiceCurrency.ts's flt() now produces by routing
+			// through Frappe's own global flt() instead of raw .toFixed().
+			formatFloat: (value: any, prec = 3) =>
+				Number(
+					(Math.round((Number(value) + Number.EPSILON) * 10 ** prec) / 10 ** prec).toFixed(
+						prec,
+					),
+				),
+		});
+
+		get_available_credit(true);
+		await flush();
+
+		expect(available_customer_credit.value).toBe(4.411);
+		expect(redeemed_customer_credit.value).toBe(4.411);
+		expect(
+			(customer_credit_dict.value as any[]).reduce(
+				(sum, row) => sum + Number(row.credit_to_redeem || 0),
+				0,
+			),
+		).toBeCloseTo(4.411, 6);
+	});
 });
