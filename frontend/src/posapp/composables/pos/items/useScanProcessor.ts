@@ -690,20 +690,22 @@ export function useScanProcessor(context: ScanProcessorContext) {
 				return;
 			}
 
-			// Report Not Found
-			if (context.onItemNotFound) context.onItemNotFound(scannedCode);
-
-			// Only "high" confidence (verified scanner-speed timing, or the
-			// onScan.js hardware library) means this was a genuine, deliberate
-			// scan -- a miss there is a real signal worth surfacing. "low"
-			// confidence input (idle-settle typing, paste, a bare numeric
-			// length heuristic) only looked barcode-shaped by charset/length;
-			// real search terms (style codes, item codes) can be
-			// indistinguishable from a real barcode by shape alone in this
-			// catalog, so a miss there just means "not a barcode" -- stay
-			// silent and let normal search proceed with the typed/pasted
-			// text undisturbed. See PROGRESS_NOTES.md section 34.
+			// Report Not Found -- only for a genuine, high-confidence scan
+			// (verified scanner-speed timing, or the onScan.js hardware
+			// library). "low" confidence input (idle-settle typing, paste, a
+			// bare numeric length heuristic) only looked barcode-shaped by
+			// charset/length; real search terms (style codes, item codes)
+			// can be indistinguishable from a real barcode by shape alone in
+			// this catalog, so a miss there just means "not a barcode" --
+			// stay silent and let normal search proceed with the
+			// typed/pasted text undisturbed. onItemNotFound overwrites the
+			// live search box with this snapshot of scannedCode, which was
+			// captured before this async lookup started -- for "low"
+			// confidence, the cashier may well have kept typing in the
+			// meantime, so calling it here would silently discard whatever
+			// they've typed since. See PROGRESS_NOTES.md section 34.
 			if (confidence === "high") {
+				if (context.onItemNotFound) context.onItemNotFound(scannedCode);
 				showScanError({
 					message: `${__("Item not found")}: ${scannedCode}`,
 					code: scannedCode,
@@ -715,9 +717,8 @@ export function useScanProcessor(context: ScanProcessorContext) {
 			return;
 		} catch (e: any) {
 			console.error("Error fetching item from barcode:", e);
-			if (context.onItemNotFound) context.onItemNotFound(scannedCode);
-
 			if (confidence === "high") {
+				if (context.onItemNotFound) context.onItemNotFound(scannedCode);
 				showScanError({
 					message: `${__("Item not found")}: ${scannedCode}`,
 					code: scannedCode,

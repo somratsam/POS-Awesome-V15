@@ -109,6 +109,7 @@ const makeContext = (
 		}),
 		search_from_scanner_ref: ref(false),
 		addItem,
+		onItemNotFound: vi.fn(),
 	};
 };
 
@@ -280,6 +281,9 @@ describe("useScanProcessor serial scan handling", () => {
 		expect(ctx.scannerInput.scanErrorMessage.value).toContain(
 			"4524019703",
 		);
+		// A genuine, deliberate scan miss should still surface the failed
+		// code in the search box for the cashier to see/edit.
+		expect(ctx.onItemNotFound).toHaveBeenCalledWith("4524019703");
 	});
 
 	it("stays silent on a miss for low confidence (e.g. a numeric style-code search that only looked barcode-shaped)", async () => {
@@ -290,6 +294,11 @@ describe("useScanProcessor serial scan handling", () => {
 
 		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
 		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+		// Real regression: onItemNotFound used to fire unconditionally here,
+		// overwriting the live search box with this stale pre-lookup
+		// snapshot even though the cashier may have kept typing during the
+		// async lookup. A low-confidence miss must never touch it.
+		expect(ctx.onItemNotFound).not.toHaveBeenCalled();
 	});
 
 	it("defaults to low confidence (stays silent on a miss) when no confidence is passed", async () => {
@@ -300,6 +309,20 @@ describe("useScanProcessor serial scan handling", () => {
 
 		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
 		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+		expect(ctx.onItemNotFound).not.toHaveBeenCalled();
+	});
+
+	it("stays silent (and never overwrites the search box) when the barcode lookup throws for low confidence", async () => {
+		const ctx = makeContext();
+		itemServiceMocks.getItemsFromBarcodeData.mockRejectedValueOnce(
+			new Error("network error"),
+		);
+
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("4524019703", "low");
+
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+		expect(ctx.onItemNotFound).not.toHaveBeenCalled();
 	});
 
 	it("still auto-adds on a match regardless of confidence -- low confidence never blocks a real match", async () => {
