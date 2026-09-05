@@ -1111,7 +1111,11 @@ export const useItemsStore = defineStore("items", () => {
 					),
 			});
 
-			if (BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY && !searchValue) {
+			if (
+				BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY &&
+				!searchValue &&
+				!options.bypassBrowseGate
+			) {
 				setItems([], { totalCount: totalItemCount.value });
 				itemsLoaded.value = true;
 				cachedPagination.value.loading = false;
@@ -1846,6 +1850,12 @@ export const useItemsStore = defineStore("items", () => {
 				groupFilter: activeGroup,
 				commitToCatalog: !isScopedRecovery,
 				preserveCatalogOnEmpty: true,
+				// A catalog recovery/reload must always perform a real fetch,
+				// regardless of whatever happens to be in the search box at
+				// the moment it's triggered -- the empty-search browse gate
+				// is meant for idle browsing state, not an explicit request
+				// to make sure the catalog is actually correct right now.
+				bypassBrowseGate: true,
 			});
 			if (isScopedRecovery && Array.isArray(fetchedItems)) {
 				const scopedResults = filterItemsByGroup(
