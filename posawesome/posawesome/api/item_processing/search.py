@@ -68,6 +68,7 @@ class SearchPlan:
     include_image: bool
     posa_display_items_in_stock: bool
     posa_show_template_items: bool
+    barcode_matched_item_codes: Tuple[str, ...]
 
 
 def normalize_brand(brand: str) -> str:
@@ -83,6 +84,26 @@ def _to_positive_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return integer if integer >= 0 else None
+
+
+def _find_item_codes_by_barcode_fragment(term: str) -> List[str]:
+    """Return item_codes whose registered barcode contains ``term`` anywhere.
+
+    Covers a partial barcode (e.g. the last few digits) against the real
+    ``Item Barcode`` child table -- distinct from item_code, which a
+    registered barcode can differ from entirely for an item with more than
+    one barcode. Without this, Limit Search mode's or_filters (name/item_name/
+    item_code only) can only find a barcode fragment when it happens to
+    overlap the item's own item_code string.
+    """
+    if not term:
+        return []
+    rows = frappe.get_all(
+        "Item Barcode",
+        filters={"barcode": ["like", f"%{term}%"]},
+        pluck="parent",
+    )
+    return list(dict.fromkeys(code for code in rows if code))
 
 
 def _build_search_plan(
@@ -135,6 +156,7 @@ def _build_search_plan(
     normalized_search_value = ""
     longest_search_token = ""
     raw_search_value = ""
+    barcode_matched_item_codes: List[str] = []
 
     if search_value:
         raw_search_value = cstr(search_value).strip()
@@ -160,11 +182,14 @@ def _build_search_plan(
 
         if use_limit_search:
             if len(raw_search_value) >= min_search_len:
+                barcode_matched_item_codes = _find_item_codes_by_barcode_fragment(base_search_term)
                 or_filters = [
                     ["name", "like", f"{base_search_term}%"],
                     ["item_name", "like", f"{base_search_term}%"],
                     ["item_code", "like", f"%{base_search_term}%"],
                 ]
+                if barcode_matched_item_codes:
+                    or_filters.append(["item_code", "in", barcode_matched_item_codes])
                 or_filters.extend(
                     [field, "like", f"%{base_search_term}%"]
                     for field in installed_item_search_fields()
@@ -253,6 +278,7 @@ def _build_search_plan(
         include_image=include_image,
         posa_display_items_in_stock=bool(posa_display_items_in_stock),
         posa_show_template_items=bool(posa_show_template_items),
+        barcode_matched_item_codes=tuple(barcode_matched_item_codes),
     )
 
 
@@ -816,6 +842,7 @@ def _enrich_hot_items(
             or pos_profile.get("posa_fast_counter_positive_stock_only")
         ),
         posa_show_template_items=bool(pos_profile.get("posa_show_template_items")),
+        barcode_matched_item_codes=(),
     )
     result: List[Dict[str, Any]] = []
     chunk_size = 500

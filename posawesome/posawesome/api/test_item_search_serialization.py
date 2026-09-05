@@ -103,6 +103,15 @@ class TestItemSearchSerialization(unittest.TestCase):
         _install_stubs()
         cls.module = _load_module()
 
+    def setUp(self):
+        # Several tests below replace self.module.frappe.get_all with a
+        # test-specific fake; since cls.module is shared across every test
+        # method in this class (loaded once in setUpClass), a fake left
+        # behind by one test otherwise leaks into the next one -- harmless
+        # before _build_search_plan() itself ever called frappe.get_all, but
+        # a real problem now that it does (the partial-barcode lookup).
+        self.module.frappe.get_all = lambda *args, **kwargs: []
+
     def test_run_item_query_serializes_datetime_rows_for_details(self):
         serialized_payloads = []
 
@@ -147,6 +156,7 @@ class TestItemSearchSerialization(unittest.TestCase):
             include_image=False,
             posa_display_items_in_stock=False,
             posa_show_template_items=False,
+            barcode_matched_item_codes=(),
         )
 
         result = self.module._run_item_query({}, None, None, plan)
@@ -190,6 +200,7 @@ class TestItemSearchSerialization(unittest.TestCase):
             include_image=False,
             posa_display_items_in_stock=False,
             posa_show_template_items=False,
+            barcode_matched_item_codes=(),
         )
 
         result = self.module._run_item_query({}, None, None, plan)
@@ -287,6 +298,72 @@ class TestItemSearchSerialization(unittest.TestCase):
         self.assertEqual(plan.page_size, 100)
         self.assertTrue(plan.or_filters)
         self.assertEqual(plan.item_code_for_search, "panadol")
+
+    def test_limit_search_matches_a_barcode_fragment_distinct_from_item_code(self):
+        # Real gap this closes: an item's registered barcode can differ
+        # entirely from its own item_code (an item can have several
+        # barcodes). Before this fix, Limit Search mode's or_filters only
+        # checked name/item_name/item_code -- a fragment of a *different*
+        # registered barcode was invisible to the query no matter how the
+        # word filter downstream might otherwise have matched it, since the
+        # row was never fetched from the DB in the first place.
+        calls = []
+
+        def fake_get_all(doctype, **kwargs):
+            calls.append((doctype, kwargs))
+            if doctype == "Item Barcode":
+                self.assertEqual(
+                    kwargs.get("filters"), {"barcode": ["like", "%97030024%"]}
+                )
+                self.assertEqual(kwargs.get("pluck"), "parent")
+                return ["45240197030024", "45240197030024"]  # dup on purpose
+            return []
+
+        self.module.frappe.get_all = fake_get_all
+
+        plan = self.module._build_search_plan(
+            pos_profile={"pose_use_limit_search": 1},
+            item_group="",
+            search_value="97030024",
+            limit=100,
+            offset=0,
+            start_after=None,
+            start_after_item_code=None,
+            modified_after=None,
+            include_description=False,
+            include_image=False,
+            item_groups=None,
+        )
+
+        self.assertEqual(plan.barcode_matched_item_codes, ("45240197030024",))
+        self.assertIn(
+            ["item_code", "in", ["45240197030024"]],
+            plan.or_filters,
+        )
+        self.assertTrue(
+            any(call[0] == "Item Barcode" for call in calls),
+            "expected a lookup against the Item Barcode child table",
+        )
+
+    def test_no_barcode_lookup_when_search_term_is_below_the_minimum_length(self):
+        calls = []
+        self.module.frappe.get_all = lambda doctype, **kwargs: calls.append(doctype) or []
+
+        self.module._build_search_plan(
+            pos_profile={"pose_use_limit_search": 1},
+            item_group="",
+            search_value="a",
+            limit=100,
+            offset=0,
+            start_after=None,
+            start_after_item_code=None,
+            modified_after=None,
+            include_description=False,
+            include_image=False,
+            item_groups=None,
+        )
+
+        self.assertNotIn("Item Barcode", calls)
 
     def test_current_limit_search_field_overrides_the_legacy_alias(self):
         plan = self.module._build_search_plan(
