@@ -808,10 +808,17 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 		// balance redemption must always redeem its full available amount,
 		// never less. The backend re-verifies independently regardless.
 		if (unref(options.customerCreditRedemptionRequested) && customerCreditDict?.value?.length) {
-			const available_total = customerCreditDict.value.reduce(
-				(total: number, row: any) => total + formatFloat(row?.total_credit || 0, prec),
+			// Sum raw, round once -- matching the backend's own
+			// _validate_customer_credit_redemption() exactly (and
+			// useRedemptionLogic.ts's available_customer_credit, fixed the
+			// same way). Rounding each row before summing can disagree with
+			// the backend's figure whenever a row's true value isn't already
+			// clean at currency precision.
+			const rawTotal = customerCreditDict.value.reduce(
+				(total: number, row: any) => total + (Number(row?.total_credit) || 0),
 				0,
 			);
+			const available_total = formatFloat(rawTotal, prec);
 			const expected = formatFloat(Math.min(available_total, invoice_total), prec);
 			if (formatFloat(unref(redeemedCustomerCredit) || 0, prec) !== expected) {
 				throw new Error(

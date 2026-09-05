@@ -46,6 +46,16 @@ import {
 const __ = window.__ || ((s) => s);
 // @ts-ignore
 const frappe = window.frappe;
+// Frappe's own global flt() (frappe/public/js/frappe/utils/number_format.js),
+// the same one format.ts's formatCurrency uses -- implements the same
+// rounding_method (Banker's Rounding (legacy) by default, from
+// frappe.boot.sysdefaults.rounding_method) as the Python backend's flt().
+// Routed through here instead of a local .toFixed()-based reimplementation,
+// which had no awareness of that setting and is subject to plain JS
+// floating-point .toFixed() boundary quirks the backend explicitly guards
+// against (e.g. (2.005).toFixed(2) === "2.00").
+// @ts-ignore
+const globalFlt: (value: unknown, precision?: number) => number = window.flt;
 
 /**
  * useInvoiceCurrency Composable
@@ -93,7 +103,9 @@ export function useInvoiceCurrency() {
 		const _value = Number(value);
 		if (isNaN(_value)) return 0;
 		if (Math.abs(_value) < 0.000001) return _value;
-		return Number((_value || 0).toFixed(prec));
+		return typeof globalFlt === "function"
+			? globalFlt(_value, prec)
+			: Number((_value || 0).toFixed(prec));
 	};
 
 	const parseFinite = (value: unknown): number | null => {
