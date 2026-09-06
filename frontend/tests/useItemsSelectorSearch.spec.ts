@@ -242,6 +242,83 @@ describe("useItemsSelectorSearch", () => {
 			postAddFocus: "qty",
 		});
 	});
+
+	// Real bug, fixed: the debounced auto-search (search_onchange, wired to
+	// fire on every keystroke) reused _performSearch()'s pre-existing
+	// trim-and-writeback of the visible search box. That writeback is
+	// harmless after Enter (the user is done typing), but destructive when
+	// it fires automatically mid-sentence: typing "jersey", a space, then
+	// pausing before "skirt" let the debounce trim "jersey " down to
+	// "jersey" and overwrite the live box with it, so the next keystroke
+	// landed glued to the previous word ("jerseyskirt" instead of
+	// "jersey skirt"). See PROGRESS_NOTES.md for the live repro.
+	it("does not strip a trailing space from the live search box when the debounced auto-search fires mid-typing", async () => {
+		const searchItems = vi.fn().mockResolvedValue([]);
+		let currentInput = "jersey ";
+		const vm: any = {
+			first_search: currentInput,
+			search_input: currentInput,
+			search: "",
+			search_from_scanner: false,
+			isBackgroundLoading: false,
+			pos_profile: { posa_use_limit_search: 1 },
+			itemsIntegration: { searchItems },
+		};
+
+		const api = useItemsSelectorSearch({
+			getVM: () => vm,
+			scannerInput: createScannerInput(),
+			getSearchInput: () => currentInput,
+			setSearchInput: (value: string) => {
+				currentInput = value;
+				vm.search_input = value;
+				vm.first_search = value;
+			},
+		});
+
+		vi.useFakeTimers();
+		try {
+			api.search_onchange();
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(vm.search_input).toBe("jersey ");
+			expect(vm.first_search).toBe("jersey ");
+			// The search itself should still run against the trimmed term.
+			expect(searchItems).toHaveBeenCalledWith("jersey");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("still trims and cleans up the visible search box on an explicit Enter submission", async () => {
+		const searchItems = vi.fn().mockResolvedValue([]);
+		let currentInput = "jersey ";
+		const vm: any = {
+			first_search: currentInput,
+			search_input: currentInput,
+			search: "",
+			search_from_scanner: false,
+			isBackgroundLoading: false,
+			pos_profile: { posa_use_limit_search: 1 },
+			itemsIntegration: { searchItems },
+		};
+
+		const api = useItemsSelectorSearch({
+			getVM: () => vm,
+			scannerInput: createScannerInput(),
+			getSearchInput: () => currentInput,
+			setSearchInput: (value: string) => {
+				currentInput = value;
+				vm.search_input = value;
+				vm.first_search = value;
+			},
+		});
+
+		await api._performSearch();
+
+		expect(vm.search_input).toBe("jersey");
+		expect(vm.first_search).toBe("jersey");
+	});
 });
 
 describe("resolveBooleanSetting", () => {
