@@ -38,6 +38,10 @@ type UseItemsSelectorSearchInputArgs = {
 	// composable still works standalone (e.g. in tests) without them.
 	isLimitSearchEnabled?: () => boolean;
 	resetLimitSearchResults?: () => void;
+	// Called on every keystroke (after the refs below are updated) so a
+	// caller can trigger its own debounced auto-search. Optional so this
+	// composable still works standalone (e.g. in tests) without it.
+	onSearchInputChanged?: () => void;
 };
 
 export function useItemsSelectorSearchInput({
@@ -54,6 +58,7 @@ export function useItemsSelectorSearchInput({
 	triggerItemSearchFocus,
 	isLimitSearchEnabled,
 	resetLimitSearchResults,
+	onSearchInputChanged,
 }: UseItemsSelectorSearchInputArgs) {
 	const clearSearch = () => {
 		if (clearingSearch) {
@@ -74,6 +79,7 @@ export function useItemsSelectorSearchInput({
 		searchInput.value = normalized;
 		firstSearch.value = normalized;
 		scannerInput.handleSearchInput?.(normalized);
+		onSearchInputChanged?.();
 	};
 
 	const prepareSearchInjection = () => {

@@ -157,6 +157,7 @@ class TestItemSearchSerialization(unittest.TestCase):
             posa_display_items_in_stock=False,
             posa_show_template_items=False,
             barcode_matched_item_codes=(),
+            force_empty_result=False,
         )
 
         result = self.module._run_item_query({}, None, None, plan)
@@ -201,6 +202,7 @@ class TestItemSearchSerialization(unittest.TestCase):
             posa_display_items_in_stock=False,
             posa_show_template_items=False,
             barcode_matched_item_codes=(),
+            force_empty_result=False,
         )
 
         result = self.module._run_item_query({}, None, None, plan)
@@ -299,6 +301,34 @@ class TestItemSearchSerialization(unittest.TestCase):
         self.assertTrue(plan.or_filters)
         self.assertEqual(plan.item_code_for_search, "panadol")
 
+    def test_limit_search_name_matching_is_contains_anywhere_not_prefix_only(self):
+        # Real gap this closes: name/item_name used to be matched with
+        # "{term}%" (prefix-only) as the primary condition, unlike item_code
+        # which was always "%{term}%" (contains-anywhere). A mid-word
+        # fragment like "otton" (for "Cotton") would only surface via a
+        # zero-results retry that has now been removed entirely (its
+        # conditions were always a subset of the primary query's) -- so name
+        # matching must itself be contains-anywhere from the start, same as
+        # non-Limit-Search mode already does.
+        plan = self.module._build_search_plan(
+            pos_profile={"pose_use_limit_search": 1},
+            item_group="",
+            search_value="otton",
+            limit=100,
+            offset=0,
+            start_after=None,
+            start_after_item_code=None,
+            modified_after=None,
+            include_description=False,
+            include_image=False,
+            item_groups=None,
+        )
+
+        self.assertIn(["name", "like", "%otton%"], plan.or_filters)
+        self.assertIn(["item_name", "like", "%otton%"], plan.or_filters)
+        self.assertNotIn(["name", "like", "otton%"], plan.or_filters)
+        self.assertNotIn(["item_name", "like", "otton%"], plan.or_filters)
+
     def test_limit_search_matches_a_barcode_fragment_distinct_from_item_code(self):
         # Real gap this closes: an item's registered barcode can differ
         # entirely from its own item_code (an item can have several
@@ -364,6 +394,171 @@ class TestItemSearchSerialization(unittest.TestCase):
         )
 
         self.assertNotIn("Item Barcode", calls)
+
+    def test_two_character_search_is_below_the_unified_minimum_length(self):
+        # Real bug this closes: the old min_search_len was 2, disagreeing
+        # with the 3-character threshold already used by
+        # word_filter_active here and by the client-side filters in
+        # useItemSearch.ts/searchConstants.ts. A 2-character Limit Search
+        # query used to run a real (very broad, near-useless) query; it must
+        # now show nothing, consistent with every other layer.
+        plan = self.module._build_search_plan(
+            pos_profile={"pose_use_limit_search": 1},
+            item_group="",
+            search_value="sh",
+            limit=100,
+            offset=0,
+            start_after=None,
+            start_after_item_code=None,
+            modified_after=None,
+            include_description=False,
+            include_image=False,
+            item_groups=None,
+        )
+
+        self.assertTrue(plan.force_empty_result)
+        self.assertEqual(plan.or_filters, [])
+
+    def test_a_confirmed_exact_barcode_match_is_never_treated_as_below_minimum(self):
+        # A short but fully-resolved, definitive barcode/serial/batch match
+        # is categorically different from a vague short fragment -- the
+        # length floor exists to avoid noisy near-useless fragment queries,
+        # not to reject a confirmed exact identification. search.py imports
+        # search_serial_or_batch_or_barcode_number directly into its own
+        # namespace (from ... import ...), so it must be patched there, not
+        # on the source barcode module.
+        original_lookup = self.module.search_serial_or_batch_or_barcode_number
+        self.module.search_serial_or_batch_or_barcode_number = (
+            lambda *args, **kwargs: {"item_code": "AB"}
+        )
+        try:
+            plan = self.module._build_search_plan(
+                pos_profile={"pose_use_limit_search": 1},
+                item_group="",
+                search_value="ab",
+                limit=100,
+                offset=0,
+                start_after=None,
+                start_after_item_code=None,
+                modified_after=None,
+                include_description=False,
+                include_image=False,
+                item_groups=None,
+            )
+        finally:
+            self.module.search_serial_or_batch_or_barcode_number = original_lookup
+
+        self.assertFalse(plan.force_empty_result)
+        self.assertEqual(plan.item_code_for_search, "AB")
+
+    def test_get_items_returns_immediately_without_any_query_below_minimum_length(self):
+        # End-to-end: force_empty_result must short-circuit before
+        # _run_item_query ever runs, not just describe an empty result --
+        # confirms zero frappe.get_all calls happen at all.
+        calls = []
+        self.module.frappe.get_all = lambda *args, **kwargs: calls.append(args) or []
+
+        result = self.module.get_items(
+            json.dumps({"pose_use_limit_search": 1, "name": "Test Pos"}),
+            search_value="sh",
+        )
+
+        self.assertEqual(result, [])
+        self.assertEqual(calls, [])
+
+    def test_run_item_query_finds_a_barcode_match_via_the_primary_query_alone(self):
+        # Once or_filters is contains-anywhere on every field from the start
+        # (the mid-word-matching fix), a barcode match no longer needs a
+        # separate zero-results retry -- it's just one more OR condition on
+        # the one query frappe.get_all actually runs.
+        plan = self.module.SearchPlan(
+            filters={},
+            or_filters=[
+                ["name", "like", "%nomatch%"],
+                ["item_name", "like", "%nomatch%"],
+                ["item_code", "like", "%nomatch%"],
+                ["item_code", "in", ["BARCODE-ITEM"]],
+            ],
+            fields=["item_code", "item_name"],
+            limit_page_length=10,
+            limit_start=0,
+            order_by="item_name asc",
+            page_size=10,
+            initial_page_start=0,
+            item_code_for_search="nomatch",
+            search_words=["nomatch"],
+            normalized_search_value="nomatch",
+            word_filter_active=True,
+            include_description=False,
+            include_image=False,
+            posa_display_items_in_stock=False,
+            posa_show_template_items=False,
+            barcode_matched_item_codes=("BARCODE-ITEM",),
+            force_empty_result=False,
+        )
+
+        calls = []
+
+        def fake_get_all(*args, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("or_filters") and any(
+                f == ["item_code", "in", ["BARCODE-ITEM"]] for f in kwargs["or_filters"]
+            ):
+                return [{"item_code": "BARCODE-ITEM", "item_name": "Found via barcode"}]
+            return []
+
+        self.module.frappe.get_all = fake_get_all
+        self.module.get_items_details = lambda _profile, rows, **_kwargs: [
+            {"item_code": row["item_code"]} for row in json.loads(rows)
+        ]
+        self.module._build_attribute_maps = lambda *args, **kwargs: ({}, {})
+        self.module._shape_item_row = lambda item, detail, plan, **kwargs: item
+        self.module._matches_search_words = lambda *args, **kwargs: True
+
+        result = self.module._run_item_query({}, None, None, plan)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["item_code"], "BARCODE-ITEM")
+        # Exactly one frappe.get_all call for the item search itself (a
+        # second call happens for the exact-item-code-prepend check) -- no
+        # separate zero-results retry query.
+        self.assertLessEqual(len(calls), 2)
+
+    def test_no_zero_result_fallback_query_is_issued_anymore(self):
+        # Confirms the retry code path is actually gone, not just unused by
+        # coincidence in the test above: a query that finds nothing must
+        # stay empty, with only the single primary attempt (plus the
+        # separate exact-item-code-prepend check) ever hitting frappe.get_all.
+        plan = self.module.SearchPlan(
+            filters={},
+            or_filters=[["item_code", "like", "%nomatch%"]],
+            fields=["item_code", "item_name"],
+            limit_page_length=10,
+            limit_start=0,
+            order_by="item_name asc",
+            page_size=10,
+            initial_page_start=0,
+            item_code_for_search="nomatch",
+            search_words=["nomatch"],
+            normalized_search_value="nomatch",
+            word_filter_active=True,
+            include_description=False,
+            include_image=False,
+            posa_display_items_in_stock=False,
+            posa_show_template_items=False,
+            barcode_matched_item_codes=(),
+            force_empty_result=False,
+        )
+
+        calls = []
+        self.module.frappe.get_all = lambda *args, **kwargs: calls.append(kwargs) or []
+        self.module.get_items_details = lambda *args, **kwargs: []
+        self.module._build_attribute_maps = lambda *args, **kwargs: ({}, {})
+
+        result = self.module._run_item_query({}, None, None, plan)
+
+        self.assertEqual(result, [])
+        self.assertEqual(len(calls), 2)  # primary query + exact-item-code check, no retry
 
     def test_current_limit_search_field_overrides_the_legacy_alias(self):
         plan = self.module._build_search_plan(

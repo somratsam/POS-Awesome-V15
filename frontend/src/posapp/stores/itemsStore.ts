@@ -28,6 +28,7 @@ import {
 	startStartupPhase,
 	traceStartupEvent,
 } from "../../utils/startupTrace";
+import { MIN_SEARCH_TERM_LENGTH } from "../utils/searchConstants";
 
 export const useItemsStore = defineStore("items", () => {
 	const SERVER_SEARCH_FALLBACK_DEBOUNCE_MS = 450;
@@ -1380,7 +1381,7 @@ export const useItemsStore = defineStore("items", () => {
 		searchTerm.value = term;
 		lastSearch.value = term;
 
-		if (!term || term.length < 2) {
+		if (!term) {
 			cancelPendingServerSearchFallback();
 			if (limitSearchEnabled.value) {
 				return clearLimitSearchResults({ preserveItems: true });
@@ -1400,6 +1401,18 @@ export const useItemsStore = defineStore("items", () => {
 					filterItemsByGroup(items.value, itemGroup.value),
 				);
 			}
+			return filteredItems.value;
+		}
+
+		if (term.length < MIN_SEARCH_TERM_LENGTH) {
+			// A non-empty term shorter than the shared minimum must show
+			// nothing -- not the unfiltered group browse-all the empty-term
+			// branch above falls back to (that path is for an explicitly
+			// cleared search box), and not a partial/wrong result set
+			// either. Matches the server's own MIN_SEARCH_TERM_LENGTH rule
+			// (item_processing/search.py).
+			cancelPendingServerSearchFallback();
+			setFilteredItems([], term);
 			return filteredItems.value;
 		}
 
@@ -1570,7 +1583,10 @@ export const useItemsStore = defineStore("items", () => {
 					resultLimit,
 				);
 
-				if (searchResults.length === 0 && term.length >= 3) {
+				if (
+					searchResults.length === 0 &&
+					term.length >= MIN_SEARCH_TERM_LENGTH
+				) {
 					searchResults = await scheduleServerSearchFallback(
 						term,
 						itemGroup.value,
@@ -1629,7 +1645,11 @@ export const useItemsStore = defineStore("items", () => {
 		if (limitSearchEnabled.value) return [];
 		if (!cachedPagination.value.enabled || cachedPagination.value.loading)
 			return [];
-		if (searchTerm.value && searchTerm.value.length >= 2) return [];
+		// Any active search term -- even one below the minimum length,
+		// which searchItems() shows as an empty result set -- means this
+		// isn't a plain browse; appending more raw browse pages here would
+		// contradict whatever searchItems() already decided to display.
+		if (searchTerm.value) return [];
 		if (cachedPagination.value.offset >= cachedPagination.value.total)
 			return [];
 

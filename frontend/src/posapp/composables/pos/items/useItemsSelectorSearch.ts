@@ -2,6 +2,7 @@ import _ from "lodash";
 import { shouldReloadOnSearchClear } from "../../../utils/searchUtils.js";
 import { isOffline } from "../../../../offline/index";
 import { resolveBooleanSetting } from "./selectorSearch/resolveBooleanSetting";
+import { MIN_SEARCH_TERM_LENGTH } from "../../../utils/searchConstants.js";
 
 declare const flt: (_value: unknown) => number;
 
@@ -343,7 +344,7 @@ export const useItemsSelectorSearch = ({
 		}
 
 		// Require a minimum of three characters before running a search
-		if (!trimmedQuery || trimmedQuery.length < 3) {
+		if (!trimmedQuery || trimmedQuery.length < MIN_SEARCH_TERM_LENGTH) {
 			vm.search_from_scanner = false;
 			return;
 		}

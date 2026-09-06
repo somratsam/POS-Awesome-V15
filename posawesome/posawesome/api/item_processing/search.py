@@ -27,6 +27,13 @@ from posawesome.posawesome.api.item_sale_controls import installed_item_search_f
 
 INTERACTIVE_SEARCH_RESULT_LIMIT = 100
 
+# Single source of truth for the minimum number of characters a search term
+# must have before item search actually filters by it. Matches
+# frontend/src/posapp/utils/searchConstants.ts's MIN_SEARCH_TERM_LENGTH --
+# keep both in sync. Below this length, search must show nothing rather than
+# an unfiltered/wrong result set or a narrow exact-match-only fallback.
+MIN_SEARCH_TERM_LENGTH = 3
+
 
 @dataclass(frozen=True)
 class ProfileContext:
@@ -69,6 +76,12 @@ class SearchPlan:
     posa_display_items_in_stock: bool
     posa_show_template_items: bool
     barcode_matched_item_codes: Tuple[str, ...]
+    # True when a non-empty search term was provided but is shorter than
+    # MIN_SEARCH_TERM_LENGTH and didn't resolve to a confirmed exact
+    # barcode/serial/batch match -- the query must return nothing rather
+    # than an unfiltered browse-all or a narrow, almost-always-empty
+    # exact-item-code-only fallback.
+    force_empty_result: bool
 
 
 def normalize_brand(brand: str) -> str:
@@ -157,6 +170,7 @@ def _build_search_plan(
     longest_search_token = ""
     raw_search_value = ""
     barcode_matched_item_codes: List[str] = []
+    force_empty_result = False
 
     if search_value:
         raw_search_value = cstr(search_value).strip()
@@ -178,14 +192,29 @@ def _build_search_plan(
 
         resolved_item_code = data.get("item_code")
         base_search_term = resolved_item_code or (longest_search_token or raw_search_value)
-        min_search_len = 2
+        # A confirmed exact barcode/serial/batch match is honored regardless
+        # of length -- it's a definitive identification, not a vague
+        # fragment, so the length floor below doesn't apply to it.
+        below_minimum_length = (
+            not resolved_item_code and len(raw_search_value) < MIN_SEARCH_TERM_LENGTH
+        )
 
         if use_limit_search:
-            if len(raw_search_value) >= min_search_len:
+            if below_minimum_length:
+                # Show nothing rather than an unfiltered browse-all or a
+                # narrow, almost-always-empty exact-item-code-only fallback.
+                force_empty_result = True
+            else:
                 barcode_matched_item_codes = _find_item_codes_by_barcode_fragment(base_search_term)
+                # Contains-anywhere on every field, consistently -- matching
+                # non-Limit-Search mode, which has always matched this way.
+                # A prefix-only first stage here used to mean a genuine
+                # mid-word match (e.g. "otton" for "Cotton") could be missed
+                # outright whenever *any* other row happened to satisfy the
+                # narrower prefix condition.
                 or_filters = [
-                    ["name", "like", f"{base_search_term}%"],
-                    ["item_name", "like", f"{base_search_term}%"],
+                    ["name", "like", f"%{base_search_term}%"],
+                    ["item_name", "like", f"%{base_search_term}%"],
                     ["item_code", "like", f"%{base_search_term}%"],
                 ]
                 if barcode_matched_item_codes:
@@ -195,11 +224,13 @@ def _build_search_plan(
                     for field in installed_item_search_fields()
                 )
                 item_code_for_search = base_search_term
-
-            if len(raw_search_value) < min_search_len:
-                filters["item_code"] = base_search_term
         elif resolved_item_code:
             filters["item_code"] = resolved_item_code
+        elif below_minimum_length:
+            # Non-Limit-Search mode's own server-side path (e.g. a forced
+            # server search or get_delta_items) -- same rule applies if it
+            # ever receives a short, unresolved text search directly.
+            force_empty_result = True
 
     if item_group and item_group.upper() != "ALL":
         filters["item_group"] = ["like", f"%{item_group}%"]
@@ -279,6 +310,7 @@ def _build_search_plan(
         posa_display_items_in_stock=bool(posa_display_items_in_stock),
         posa_show_template_items=bool(posa_show_template_items),
         barcode_matched_item_codes=tuple(barcode_matched_item_codes),
+        force_empty_result=force_empty_result,
     )
 
 
@@ -476,20 +508,12 @@ def _run_item_query(
             order_by=plan.order_by,
         )
 
-        if not items_data and plan.item_code_for_search and page_start == plan.initial_page_start:
-            items_data = frappe.get_all(
-                "Item",
-                filters=plan.filters,
-                or_filters=[
-                    ["name", "like", f"%{plan.item_code_for_search}%"],
-                    ["item_name", "like", f"%{plan.item_code_for_search}%"],
-                    ["item_code", "like", f"%{plan.item_code_for_search}%"],
-                ],
-                fields=plan.fields,
-                limit_start=page_start,
-                limit_page_length=plan.page_size,
-                order_by=plan.order_by,
-            )
+        # No zero-results fallback retry here anymore: now that or_filters
+        # above is already contains-anywhere on every field (name, item_name,
+        # item_code, barcode matches, custom search fields) rather than a
+        # narrower prefix-first stage, a broader retry could never find a row
+        # the primary query didn't already return -- its own conditions were
+        # always a strict subset of the primary's.
 
         page_count = len(items_data)
         if (
@@ -843,6 +867,7 @@ def _enrich_hot_items(
         ),
         posa_show_template_items=bool(pos_profile.get("posa_show_template_items")),
         barcode_matched_item_codes=(),
+        force_empty_result=False,
     )
     result: List[Dict[str, Any]] = []
     chunk_size = 500
@@ -970,6 +995,9 @@ def _execute_item_search(
         include_image,
         item_groups,
     )
+
+    if plan.force_empty_result:
+        return []
 
     return _run_item_query(pos_profile, price_list, customer, plan)
 
