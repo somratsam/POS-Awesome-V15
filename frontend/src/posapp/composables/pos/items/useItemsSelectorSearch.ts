@@ -285,7 +285,7 @@ export const useItemsSelectorSearch = ({
 		}
 	};
 
-	const _performSearch = async () => {
+	const _performSearch = async ({ isAutoTrigger = false } = {}) => {
 		const vm = getVm();
 		if (!vm) return;
 
@@ -302,9 +302,18 @@ export const useItemsSelectorSearch = ({
 		const rawQuery = getCurrentSearchInput(vm);
 		const trimmedQuery = String(rawQuery || "").trim();
 
-		// Keep both search refs aligned with the value we are about to process.
-		vm.first_search = trimmedQuery;
-		syncSearchInput(vm, trimmedQuery);
+		// Keep both search refs aligned with the value we are about to
+		// process -- but only for an explicit submission (Enter), not the
+		// debounced auto-search. Writing the trimmed value back into the
+		// live, bound search box is harmless after the user has finished
+		// typing (Enter), but destructive mid-sentence: trimming a trailing
+		// space the user just typed (e.g. "jersey " while pausing before
+		// typing "skirt") silently erases it from the visible box, so the
+		// next keystroke lands glued to the previous word ("jerseyskirt").
+		if (!isAutoTrigger) {
+			vm.first_search = trimmedQuery;
+			syncSearchInput(vm, trimmedQuery);
+		}
 
 		// The barcode index owns its memory threshold and large-catalog fallback.
 		// High confidence: resolveItemByBarcode already found an exact, real
@@ -415,7 +424,7 @@ export const useItemsSelectorSearch = ({
 	};
 
 	const search_onchange = _.debounce(() => {
-		_performSearch();
+		_performSearch({ isAutoTrigger: true });
 	}, 300);
 
 	const onEnter = (event?: KeyboardEvent) => {
