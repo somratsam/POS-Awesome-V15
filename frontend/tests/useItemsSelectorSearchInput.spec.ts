@@ -133,3 +133,50 @@ describe("useItemsSelectorSearchInput clearSearch", () => {
 		expect(searchInput.value).toBe("PA4 79S");
 	});
 });
+
+describe("useItemsSelectorSearchInput onSearchInputChanged", () => {
+	// Real bug, fixed: nothing ever called the debounced auto-search on a
+	// keystroke -- only pressing Enter ran _performSearch(). In Limit Search
+	// mode (no local catalog to filter reactively), that meant typing did
+	// nothing at all until Enter was pressed. onSearchInputChanged is the
+	// hook a caller (ItemsSelector.vue) uses to wire its own debounced
+	// auto-search into every keystroke.
+	it("calls onSearchInputChanged on every keystroke via handleSearchInput", () => {
+		const onSearchInputChanged = vi.fn();
+		const { api } = makeDeps({ onSearchInputChanged });
+
+		api.handleSearchInput("co");
+		api.handleSearchInput("cot");
+
+		expect(onSearchInputChanged).toHaveBeenCalledTimes(2);
+	});
+
+	it("calls onSearchInputChanged for on-screen keypad input too (appendSearchCharacter)", () => {
+		const onSearchInputChanged = vi.fn();
+		const { api } = makeDeps({ onSearchInputChanged });
+
+		api.appendSearchCharacter("5");
+
+		expect(onSearchInputChanged).toHaveBeenCalledTimes(1);
+	});
+
+	it("works without onSearchInputChanged (optional)", () => {
+		const { api } = makeDeps();
+
+		expect(() => api.handleSearchInput("cot")).not.toThrow();
+	});
+
+	it("does not call onSearchInputChanged from clearSearch (clearing already resets limit search results directly)", () => {
+		const onSearchInputChanged = vi.fn();
+		const resetLimitSearchResults = vi.fn();
+		const { api } = makeDeps({
+			onSearchInputChanged,
+			isLimitSearchEnabled: () => true,
+			resetLimitSearchResults,
+		});
+
+		api.clearSearch();
+
+		expect(onSearchInputChanged).not.toHaveBeenCalled();
+	});
+});

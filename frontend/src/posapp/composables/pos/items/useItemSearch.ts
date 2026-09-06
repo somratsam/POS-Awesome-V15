@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import { perfMarkStart, perfMarkEnd } from "../../../utils/perf.js";
+import { MIN_SEARCH_TERM_LENGTH } from "../../../utils/searchConstants.js";
 
 declare const frappe: any;
 
@@ -94,9 +95,14 @@ export function useItemSearch() {
 			);
 		}
 
-		// Filter by search term
+		// Filter by search term. A non-empty term below the shared minimum
+		// must show nothing rather than fall through unfiltered by term.
 		const rawSearch = (searchTerm || "").trim();
-		if (rawSearch && rawSearch.length >= 3) {
+		if (rawSearch && rawSearch.length < MIN_SEARCH_TERM_LENGTH) {
+			perfMarkEnd("pos:search-filter", mark);
+			return [];
+		}
+		if (rawSearch && rawSearch.length >= MIN_SEARCH_TERM_LENGTH) {
 			const term = rawSearch.toLowerCase();
 			const searchWords = term.split(/\s+/).filter(Boolean);
 
@@ -198,8 +204,18 @@ export function useItemSearch() {
 		if (!items || !items.length) return [];
 
 		const term = (searchTerm || "").trim().toLowerCase();
+
+		// A non-empty term below the shared minimum must show nothing --
+		// not an unfiltered slice of the catalog as if it matched. Only
+		// applies when this function owns the search filtering itself
+		// (searchAlreadyApplied means an upstream layer already decided
+		// what to show for this exact term).
+		if (!searchAlreadyApplied && term && term.length < MIN_SEARCH_TERM_LENGTH) {
+			return [];
+		}
+
 		const needsLocalSearch =
-			!searchAlreadyApplied && term && term.length >= 3;
+			!searchAlreadyApplied && term && term.length >= MIN_SEARCH_TERM_LENGTH;
 
 		// PERF: If no filters needed, just slice and return
 		if (

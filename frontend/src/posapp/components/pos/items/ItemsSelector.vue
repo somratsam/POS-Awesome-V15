@@ -352,6 +352,7 @@ import { useFlyAnimation } from "../../../composables/core/useFlyAnimation";
 import { useCartValidation } from "../../../composables/pos/items/useCartValidation";
 import { useItemsIntegration } from "../../../composables/pos/items/useItemsIntegration";
 import { useItemSearch } from "../../../composables/pos/items/useItemSearch";
+import { MIN_SEARCH_TERM_LENGTH } from "../../../utils/searchConstants";
 import { useScannerInput } from "../../../composables/pos/items/useScannerInput";
 import { useItemAvailability } from "../../../composables/pos/items/useItemAvailability";
 import { useItemDetailFetcher } from "../../../composables/pos/items/useItemDetailFetcher";
@@ -624,7 +625,8 @@ const displayedItems = computed(() => {
 	const baseItems = Array.isArray(filteredItems.value) ? filteredItems.value : [];
 	const rawTerm = first_search.value;
 	const term = (typeof rawTerm === "string" ? rawTerm : "").trim().toLowerCase();
-	const searchAlreadyApplied = term.length >= 3 && filteredItemsSearchTerm.value === term;
+	const searchAlreadyApplied =
+		term.length >= MIN_SEARCH_TERM_LENGTH && filteredItemsSearchTerm.value === term;
 	return filterAndPaginate(baseItems, {
 		searchTerm: term,
 		searchAlreadyApplied,
@@ -1882,6 +1884,17 @@ const {
 	resetLimitSearchResults: () => {
 		itemsIntegration.clearLimitSearchResults({ preserveItems: false });
 		resetBarcodeIndex();
+	},
+	onSearchInputChanged: () => {
+		// Limit Search mode has no local catalog to filter reactively --
+		// nothing re-queries the server as the user types unless something
+		// calls _performSearch(). Non-Limit-Search mode already filters the
+		// preloaded catalog live via the displayedItems computed, so it
+		// needs no such trigger here (and calling it would just add
+		// redundant server round-trips on every keystroke).
+		if (usesLimitSearch.value) {
+			itemsSelectorSearch.search_onchange();
+		}
 	},
 });
 const handleItemSearchFocusForPresentation = () => {

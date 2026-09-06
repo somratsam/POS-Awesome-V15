@@ -1198,4 +1198,65 @@ describe("itemsStore loadItems", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("a non-empty search term below the shared minimum length shows nothing, not the unfiltered group browse", async () => {
+		// Real bug, fixed: a 1-2 character term used to fall into the same
+		// branch as an emptied search box and show every item in the group
+		// unfiltered, as if it matched. Below MIN_SEARCH_TERM_LENGTH
+		// (searchConstants.ts) it must show nothing instead.
+		const store = useItemsStore();
+		await store.initialize({
+			name: "POS-1",
+			warehouse: "Main WH",
+			selling_price_list: "Retail",
+			currency: "PKR",
+			item_groups: [],
+		} as any);
+		await store.loadItems({ forceServer: true, searchValue: "seed" });
+		expect(store.items).toHaveLength(1);
+
+		await store.searchItems("it");
+
+		expect(store.filteredItems).toEqual([]);
+	});
+
+	it("an empty search term still falls back to the unfiltered group browse (unaffected by the minimum-length fix)", async () => {
+		const store = useItemsStore();
+		await store.initialize({
+			name: "POS-1",
+			warehouse: "Main WH",
+			selling_price_list: "Retail",
+			currency: "PKR",
+			item_groups: [],
+		} as any);
+		await store.loadItems({ forceServer: true, searchValue: "seed" });
+
+		await store.searchItems("it");
+		expect(store.filteredItems).toEqual([]);
+
+		await store.searchItems("");
+
+		expect(store.filteredItems.map((item) => item.item_code)).toEqual([
+			"ITEM-1",
+		]);
+	});
+
+	it("Limit Search mode also shows nothing (not stale/browse results) for a term below the shared minimum length", async () => {
+		const store = useItemsStore();
+		await store.initialize({
+			name: "POS-1",
+			warehouse: "Main WH",
+			selling_price_list: "Retail",
+			currency: "PKR",
+			item_groups: [],
+			posa_use_limit_search: 1,
+		} as any);
+		await store.loadItems({ forceServer: true, searchValue: "seed" });
+		itemServiceMocks.getItemsData.mockClear();
+
+		await store.searchItems("it");
+
+		expect(store.filteredItems).toEqual([]);
+		expect(itemServiceMocks.getItemsData).not.toHaveBeenCalled();
+	});
 });
