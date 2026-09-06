@@ -624,6 +624,14 @@ const commitActiveGridEditorAndMoveEntry = async (delta: number) => {
 	await moveGridEntry(delta);
 };
 
+// Mirrors stayOnGridEntryFromItem's "commit but don't advance" behavior for
+// the keyboard-grid capture-phase path (handleGridKeydown), where gridMode
+// is already "cell" so that plain-bubble path is never reached.
+const commitActiveGridEditorAndStay = async () => {
+	await commitActiveGridEditor();
+	void focusActiveGridTarget({ activateDirectEdit: false });
+};
+
 const commitActiveGridEditorAndMoveBoundary = async (
 	rowEdge: "current" | "first" | "last",
 	columnEdge: "first" | "last",
@@ -932,8 +940,17 @@ const handleQtyEditSubmitted = (item: any) => {
 	advanceGridEntryFromItem(item, "qty");
 };
 
+// Discount fields deliberately don't auto-advance to the next cell on Enter
+// in the standard (non-counter-grid) cart -- committing a discount % is not
+// naturally followed by editing the amount, unlike qty -> uom or rate. Kept
+// as a shared check so every Enter-interception site (the plain bubble path
+// here, and the keyboard-grid capture-phase path in handleGridKeydown)
+// applies the same rule consistently.
+const isStayPutGridColumnKey = (key: CartGridColumnKey | null) =>
+	!props.counterGrid && (key === "discount_percentage" || key === "discount_amount");
+
 const handleGridEditorSubmitted = (item: any, fromCellKey: CartGridColumnKey) => {
-	if (!props.counterGrid && (fromCellKey === "discount_percentage" || fromCellKey === "discount_amount")) {
+	if (isStayPutGridColumnKey(fromCellKey)) {
 		stayOnGridEntryFromItem(item, fromCellKey);
 		return;
 	}
@@ -1131,7 +1148,11 @@ const handleGridKeydown = (event: KeyboardEvent) => {
 			event.preventDefault();
 			event.stopPropagation();
 			if (activeCellKey.value && isCartGridDirectEditColumnKey(activeCellKey.value)) {
-				void commitActiveGridEditorAndMoveEntry(event.shiftKey ? -1 : 1);
+				if (isStayPutGridColumnKey(activeCellKey.value)) {
+					void commitActiveGridEditorAndStay();
+				} else {
+					void commitActiveGridEditorAndMoveEntry(event.shiftKey ? -1 : 1);
+				}
 			} else {
 				activateGridCell();
 			}
