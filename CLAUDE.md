@@ -721,6 +721,101 @@ not a store-management concern) plus a matching client-side `v-if` so the
 button itself disappears cleanly for anyone without the role, rather than
 being visible and then failing. See `PROGRESS_NOTES.md` section 38.
 
+## Rounding Individual Amounts Before Summing Them Compounds Into a Wrong Total — Sum Raw, Round Once
+
+`flt()` (or any rounding call) applied to each intermediate value before
+adding/comparing them, instead of summing the raw values and rounding once
+at the end, lets small per-line rounding errors compound into a visibly
+wrong total once enough already-rounded values are combined. This is easy
+to introduce because each individual rounding call looks locally correct —
+the bug only shows up in the sum. Before trusting that a monetary total is
+correct, check whether `flt()`/rounding is being applied per-line-item and
+summed, or applied once to the final sum — ERPNext's own core code (e.g.
+`update_outstanding_amt`) does not round intermediate amounts on write,
+which is good evidence this app's own code shouldn't either. Also don't
+assume a local rounding helper matches Frappe's own `flt()` — a hand-rolled
+`.toFixed()`-based implementation has its own binary-representation
+rounding quirks that can disagree with Frappe's global `flt()` on the same
+input; route through the real one instead of reimplementing it.
+
+Concrete example that happened in this repo: this exact pre-rounding
+pattern caused two separate, visibly wrong totals at once — item price
+precision (`useInvoiceCurrency.ts`'s local `flt()` was a `.toFixed()`-based
+reimplementation, not Frappe's global `flt()`) and customer-credit
+redemption math (`available_customer_credit`/`redeemed_customer_credit` in
+`useRedemptionLogic.ts`, plus the pre-submit credit mirror check in
+`usePaymentSubmission.ts`, were each rounding per-value before summing).
+Fixing the credit-math rounding order also surfaced a second, unrelated bug
+in the same function: an allocation-remainder-absorption loop that only
+terminated under the old (buggy) rounding order — both had to be fixed
+together for the function to converge at all, not just compute the right
+number. See `PROGRESS_NOTES.md` section 39.
+
+## A Correctly-Built Debounced/Auto-Trigger Function Can Have Zero Callers — Grep for Actual Invocations Before Trusting a Feature Works
+
+A composable function can be completely correct in isolation — properly
+debounced, properly branching on mode, properly guarding edge cases — and
+still never run in production because nothing in the app actually calls it.
+This is a different failure mode from the already-documented
+`defineExpose`/prop-forwarding wiring gaps above: here the function itself
+is exported and reachable, it's just never invoked from any real event
+handler. Before trusting that a UI behavior "should already work" because
+the underlying function looks right, grep for the function's actual call
+sites app-wide (not just its definition or its own test file) — a debounced
+handler with zero real callers is functionally dead code, and no amount of
+correct internal logic changes that.
+
+Concrete example that happened in this repo: `useItemsSelectorSearch.ts`'s
+`search_onchange` — a properly lodash-debounced (~300ms) wrapper around
+`_performSearch()` — existed and looked correct, but a repo-wide grep found
+zero callers anywhere in the app. Only `onEnter()` (bound to the Enter key)
+ever called `_performSearch()` directly. The practical effect: in Limit
+Search mode (server-side search, no local catalog to filter reactively),
+typing did nothing at all until the cashier pressed Enter — a real,
+previously-unnoticed UX gap, not a subtle edge case. Non-Limit-Search mode
+masked the same absence of wiring, since its own live client-side filtering
+made auto-search look like it was working. Fixed by wiring
+`search_onchange` into a new `onSearchInputChanged` hook called from every
+keystroke. See `PROGRESS_NOTES.md` section 40.
+
+## A Capture-Phase Listener on an Ancestor Can Intercept an Event Before the Target's Own Bubble-Phase Handler — a Carve-Out Added to Only One Site Can Silently Stop Firing
+
+When two independent listeners exist for the same key/event — one on the
+actual target element (bubble phase) and one on an ancestor using
+`.capture`/`addEventListener(..., true)` — the capture-phase listener runs
+*first* and can call `stopPropagation()` to prevent the target's own
+handler from ever running. A business-rule carve-out (e.g. "this specific
+field should behave differently from the general case") added to only the
+bubble-phase site can look complete and pass every test that exercises that
+site directly, while silently never firing in the actual, common runtime
+path once some other piece of state routes events through the
+capture-phase site instead. This is worse than a normal missed-caller gap
+(see above) because the carve-out isn't just unwired — it exists and
+partially works, so a quick check of "is the carve-out reachable at all"
+can look satisfied without proving it fires in every case that matters.
+Before trusting a conditional behavior meant to override a more general
+default, check every interception site for the same key, not just the one
+where the special-case code was added — and check what runtime state
+determines which site actually receives the event.
+
+Concrete example that happened in this repo: `ItemsTable.vue`'s Discount %
+and Discount Amount cart fields were deliberately meant to *not*
+auto-advance to the next cell on Enter (unlike qty → uom → rate, which
+should advance) — `handleGridEditorSubmitted`'s bubble-phase carve-out
+already encoded this. But `handleGridKeydown`'s capture-phase listener on
+the table container intercepts Enter first whenever the keyboard-grid's
+`gridMode` state is `"cell"`, and that path had no matching carve-out —
+it unconditionally advanced regardless of which field was active. The
+state that determines which site wins turned out to be self-reinforcing:
+`gridMode` latches to `"cell"` as a side effect of the very first
+Enter-driven edit of *any* grid field, including the bubble-phase
+carve-out's own code path — so after a session's first discount-field
+edit, the capture-phase site (with no carve-out) is what actually receives
+every subsequent Enter press. The intended "stay put" behavior effectively
+never fired in normal continued use, only on a session's very first edit.
+Fixed with one shared `isStayPutGridColumnKey()` check used by both
+interception sites. See `PROGRESS_NOTES.md` section 41.
+
 ## Build Commands
 
 ### Main Build Commands

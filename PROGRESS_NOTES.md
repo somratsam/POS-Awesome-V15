@@ -4336,3 +4336,260 @@ combined deployment pending the user's physical scanner test), this fix
 closes a real, currently-live access-control gap and was treated as its
 own, separately expedited production promotion rather than bundled with
 the others.
+
+## 39. Pre-rounding intermediate amounts: item price precision and customer-credit math both wrong the same way (2026-09-05)
+
+**Root cause, one pattern, two call sites:** `flt()` (both the local
+copy in `useInvoiceCurrency.ts` and ad hoc rounding elsewhere) was being
+applied to individual values *before* summing/comparing them, instead of
+summing the raw values and rounding once at the end. Small per-line
+rounding errors compound into a visibly wrong total once several
+already-rounded values are added together -- confirmed as a real gap by
+checking ERPNext's own `update_outstanding_amt`, which does not round
+`outstanding_amount` on write, so any pre-rounding on this app's side is
+strictly a source of drift, not a defense against one.
+
+**Fix, item price precision:** `useInvoiceCurrency.ts`'s local `flt()`
+now routes through Frappe's global `flt()` instead of a local
+`.toFixed()` implementation -- `.toFixed()` has its own binary-
+representation rounding quirks distinct from Frappe's own rounding,
+so two different "correct" roundings could disagree on the same input.
+
+**Fix, customer-credit math (`useRedemptionLogic.ts`,
+`usePaymentSubmission.ts`):** `available_customer_credit` and
+`redeemed_customer_credit` now sum raw amounts and round once, matching
+the pre-submit credit mirror check in `usePaymentSubmission.ts` so the
+UI's displayed credit and the value actually submitted can no longer
+silently disagree by a rounding-order difference.
+
+**A second, unrelated bug found while fixing the first:** correcting
+`redeemed_customer_credit`'s rounding surfaced an infinite loop in its
+allocation-remainder-absorption logic -- a mutation sequence that didn't
+converge once the rounding order changed. Fixed alongside the rounding
+change; both were needed for the function to terminate correctly, not
+just compute the right number.
+
+**Full regression check:** frontend suite passing (see section 40 for
+the combined final count across all of tonight's commits -- these
+changes shipped in the same batch). New tests: `useInvoiceCurrencyFlt.spec.ts`
+and expanded `useRedemptionLogic.spec.ts`, both verified as genuine
+guards via revert/restore (temporarily reintroducing the pre-rounding
+behavior and confirming the specific new assertions failed with the
+expected wrong totals, then restoring). `bench build`: clean, `vue-tsc`
+passed. `bench migrate`: N/A, no doctype/fixture files touched. No
+backend files touched -- pure frontend arithmetic-ordering fix.
+
+**Promoted:** committed to `develop-swan` (`3d3a150`), cherry-picked to
+`stable` (`827f6e0`), both pushed together with the rest of tonight's
+batch (sections 40-41). Independently regression-tested on `stable`
+after cherry-picking, not just carried over from `develop-swan`'s
+result. Not yet deployed to production -- pending the user's go-ahead.
+
+## 40. Limit Search system audit: five related search bugs, plus a sixth regression found during the user's own manual verification (2026-09-05 → 2026-09-06)
+
+A single audit of POSAwesome's item search (`item_processing/search.py`
+on the server, `itemsStore.ts`/`useItemSearch.ts`/`useItemsSelectorSearch.ts`
+on the client) turned up five distinct, real gaps. Each was implemented,
+tested, and verified as its own self-contained fix/commit -- listed here
+in the order they were built, plus a sixth fix for a regression the
+first five introduced, caught by the user testing live on staging
+immediately afterward.
+
+**1. Partial barcode matching (`search.py`, commit `f071486`).**
+Limit Search mode's `or_filters` only checked `name`/`item_name`/
+`item_code` -- a fragment of a *registered barcode* that differs from
+the item's own `item_code` (an item can have several barcodes) was
+invisible to the query no matter what else matched downstream, since the
+row was never fetched from the database at all. New
+`_find_item_codes_by_barcode_fragment()` joins the real `Item Barcode`
+child table (`frappe.get_all("Item Barcode", filters={"barcode": ["like",
+f"%{term}%"]}, pluck="parent")`) and adds any matches as an extra
+`["item_code", "in", [...]]` OR condition. Verified live against real
+staging data: a search for the last few digits of a real registered
+barcode (distinct from the item_code) now finds the correct item.
+
+**2. Scan-overwrite bug (`useScanProcessor.ts`, commit `17d7845`).**
+`onItemNotFound` fired unconditionally on any barcode-lookup miss,
+overwriting the live search box with a stale pre-lookup snapshot of the
+scanned code -- including for "low" confidence input (idle-settle
+typing, a paste, a bare numeric-length heuristic) where a miss just
+means "not a barcode, this was a real search term all along." A cashier
+who kept typing during the async lookup would find their input silently
+replaced mid-sentence. Now only a "high" confidence miss (verified
+scanner-speed timing, or the onScan.js hardware library) reports
+not-found; a low-confidence miss stays silent, matching this app's
+established confidence-based design (section 34).
+
+**3. Reload Items did nothing with an empty search box
+(`loadItemsRequest.ts`/`itemsStore.ts`, commit `f60f85b`).**
+`recoverItemCatalog()` (the "Reload Items" button) inherited the same
+`BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY` gate meant for idle browsing --
+an unscoped reload (no search term) never reached the network at all
+and silently wiped the catalog to empty, with no error and no loading
+indicator. `loadItems()` gained an explicit `bypassBrowseGate` option,
+set unconditionally by `recoverItemCatalog()`, so an explicit reload
+always performs a real fetch regardless of the current search box
+state. Two pre-existing tests had been asserting the *old, buggy*
+behavior as correct (`"...clears via the browse-without-search gate"`)
+-- rewritten to assert the fix, not worked around.
+
+**4-5. Limit Search rework: prefix-only matching, inconsistent minimum
+length, and Enter-required search (commit `ce4c5a8`, the largest of the
+five).** Three related gaps, fixed together since they touch the same
+functions:
+  - Name/item_name matching was prefix-only (`"term%"`), unlike
+    item_code which was always contains-anywhere (`"%term%"`) -- a
+    genuine mid-word fragment (e.g. `"otton"` for `"Cotton"`) could be
+    missed outright. Now contains-anywhere on every field, consistently,
+    matching what non-Limit-Search mode already did correctly. The old
+    zero-results fallback retry in `_run_item_query` is removed as dead
+    code: once the primary query is already contains-anywhere, a
+    broader retry's conditions are always a strict subset of the
+    primary's and could never find a row it didn't already return.
+  - The minimum search length disagreed across layers (2 in Limit
+    Search mode's own `min_search_len`, 3 elsewhere) and, below that
+    length, ran a narrow almost-always-empty exact-item-code-only
+    fallback instead of showing nothing. Unified to one
+    `MIN_SEARCH_TERM_LENGTH = 3` constant -- `searchConstants.ts` on the
+    frontend, matched by a same-named constant in `search.py` -- enforced
+    identically in both search modes, client and server: below it, show
+    nothing rather than an unfiltered or wrong result set. A confirmed
+    exact barcode/serial/batch match is still honored regardless of
+    length (it's a definitive identification, not a vague fragment).
+  - In Limit Search mode nothing ever re-queried the server as the user
+    typed -- only pressing Enter ran a search at all, since Limit Search
+    has no local catalog to filter reactively the way non-Limit-Search
+    mode does (that mode's `displayedItems` computed just re-filters the
+    already-loaded catalog live on every keystroke, no trigger needed).
+    The already-correctly-built, already-debounced (~300ms)
+    `search_onchange` in `useItemsSelectorSearch.ts` had zero callers
+    anywhere in the app before this fix -- confirmed via grep, not
+    assumed. Wired it into every keystroke via a new
+    `onSearchInputChanged` hook (`useItemsSelectorSearchInput.ts` →
+    `ItemsSelector.vue`), gated to Limit Search mode only so
+    non-Limit-Search mode's already-working reactive filtering is
+    untouched.
+
+  Verified live against real staging data (direct backend `get_items()`
+  calls against "Test Pos"'s real garment catalog, not just unit tests):
+  `"j"`/`"ja"` (1-2 chars) → 0 results; `"jac"` (3 chars) → 106 real
+  matches; `"acke"` (mid-word inside "JACKET", not a prefix of anything)
+  → 104 matches including `JACKET-1-40`; `"reen"` (mid-word inside
+  "GREEN") → 87 matches. A live-browser Playwright check for the
+  auto-search-without-Enter behavior specifically was attempted but
+  blocked by a missing system library (`libnspr4.so`) in this sandbox --
+  requires a root `apt-get install` not done without explicit
+  authorization; the user tested this manually on staging instead.
+
+**6. Regression found during the user's manual staging test: debounced
+auto-search stripped a trailing space typed mid-sentence
+(`useItemsSelectorSearch.ts`, commit `e10520b`).** Reported directly by
+the user testing fixes 1-5 live: typing `"jersey"`, a space, then
+`"skirt"` produced `"jerseyskirt"`. Root cause traced and confirmed via
+an isolated reproduction *before* any fix was written (per the user's
+explicit ask to confirm root cause first): `_performSearch()` has always
+trimmed the search box and written the trimmed value back into the
+live, bound input (`vm.first_search = trimmedQuery; syncSearchInput(vm,
+trimmedQuery)`) -- harmless when this function only ran on Enter (the
+user had finished typing by then), but destructive once fix #4-5's
+auto-search wiring made it also fire automatically ~300ms after any
+typing pause, including the pause right after typing a space. The
+debounce would catch the box at `"jersey "`, trim it to `"jersey"`, and
+silently overwrite the live input before the next word was typed.
+Fixed by gating the writeback on an explicit `isAutoTrigger` flag --
+`_performSearch({ isAutoTrigger: true })` from the debounce skips the
+writeback entirely; `onEnter()`'s direct calls are unaffected and still
+clean up trailing whitespace exactly as before. Confirmed as a genuine
+regression (not pre-existing) via `git diff`: the trim/writeback code
+itself was untouched by fix #4-5; only its new reachability from an
+automatic, mid-typing trigger was new.
+
+**Full regression check (all six fixes together, final state on
+`develop-swan` and independently reverified on `stable` after cherry-
+picking):** frontend suite 234/234 files, 1201/1201 tests. Backend:
+`test_item_search_serialization.py` 21/21 (`python -m unittest`, the
+established reliable way to run this file's `sys.modules`-stubbing
+tests -- see the WSL2/test-runner caution in `CLAUDE.md`). Every new
+test verified as a genuine guard via revert/restore, not just written
+and trusted. `bench build --app posawesome`: clean, exit 0, `vue-tsc
+--noEmit` passed with zero type errors, both standalone and as part of
+the build, on both branches. `bench migrate`: N/A, no doctype/fixture/
+print-format files touched by any of the six fixes. Security: N/A, no
+new user-input/auth/data-access surface -- all six are search/UI logic
+on already-authenticated POS sessions. Confirmed untouched: payment,
+invoice, and the section 39 credit-rounding fix's own files are
+untouched by any of these six commits (verified by file-level diff
+inspection before committing, not assumption).
+
+**Promoted:** each of the six fixes committed to `develop-swan` as its
+own separate commit (not squashed), then cherry-picked to `stable` in
+the same order -- all seven cherry-picks (five here plus section 39's
+rounding fix, which predates this audit chronologically but was batched
+into the same push) applied with zero merge conflicts. Both branches
+pushed. Not yet deployed to production -- pending the user's go-ahead.
+
+## 41. Discount % auto-advance inconsistency: an intentional "stay put" rule silently bypassed after a session's first edit (2026-09-06)
+
+**How this was found:** the user asked, as a plain investigative
+question (no fix requested yet), why pressing Enter after typing a
+discount % on a cart row caused a color change plus focus jumping to the
+Discount Amount field -- was it intentional UX, or a side effect of the
+`_applyItemDetailPayload` racing-refresh fix from earlier the same
+night? Traced precisely before touching any code: **unrelated to
+`_applyItemDetailPayload`** (that function only mutates plain data
+fields, has no `.focus()`/class-toggling logic, and isn't even in the
+call chain a discount-% Enter press reaches -- that goes through
+`handleDiscountPercentUpdate`/`calcPrices`, a separate synchronous local
+calculation). Both symptoms are one feature: `ItemsTable.vue`'s
+spreadsheet-style keyboard-grid navigation. The active-row/active-cell
+highlight (dark navy background plus a cyan cell border,
+`CartItemRow.vue.css`) and the focus jump are the same state change
+(`activeCellKey` moving to the next column) viewed from two angles, not
+two separate mechanisms.
+
+**The actual bug, found while tracing "is this a problem":**
+`handleGridEditorSubmitted` already had an explicit carve-out keeping
+Discount %/Discount Amount from auto-advancing (unlike qty → uom → rate,
+which are meant to advance) -- the authors clearly considered this
+question already. But that carve-out lived in only ONE of two
+independent Enter-interception sites. The other -- `handleGridKeydown`'s
+capture-phase listener on the table container, which intercepts Enter
+*before* it reaches the input's own bubble-phase handler whenever
+`gridMode === "cell"` -- had no such carve-out and unconditionally
+advanced regardless of which field was active. Since `gridMode` latches
+to `"cell"` as a side effect of the very first Enter-driven edit of
+*any* grid field -- including the "stay put" branch itself
+(`stayOnGridEntryFromItem` sets `gridMode.value = "cell"`) -- and
+nothing resets it on a plain mouse click elsewhere (only Escape twice or
+an F-key shortcut calls `deactivateKeyboardGrid()`), the capture-phase
+path is what actually runs on every discount-field edit after a
+session's first one. The carve-out the code clearly intended essentially
+never fires in normal continued use -- confirmed by direct code trace,
+not assumption, before reporting back or proposing any fix.
+
+**Fix:** a single shared `isStayPutGridColumnKey(key)` helper, used by
+both interception sites. The capture-phase path now calls a new
+`commitActiveGridEditorAndStay()` (commits the value, refocuses the same
+cell in display mode -- mirroring `stayOnGridEntryFromItem`'s own
+behavior) instead of `commitActiveGridEditorAndMoveEntry()` whenever the
+active cell is a discount field in the standard (non-counter-grid) cart.
+Counter-grid-dialog mode's own, intentionally different always-advance
+behavior is untouched (`isStayPutGridColumnKey` returns `false`
+whenever `props.counterGrid` is true).
+
+**Full regression check:** frontend suite 234/234 files, 1201/1201
+tests (4 new tests in `itemsTableDiscountStayPut.spec.ts`, following
+this app's established raw-source-string-assertion pattern for large
+`<script setup>` components too heavily integrated to mount directly --
+same approach as `itemsSelectorContainerRefWiring.spec.ts`/
+`itemsSelectorAutoSearchWiring.spec.ts`). Verified as a genuine guard
+via revert/restore: temporarily reverting the capture-phase branch back
+to an unconditional advance made the exact test checking that wiring
+fail, as expected. `bench build`: clean, `vue-tsc` passed. `bench
+migrate`: N/A. Security: N/A, pure keyboard-navigation/focus state, no
+input/auth/data surface. Confirmed untouched: Tab-to-exit-grid, arrow-key
+navigation, and qty/uom/rate's own auto-advance are all unchanged.
+
+**Promoted:** committed to `develop-swan` (`dc40192`), cherry-picked to
+`stable` (`0b4ca38`), both pushed as the last of tonight's seven-commit
+batch. Not yet deployed to production -- pending the user's go-ahead.
