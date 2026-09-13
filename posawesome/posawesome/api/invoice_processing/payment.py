@@ -175,7 +175,14 @@ def _create_change_payment_entries(
                         "voucher_detail_no": None,
                         "against_voucher_type": invoice_doc.get("doctype") or "Sales Invoice",
                         "against_voucher": invoice_doc.get("name"),
-                        "account": _doc_value(change_payment_entry, "paid_from") or cash_account_name,
+                        # The invoice's own outstanding-balance ledger entries live on
+                        # the customer's receivable account (party_account), not the
+                        # cash account this Payment Entry pays out from -- passing
+                        # paid_from here (as this previously did) makes
+                        # update_voucher_outstanding's Payment Ledger Entry lookup
+                        # filter on the wrong account, so it silently finds nothing
+                        # and outstanding_amount never actually gets corrected.
+                        "account": party_account,
                         "party_type": "Customer",
                         "party": invoice_doc.get("customer"),
                         "dr_or_cr": "credit_in_account_currency",
@@ -215,10 +222,24 @@ def _create_change_payment_entries(
         return False
 
     # When the tender includes the configured/default cash method, paid change is
-    # handled by the invoice's normal cash change fields instead of an extra Pay
-    # Payment Entry. Non-cash-only overpayments still need a Payment Entry so the
-    # source receive entry can be reconciled.
-    if paid_change_amount > 0 and _has_paid_configured_cash_row():
+    # normally handled by the invoice's normal cash change fields (change_amount
+    # folded into outstanding_amount by ERPNext's own calculate_outstanding_amount)
+    # instead of an extra Pay Payment Entry. That assumption only holds when
+    # nothing else settles part of this invoice outside its own `payments` table --
+    # once a customer-credit redemption Journal Entry is also involved
+    # (redeeming_customer_credit(), above), that JE's own submission triggers
+    # ERPNext's GL-based update_outstanding_amt(), which recalculates
+    # outstanding_amount fresh from real ledger postings and has no concept of the
+    # change_amount field at all -- it overwrites the field-level "already netted"
+    # state with a genuinely negative (overpaid) balance instead. So a cash change
+    # amount alongside a credit redemption still needs a real Payment Entry here,
+    # the same as a non-cash overpayment already gets, to actually bring the
+    # invoice back to outstanding_amount == 0.
+    if (
+        paid_change_amount > 0
+        and _has_paid_configured_cash_row()
+        and not flt(data.get("redeemed_customer_credit"))
+    ):
         paid_change_amount = 0
 
     if credit_change_amount > 0:

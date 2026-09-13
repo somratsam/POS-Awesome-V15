@@ -217,6 +217,81 @@ def get_amount(ref_doc, payment_account=None):
         frappe.throw(_("Payment Entry is already created or payment account is not matched"))
 
 
+def _correct_outstanding_amount_for_pending_credit_change(invoice_doc, data):
+    """Correct outstanding_amount (and change_amount) before a customer-credit
+    redemption Journal Entry is created, when a cash/other-tender overpayment
+    only becomes an overpayment once the pending credit is added on top.
+
+    ERPNext core's own change/outstanding calculation
+    (erpnext/controllers/taxes_and_totals.py calculate_change_amount() /
+    calculate_outstanding_amount()) detects an overpayment purely from
+    doc.paid_amount (the sum of this invoice's own `payments` rows) exceeding
+    grand_total. It has no visibility into a customer-credit redemption --
+    that's applied via a *separate* Journal Entry, redeeming_customer_credit()
+    below, created only after this invoice is already submitted. So a cash
+    tender that only overpays once credit is added on top (e.g. cash 250.000 +
+    credit 203.400 against a 406.800 total, with 46.600 due back as change)
+    submits with outstanding_amount understated by exactly that change amount
+    (156.800 instead of 203.400 in that example). The credit JE then
+    legitimately fails ERPNext's own "Payment against {invoice} cannot be
+    greater than Outstanding Amount {x}" guard
+    (journal_entry.py's validate_invoices()), since it tries to allocate more
+    credit than the invoice claims to still owe.
+
+    Uses frappe.db.set_value rather than invoice_doc.save(), since a real save
+    would re-run calculate_taxes_and_totals() and immediately stomp this
+    correction back to the same wrong value (its own change-detection still
+    won't see the credit). ERPNext's standard update_outstanding_amt(), fired
+    by the credit JE's own submission right after this runs, takes back over
+    normally from here.
+    """
+    if invoice_doc.get("is_return") or not flt(data.get("redeemed_customer_credit")):
+        return
+
+    redeemed_credit = flt(data.get("redeemed_customer_credit"))
+    grand_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
+    payments_total = sum(flt(row.get("amount")) for row in (invoice_doc.payments or []))
+    gift_card_total = sum(
+        flt(row.get("amount")) for row in (data.get("gift_card_redemptions") or [])
+    )
+    loyalty_amount = flt(invoice_doc.get("loyalty_amount"))
+
+    total_settlement = payments_total + redeemed_credit + gift_card_total + loyalty_amount
+    change_amount = flt(total_settlement - grand_total)
+
+    if change_amount <= 0:
+        # No pending change -- ERPNext's own outstanding_amount is already correct.
+        return
+
+    outstanding_precision = invoice_doc.precision("outstanding_amount")
+    change_precision = invoice_doc.precision("change_amount")
+
+    corrected_outstanding = flt(
+        flt(invoice_doc.outstanding_amount) + change_amount, outstanding_precision
+    )
+    corrected_change_amount = flt(
+        flt(invoice_doc.change_amount) + change_amount, change_precision
+    )
+    corrected_base_change_amount = flt(
+        corrected_change_amount * flt(invoice_doc.conversion_rate or 1),
+        invoice_doc.precision("base_change_amount"),
+    )
+
+    frappe.db.set_value(
+        invoice_doc.doctype,
+        invoice_doc.name,
+        {
+            "outstanding_amount": corrected_outstanding,
+            "change_amount": corrected_change_amount,
+            "base_change_amount": corrected_base_change_amount,
+        },
+        update_modified=False,
+    )
+    invoice_doc.outstanding_amount = corrected_outstanding
+    invoice_doc.change_amount = corrected_change_amount
+    invoice_doc.base_change_amount = corrected_base_change_amount
+
+
 def redeeming_customer_credit(invoice_doc, data, is_payment_entry, total_cash, cash_account, payments):
     # redeeming customer credit with journal voucher
     today = nowdate()
@@ -285,7 +360,11 @@ def redeeming_customer_credit(invoice_doc, data, is_payment_entry, total_cash, c
                     jv_doc.submit()
                 except Exception as e:
                     frappe.log_error(frappe.get_traceback(), "POSAwesome JV Error")
-                    frappe.throw(_("Unable to create Journal Entry for customer credit."))
+                    frappe.throw(
+                        _("Unable to create Journal Entry for customer credit: {0}").format(
+                            str(e)
+                        )
+                    )
 
     remaining_total_cash = flt(total_cash)
 

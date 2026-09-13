@@ -29,7 +29,11 @@ from posawesome.posawesome.api.invoice_processing.stock import (
 from posawesome.posawesome.api.tax_contracts import apply_pos_tax_inclusion_contract
 from posawesome.posawesome.api.payment_processing.utils import get_bank_cash_account as get_bank_account
 from posawesome.posawesome.api.utilities import ensure_child_doctype, set_batch_nos_for_bundels
-from posawesome.posawesome.api.payments import redeeming_customer_credit, get_available_credit
+from posawesome.posawesome.api.payments import (
+    redeeming_customer_credit,
+    get_available_credit,
+    _correct_outstanding_amount_for_pending_credit_change,
+)
 from posawesome.posawesome.api.idempotency import (
     assert_invoice_request_scope,
     extract_invoice_client_request_id,
@@ -696,6 +700,7 @@ def _apply_loyalty_redemption_settings(invoice_doc, pos_profile=None):
 def _run_post_submit_payments(invoice_doc, data, is_payment_entry, total_cash, cash_account, payments):
     from posawesome.posawesome.api.invoice_processing.payment import _create_change_payment_entries
 
+    _correct_outstanding_amount_for_pending_credit_change(invoice_doc, data)
     receive_entries = redeeming_customer_credit(
         invoice_doc, data, is_payment_entry, total_cash, cash_account, payments
     )
