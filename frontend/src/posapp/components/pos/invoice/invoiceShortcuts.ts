@@ -285,6 +285,9 @@ const invoiceShortcuts: Record<string, unknown> & ThisType<InvoiceShortcutsVm> =
 
 			if (key === "F9") {
 				consumeEvent(event);
+				if (event.repeat) {
+					return;
+				}
 				this.show_payment?.();
 				return;
 			}
@@ -388,6 +391,9 @@ const invoiceShortcuts: Record<string, unknown> & ThisType<InvoiceShortcutsVm> =
 			if (key === "PageUp") {
 				consumeEvent(event);
 				showCompactPanel(this.eventBus, "selector");
+				if (event.repeat) {
+					return;
+				}
 				this.show_payment?.();
 				return;
 			}
@@ -481,6 +487,9 @@ const invoiceShortcuts: Record<string, unknown> & ThisType<InvoiceShortcutsVm> =
 			if (isLetter(event, "d")) {
 				consumeEvent(event);
 				showCompactPanel(this.eventBus, "selector");
+				if (event.repeat) {
+					return;
+				}
 				this.show_payment?.();
 				return;
 			}

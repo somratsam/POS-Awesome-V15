@@ -14,6 +14,17 @@ const showCompactPanel = (context: any, panel: "selector" | "invoice") => {
 };
 
 export async function show_payment(context: any) {
+	// Guard against a rapid double-click/double-tap or a held keyboard
+	// shortcut firing this again while a prior click is still awaiting
+	// update_invoice()'s draft save -- without this, two concurrent calls
+	// each see no invoice_doc.name yet and each create a separate draft
+	// invoice server-side.
+	if (context._paymentInFlight) {
+		return;
+	}
+	context._paymentInFlight = true;
+	context.eventBus?.emit?.("payment_processing", true);
+
 	if (context._suppressClosePaymentsTimer) {
 		clearTimeout(context._suppressClosePaymentsTimer);
 		context._suppressClosePaymentsTimer = null;
@@ -183,6 +194,8 @@ export async function show_payment(context: any) {
 			context._suppressClosePayments = false;
 			context._suppressClosePaymentsTimer = null;
 		}, 300);
+		context._paymentInFlight = false;
+		context.eventBus?.emit?.("payment_processing", false);
 	}
 }
 

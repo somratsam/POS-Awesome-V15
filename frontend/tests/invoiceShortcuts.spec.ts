@@ -502,4 +502,90 @@ describe("invoiceShortcuts", () => {
 
 		expect(focusItemField).toHaveBeenCalledWith(0, "qty");
 	});
+
+	describe("Pay shortcuts ignore a held key's repeated keydown", () => {
+		it("triggers show_payment on a genuine (non-repeat) F9 keydown", async () => {
+			const vm = { ...createVm(), show_payment: vi.fn(async () => {}) };
+			const event = new KeyboardEvent("keydown", {
+				key: "F9",
+				bubbles: true,
+				cancelable: true,
+			});
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.show_payment).toHaveBeenCalledTimes(1);
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("does not re-trigger show_payment on a repeated F9 keydown from a held key", async () => {
+			const vm = { ...createVm(), show_payment: vi.fn(async () => {}) };
+			const event = new KeyboardEvent("keydown", {
+				key: "F9",
+				repeat: true,
+				bubbles: true,
+				cancelable: true,
+			});
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.show_payment).not.toHaveBeenCalled();
+			// Still consumed so a held F9 doesn't leak into the browser/OS.
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("does not re-trigger show_payment on a repeated Alt+PageUp keydown from a held key", async () => {
+			const vm = { ...createVm(), show_payment: vi.fn(async () => {}) };
+			const event = new KeyboardEvent("keydown", {
+				key: "PageUp",
+				altKey: true,
+				repeat: true,
+				bubbles: true,
+				cancelable: true,
+			});
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.show_payment).not.toHaveBeenCalled();
+		});
+
+		it("triggers show_payment on a genuine (non-repeat) Alt+PageUp keydown", async () => {
+			const vm = { ...createVm(), show_payment: vi.fn(async () => {}) };
+			const event = new KeyboardEvent("keydown", {
+				key: "PageUp",
+				altKey: true,
+				bubbles: true,
+				cancelable: true,
+			});
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.show_payment).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not re-trigger show_payment on a repeated Alt+D keydown from a held key", async () => {
+			const vm = { ...createVm(), show_payment: vi.fn(async () => {}) };
+			const event = new KeyboardEvent("keydown", {
+				key: "d",
+				code: "KeyD",
+				altKey: true,
+				repeat: true,
+				bubbles: true,
+				cancelable: true,
+			});
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.show_payment).not.toHaveBeenCalled();
+		});
+
+		it("triggers show_payment on a genuine (non-repeat) Alt+D keydown", async () => {
+			const vm = { ...createVm(), show_payment: vi.fn(async () => {}) };
+			const event = createAltEvent("d", "KeyD");
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.show_payment).toHaveBeenCalledTimes(1);
+		});
+	});
 });
