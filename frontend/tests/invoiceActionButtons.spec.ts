@@ -91,4 +91,76 @@ describe("InvoiceActionButtons", () => {
 			expect.arrayContaining(["open-offers", "open-coupons"]),
 		);
 	});
+
+	it("disables the classic-layout Pay button while a payment click is in flight, and re-enables it once idle", async () => {
+		vi.stubGlobal("__", (value: string) => value);
+		const { default: InvoiceActionButtons } = await import(
+			"../src/posapp/components/pos/invoice/InvoiceActionButtons.vue"
+		);
+
+		const wrapper = mount(InvoiceActionButtons, {
+			props: {
+				pos_profile: {
+					custom_allow_select_sales_order: 0,
+					posa_allow_return: 1,
+					posa_allow_print_draft_invoices: 1,
+				},
+				paymentLoading: true,
+			},
+			global: {
+				components: {
+					VRow: { template: "<div><slot /></div>" },
+					VCol: { template: "<div><slot /></div>" },
+					VBtn: {
+						template: '<button v-bind="$attrs"><slot /></button>',
+					},
+				},
+			},
+		});
+
+		const payButton = wrapper.get('[data-testid="invoice-action-pay"]');
+		expect(payButton.attributes("disabled")).toBeDefined();
+
+		await wrapper.setProps({ paymentLoading: false });
+		expect(wrapper.get('[data-testid="invoice-action-pay"]').attributes("disabled")).toBeUndefined();
+	});
+
+	it("disables the Counter Grid Pay button while a payment click is in flight, and re-enables it once idle", async () => {
+		vi.stubGlobal("__", (value: string) => value);
+		const { default: InvoiceActionButtons } = await import(
+			"../src/posapp/components/pos/invoice/InvoiceActionButtons.vue"
+		);
+
+		const wrapper = mount(InvoiceActionButtons, {
+			props: {
+				presentation: "counter-grid",
+				pos_profile: { posa_allow_return: 1 },
+				paymentLoading: true,
+			},
+			global: {
+				components: {
+					VBtn: {
+						template: '<button v-bind="$attrs"><slot /></button>',
+					},
+					VMenu: {
+						template:
+							'<div><slot name="activator" :props="{}" /><slot /></div>',
+					},
+					VList: { template: "<div><slot /></div>" },
+					VListItem: {
+						emits: ["click"],
+						template:
+							'<button v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>',
+					},
+					VListItemTitle: { template: "<span><slot /></span>" },
+				},
+			},
+		});
+
+		const payButton = wrapper.get('[data-testid="invoice-action-pay"]');
+		expect(payButton.attributes("disabled")).toBeDefined();
+
+		await wrapper.setProps({ paymentLoading: false });
+		expect(wrapper.get('[data-testid="invoice-action-pay"]').attributes("disabled")).toBeUndefined();
+	});
 });

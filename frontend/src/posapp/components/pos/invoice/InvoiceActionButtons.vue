@@ -124,6 +124,7 @@
 			data-pos-keyboard-target="pay"
 			data-testid="invoice-action-pay"
 			:loading="paymentLoading"
+			:disabled="paymentLoading"
 			@click="$emit('show-payment')"
 		>
 			{{ __("Pay") }}
@@ -264,6 +265,7 @@
 				data-pos-keyboard-target="pay"
 				data-testid="invoice-action-pay"
 				:loading="paymentLoading"
+				:disabled="paymentLoading"
 			>
 				{{ __("PAY") }}
 			</v-btn>

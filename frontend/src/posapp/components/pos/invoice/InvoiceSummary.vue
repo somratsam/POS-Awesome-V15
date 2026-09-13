@@ -304,7 +304,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { loadItemSelectorSettings } from "../../../utils/itemSelectorSettings";
 import { useResponsive } from "../../../composables/core/useResponsive";
@@ -362,6 +362,8 @@ const emit = defineEmits([
 	"resume-parked-order",
 ]);
 
+const eventBus = inject("eventBus");
+
 const saveLoading = ref(false);
 const loadDraftsLoading = ref(false);
 const selectOrderLoading = ref(false);
@@ -369,6 +371,10 @@ const cancelLoading = ref(false);
 const invoiceManagementLoading = ref(false);
 const returnsLoading = ref(false);
 const printLoading = ref(false);
+// Driven by show_payment()'s own "payment_processing" eventBus signal, not
+// an optimistic wrapper around the emit -- emit() doesn't propagate the
+// listener's promise, so awaiting it here would resolve almost instantly
+// regardless of how long the actual network round trip takes.
 const paymentLoading = ref(false);
 const customerDisplayLoading = ref(false);
 const isEditingAdditionalDiscount = ref(false);
@@ -641,13 +647,12 @@ async function handlePrintDraft() {
 	}
 }
 
-async function handleShowPayment() {
-	paymentLoading.value = true;
-	try {
-		await emit("show-payment");
-	} finally {
-		paymentLoading.value = false;
-	}
+function handleShowPayment() {
+	emit("show-payment");
+}
+
+function handlePaymentProcessing(value) {
+	paymentLoading.value = Boolean(value);
 }
 
 async function handleOpenCustomerDisplay() {
@@ -666,10 +671,12 @@ function handleResumeDraft(draft) {
 
 onMounted(() => {
 	window.addEventListener("keydown", handleGlobalDraftsKeydown, true);
+	eventBus?.on?.("payment_processing", handlePaymentProcessing);
 });
 
 onBeforeUnmount(() => {
 	window.removeEventListener("keydown", handleGlobalDraftsKeydown, true);
+	eventBus?.off?.("payment_processing", handlePaymentProcessing);
 });
 
 defineExpose({

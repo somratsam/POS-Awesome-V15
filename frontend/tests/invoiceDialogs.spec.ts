@@ -137,6 +137,49 @@ describe("invoice payment dialogs", () => {
 		expect(loadedDoc).toBe(overriddenDoc);
 	});
 
+	it("ignores a concurrent second call while a payment click is already in flight (double-click/double-tap guard)", async () => {
+		const context = createPaymentContext();
+		let resolveProcessInvoice: (value: unknown) => void = () => {};
+		const processInvoicePromise = new Promise((resolve) => {
+			resolveProcessInvoice = resolve;
+		});
+		context.process_invoice = vi.fn(() => processInvoicePromise);
+
+		const firstCall = show_payment(context);
+		// Fired while the first call is still awaiting process_invoice() --
+		// simulates a rapid double-click/double-tap or a held keyboard shortcut.
+		const secondCall = show_payment(context);
+
+		// Let the first call's own preceding awaits (ensure_auto_batch_selection,
+		// validate) actually run so it reaches the still-unresolved
+		// process_invoice() call before asserting anything.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		await secondCall;
+		expect(context.process_invoice).toHaveBeenCalledTimes(1);
+		expect(context.eventBus.emit).toHaveBeenCalledWith("payment_processing", true);
+		expect(context.eventBus.emit).not.toHaveBeenCalledWith("payment_processing", false);
+
+		resolveProcessInvoice({
+			doctype: "Sales Invoice",
+			name: "SINV-DOUBLE",
+			grand_total: 10,
+			rounded_total: 10,
+			total: 10,
+			payments: [],
+		});
+		await firstCall;
+
+		// Only one draft invoice's worth of work happened, despite two clicks.
+		expect(context.process_invoice).toHaveBeenCalledTimes(1);
+		expect(context.eventBus.emit).toHaveBeenCalledWith("payment_processing", false);
+
+		// The guard releases once the in-flight call finishes -- a genuinely
+		// new click afterward is not permanently locked out.
+		await show_payment(context);
+		expect(context.process_invoice).toHaveBeenCalledTimes(2);
+	});
+
 	it("skips the cart-state sync when offline, matching the pre-existing reload guard", async () => {
 		(offlineModule.isOffline as any).mockReturnValue(true);
 		const context = createPaymentContext();
