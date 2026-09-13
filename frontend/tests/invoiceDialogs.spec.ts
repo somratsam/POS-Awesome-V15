@@ -2,6 +2,11 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../src/offline/index", () => ({
+	isOffline: vi.fn(() => false),
+}));
+
+import * as offlineModule from "../src/offline/index";
 import { close_payments, show_payment } from "../src/posapp/components/pos/invoice_utils/dialogs";
 
 const createPaymentContext = () => ({
@@ -23,6 +28,9 @@ const createPaymentContext = () => ({
 	})),
 	process_invoice_from_order: vi.fn(),
 	reload_current_invoice_from_backend: vi.fn(),
+	load_invoice: vi.fn(async () => {}),
+	_collectManualRateOverrides: vi.fn(() => []),
+	_applyManualRateOverridesToDoc: vi.fn(),
 	selected_currency: "USD",
 	conversion_rate: 1,
 	_getPlcConversionRate: () => 1,
@@ -45,6 +53,7 @@ describe("invoice payment dialogs", () => {
 	beforeEach(() => {
 		vi.stubGlobal("__", (value: string) => value);
 		vi.stubGlobal("frappe", { call: vi.fn() });
+		(offlineModule.isOffline as any).mockReturnValue(false);
 		Object.defineProperty(window, "innerWidth", {
 			value: 500,
 			writable: true,
@@ -76,6 +85,74 @@ describe("invoice payment dialogs", () => {
 		await show_payment(context);
 
 		expect(sequence).toEqual(["assign", "validate"]);
+	});
+
+	it("syncs cart state from the update_invoice() response instead of re-fetching it from the server", async () => {
+		const context = createPaymentContext();
+		context.process_invoice = vi.fn(async () => ({
+			doctype: "Sales Invoice",
+			name: "SINV-0001",
+			grand_total: 10,
+			rounded_total: 10,
+			total: 10,
+			payments: [],
+		}));
+
+		await show_payment(context);
+
+		expect(context.load_invoice).toHaveBeenCalledTimes(1);
+		expect(context.load_invoice).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "SINV-0001" }),
+			{ preserveAdditionalDiscountPercentage: true },
+		);
+		// No second round trip for data update_invoice() already returned.
+		expect(context.reload_current_invoice_from_backend).not.toHaveBeenCalled();
+		expect((globalThis as any).frappe.call).not.toHaveBeenCalled();
+	});
+
+	it("reapplies manual rate overrides onto the update_invoice() doc before syncing cart state", async () => {
+		const context = createPaymentContext();
+		context.process_invoice = vi.fn(async () => ({
+			doctype: "Sales Invoice",
+			name: "SINV-0002",
+			grand_total: 10,
+			rounded_total: 10,
+			total: 10,
+			payments: [],
+		}));
+		const overrides = [{ posa_row_id: "row-1", values: { rate: 42 } }];
+		context._collectManualRateOverrides = vi.fn(() => overrides);
+
+		await show_payment(context);
+
+		expect(context._collectManualRateOverrides).toHaveBeenCalledWith(context.items);
+		expect(context._applyManualRateOverridesToDoc).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "SINV-0002" }),
+			overrides,
+		);
+		// The doc mutated by _applyManualRateOverridesToDoc must be the same one
+		// handed to load_invoice, not a separately re-fetched copy.
+		const overriddenDoc = context._applyManualRateOverridesToDoc.mock.calls[0][0];
+		const loadedDoc = context.load_invoice.mock.calls[0][0];
+		expect(loadedDoc).toBe(overriddenDoc);
+	});
+
+	it("skips the cart-state sync when offline, matching the pre-existing reload guard", async () => {
+		(offlineModule.isOffline as any).mockReturnValue(true);
+		const context = createPaymentContext();
+		context.process_invoice = vi.fn(async () => ({
+			doctype: "Sales Invoice",
+			name: "SINV-0003",
+			grand_total: 10,
+			rounded_total: 10,
+			total: 10,
+			payments: [],
+		}));
+
+		await show_payment(context);
+
+		expect(context.load_invoice).not.toHaveBeenCalled();
+		expect(context._collectManualRateOverrides).not.toHaveBeenCalled();
 	});
 
 	it("switches compact layout back to the invoice when closing payments", () => {

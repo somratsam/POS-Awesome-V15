@@ -45,9 +45,9 @@ export async function show_payment(context: any) {
 			return;
 		}
 
-		// Capture the transient refundable cap before process_invoice()/backend
-		// reload, which return a doc stripped of non-DocType fields. It is
-		// re-attached below so the payment screen can default a credit return.
+		// Capture the transient refundable cap before process_invoice(), which
+		// returns a doc stripped of non-DocType fields. It is re-attached below
+		// so the payment screen can default a credit return.
 		const carriedRefundableAmount = context.invoice_doc?.posa_refundable_amount;
 
 		let invoice_doc;
@@ -76,9 +76,22 @@ export async function show_payment(context: any) {
 		}
 
 		if (!isOffline() && invoice_doc.name) {
-			const refreshed = await context.reload_current_invoice_from_backend();
-			if (refreshed) {
-				invoice_doc = refreshed;
+			// update_invoice() already returned the server-canonical doc for this
+			// click (pricing rules, taxes, dedup all applied) -- reapply any
+			// manual rate overrides onto it and sync it into cart state via
+			// load_invoice(), same as reload_current_invoice_from_backend() used
+			// to do, but without a second, redundant frappe.client.get round trip
+			// for data we already have.
+			const manualOverrides = context._collectManualRateOverrides
+				? context._collectManualRateOverrides(context.items)
+				: [];
+			if (manualOverrides.length && context._applyManualRateOverridesToDoc) {
+				context._applyManualRateOverridesToDoc(invoice_doc, manualOverrides);
+			}
+			if (context.load_invoice) {
+				await context.load_invoice(invoice_doc, {
+					preserveAdditionalDiscountPercentage: true,
+				});
 			}
 		}
 
