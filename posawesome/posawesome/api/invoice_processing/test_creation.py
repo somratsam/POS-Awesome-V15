@@ -198,6 +198,9 @@ def _install_dependency_stubs():
     payments_module = types.ModuleType("posawesome.posawesome.api.payments")
     payments_module.redeeming_customer_credit = lambda *_args, **_kwargs: None
     payments_module.get_available_credit = lambda *_args, **_kwargs: []
+    payments_module._correct_outstanding_amount_for_pending_credit_change = (
+        lambda *_args, **_kwargs: None
+    )
     sys.modules["posawesome.posawesome.api.payments"] = payments_module
 
     sale_controls_module = types.ModuleType("posawesome.posawesome.api.item_sale_controls")
@@ -1758,6 +1761,85 @@ class TestManualPostingDatePreservation(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], 1)
+
+    def test_submit_invoice_fetches_available_credit_only_once_for_redemption(self):
+        """get_available_credit() does several queries (Sales Invoice scan,
+        a Payment Entry allocation join, more Payment Entry lookups).
+        _validate_customer_credit_redemption() and
+        _apply_customer_credit_print_fields() both need it for the same
+        customer/company within this same submit_invoice() call -- confirm
+        submit_invoice() computes it exactly once and passes it into both,
+        instead of each helper independently re-fetching it."""
+        invoice_doc = self._build_invoice_doc(
+            name="ACC-SINV-CREDIT-0001",
+            grand_total=200,
+            rounded_total=200,
+        )
+        invoice_doc.submit = lambda: setattr(invoice_doc, "docstatus", 1)
+
+        self.creation.frappe.db.exists = lambda doctype, name: name == "ACC-SINV-CREDIT-0001"
+        self.creation.frappe.db.get_value = lambda *args, **kwargs: 0
+        self.creation.frappe.get_value = lambda *args, **kwargs: 0
+        self.creation.frappe.get_doc = lambda *args: invoice_doc
+        self.creation.frappe.get_meta = lambda _doctype: types.SimpleNamespace(
+            has_field=lambda fieldname: fieldname
+            in {
+                "posa_redeemed_customer_credit",
+                "posa_remaining_customer_credit_balance",
+            }
+        )
+        self.creation._save_draft_with_latest_timestamp = lambda doc: doc
+        self.creation._apply_invoice_gift_card_settlement = lambda *args, **kwargs: None
+        self.creation._process_post_submit_payments = lambda *args, **kwargs: None
+
+        available_credit_calls = []
+
+        def counting_get_available_credit(customer, company):
+            available_credit_calls.append((customer, company))
+            return [{"total_credit": 150}]
+
+        self.creation.get_available_credit = counting_get_available_credit
+
+        result = self.creation.submit_invoice(
+            json.dumps(
+                {
+                    "doctype": "Sales Invoice",
+                    "name": "ACC-SINV-CREDIT-0001",
+                    "pos_profile": "Main POS",
+                    "company": "Test Company",
+                    "currency": "USD",
+                    "customer": "CUST-0001",
+                    "grand_total": 200,
+                    "rounded_total": 200,
+                    "items": [],
+                    "payments": [],
+                }
+            ),
+            json.dumps(
+                {
+                    "customer_credit_redemption_requested": 1,
+                    "redeemed_customer_credit": 150,
+                    "customer_credit_dict": [
+                        {
+                            "type": "Invoice",
+                            "credit_origin": "CREDIT-INV-0001",
+                            "total_credit": 150,
+                            "credit_to_redeem": 150,
+                        }
+                    ],
+                }
+            ),
+            submit_in_background=0,
+        )
+
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(
+            available_credit_calls,
+            [("CUST-0001", "Test Company")],
+            "get_available_credit() must be called exactly once per submit, not once per helper",
+        )
+        self.assertEqual(invoice_doc.get("posa_redeemed_customer_credit"), 150)
+        self.assertEqual(invoice_doc.get("posa_remaining_customer_credit_balance"), 0)
 
 
 class TestInvoiceIdempotency(unittest.TestCase):
