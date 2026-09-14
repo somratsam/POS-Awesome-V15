@@ -112,6 +112,43 @@ describe("customersStore profile and customer dto handling", () => {
 		});
 	});
 
+	it("marks customer info fresh for the exact customer setCustomerInfo() was just called with", () => {
+		const store = useCustomersStore();
+
+		expect(store.isCustomerInfoFresh("CUST-001", 30000)).toBe(false);
+
+		store.setCustomerInfo({ name: "CUST-001", customer_name: "Customer One" });
+
+		expect(store.isCustomerInfoFresh("CUST-001", 30000)).toBe(true);
+		// A different customer's info was never fetched -- not fresh.
+		expect(store.isCustomerInfoFresh("CUST-002", 30000)).toBe(false);
+	});
+
+	it("treats customer info as stale once the freshness window elapses", () => {
+		vi.useFakeTimers();
+		try {
+			const store = useCustomersStore();
+			store.setCustomerInfo({ name: "CUST-001", customer_name: "Customer One" });
+
+			expect(store.isCustomerInfoFresh("CUST-001", 30000)).toBe(true);
+
+			vi.advanceTimersByTime(30001);
+
+			expect(store.isCustomerInfoFresh("CUST-001", 30000)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-stamps freshness for the newly-fetched customer when the customer changes", () => {
+		const store = useCustomersStore();
+		store.setCustomerInfo({ name: "CUST-001", customer_name: "Customer One" });
+		store.setCustomerInfo({ name: "CUST-002", customer_name: "Customer Two" });
+
+		expect(store.isCustomerInfoFresh("CUST-002", 30000)).toBe(true);
+		expect(store.isCustomerInfoFresh("CUST-001", 30000)).toBe(false);
+	});
+
 	it("executes customer searches while the background sync is running", async () => {
 		const store = useCustomersStore();
 		store.isCustomerBackgroundLoading = true;

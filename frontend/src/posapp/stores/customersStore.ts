@@ -170,6 +170,15 @@ export const useCustomersStore = defineStore("customers", () => {
 	const customers = ref<CustomerSummary[]>([]);
 	const selectedCustomer = ref<string | null>(null);
 	const customerInfo = ref<CustomerInfo>({});
+	// Freshness of customerInfo for a given customer -- lets callers that
+	// each independently need "this customer's current info" (customer
+	// selection, the Pay-click payment screen) skip a redundant
+	// get_customer_info() round trip when another caller already fetched it
+	// moments ago for the same customer, without conflating this with the
+	// offline persistence cache (which deliberately has no freshness/TTL
+	// concept, since it must still serve stale-but-available data offline).
+	const customerInfoFetchedFor = ref<string | null>(null);
+	const customerInfoFetchedAt = ref(0);
 	const searchTerm = ref("");
 	const page = ref(0);
 	const hasMore = ref(true);
@@ -303,6 +312,8 @@ export const useCustomersStore = defineStore("customers", () => {
 			void setCustomerStorage([
 				{ ...customerInfo.value, name: customerName },
 			]);
+			customerInfoFetchedFor.value = customerName;
+			customerInfoFetchedAt.value = Date.now();
 		}
 		if (
 			customerName &&
@@ -325,6 +336,13 @@ export const useCustomersStore = defineStore("customers", () => {
 					: [],
 			);
 		}
+	}
+
+	function isCustomerInfoFresh(customer: string, maxAgeMs: number): boolean {
+		if (!customer || customerInfoFetchedFor.value !== customer) {
+			return false;
+		}
+		return Date.now() - customerInfoFetchedAt.value < maxAgeMs;
 	}
 
 	function requestCustomerRefresh() {
@@ -1022,6 +1040,7 @@ export const useCustomersStore = defineStore("customers", () => {
 		setPosProfile,
 		setSelectedCustomer,
 		setCustomerInfo,
+		isCustomerInfoFresh,
 		searchCustomers,
 		queueSearch,
 		findLocalDuplicateCustomers,

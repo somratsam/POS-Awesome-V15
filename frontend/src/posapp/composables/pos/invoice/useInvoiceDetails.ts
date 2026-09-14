@@ -99,6 +99,16 @@ export function useInvoiceDetails(options: InvoiceDetailsOptions) {
 	const addresses = ref<Address[]>([]);
 	const sales_persons = ref<SalesPerson[]>([]);
 
+	// Freshness tracking for get_addresses()/get_sales_person_names(): both are
+	// called from multiple sites within Payments.vue on every Pay click, but the
+	// underlying data rarely changes within a single payment flow. Skipping the
+	// network call when already-fetched data is still fresh avoids redundant
+	// round trips without needing a cross-file cache (unlike customer info,
+	// these are only ever fetched from within this composable's own callers).
+	const SECONDARY_DETAILS_FRESHNESS_MS = 30000;
+	let addressesFetchedFor: { customer: string; at: number } | null = null;
+	let salesPersonsFetchedAt: number | null = null;
+
 	// Date states
 	const new_delivery_date = ref<string | null>(null);
 	const new_po_date = ref<string | null>(null);
@@ -178,6 +188,14 @@ export function useInvoiceDetails(options: InvoiceDetailsOptions) {
 			return;
 		}
 
+		if (
+			addressesFetchedFor &&
+			addressesFetchedFor.customer === doc.customer &&
+			Date.now() - addressesFetchedFor.at < SECONDARY_DETAILS_FRESHNESS_MS
+		) {
+			return;
+		}
+
 		frappe.call({
 			method: "posawesome.posawesome.api.customers.get_customer_addresses",
 			args: { customer: doc.customer },
@@ -190,6 +208,7 @@ export function useInvoiceDetails(options: InvoiceDetailsOptions) {
 						.filter((row): row is Address => row !== null);
 					addresses.value = normalized;
 					saveCustomerAddressesCache(doc.customer, normalized);
+					addressesFetchedFor = { customer: doc.customer, at: Date.now() };
 
 					if (
 						doc.shipping_address_name &&
@@ -265,9 +284,17 @@ export function useInvoiceDetails(options: InvoiceDetailsOptions) {
 			sales_persons.value = profileSalesPersons;
 		}
 
+		if (
+			salesPersonsFetchedAt !== null &&
+			Date.now() - salesPersonsFetchedAt < SECONDARY_DETAILS_FRESHNESS_MS
+		) {
+			return;
+		}
+
 		frappe.call({
 			method: "posawesome.posawesome.api.utilities.get_sales_person_names",
 			callback: function (r: any) {
+				salesPersonsFetchedAt = Date.now();
 				if (r.message && r.message.length > 0) {
 					sales_persons.value = r.message.map((sp: any) => ({
 						value: sp.name,
