@@ -196,7 +196,14 @@
 				<v-card-actions>
 					<v-spacer></v-spacer>
 					<v-btn color="error" theme="dark" @click="confirm_close">{{ __("Close") }}</v-btn>
-					<v-btn color="success" theme="dark" @click="submit_dialog">{{ __("Submit") }}</v-btn>
+					<v-btn
+						color="success"
+						theme="dark"
+						:loading="submitLoading"
+						:disabled="submitLoading"
+						@click="submit_dialog"
+						>{{ __("Submit") }}</v-btn
+					>
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
@@ -254,6 +261,7 @@ export default {
 	data: () => ({
 		// customerDialog: false, // Moved to store
 		confirmDialog: false,
+		submitLoading: false,
 		pos_profile: "",
 		customer_id: "",
 		customer_name: "",
@@ -527,6 +535,25 @@ export default {
 			}
 		},
 		async submit_dialog() {
+			// Guard against a rapid double-click/double-tap creating two
+			// duplicate Customer records: the duplicate-name check below is
+			// itself async, so a second click landing before the first
+			// create_customer call resolves would see no customer yet and
+			// both would proceed to create. Same pattern as show_payment()'s
+			// _paymentInFlight / save_and_clear_invoice()'s
+			// _saveAndClearInFlight guards.
+			if (this.submitLoading) {
+				return;
+			}
+			this.submitLoading = true;
+
+			try {
+				await this._submit_dialog_impl();
+			} finally {
+				this.submitLoading = false;
+			}
+		},
+		async _submit_dialog_impl() {
 			const vm = this;
 			if (!this.customer_name) {
 				frappe.throw(__("Customer Name is required"));
@@ -678,53 +705,65 @@ export default {
 				return;
 			}
 
-			frappe.call({
-				method: "posawesome.posawesome.api.customers.create_customer",
-				args: apiArgs,
-				callback: async (r) => {
-					if (!r.exc && r.message.name) {
-						const wasCreate = !vm.customer_id;
-						let text = __("Customer created successfully.");
-						if (vm.customer_id) {
-							text = __("Customer updated successfully.");
-						}
-						vm.toastStore.show({
-							title: text,
-							color: "success",
-						});
-						args.name = r.message.name;
-						frappe.utils.play_sound("submit");
-						await customersStore.addOrUpdateCustomer({
-							name: args.name,
-							customer_name: args.customer_name,
-							mobile_no: args.mobile_no,
-							email_id: args.email_id,
-							tax_id: args.tax_id,
-							primary_address: args.address_line1,
-						});
-						if (wasCreate) {
-							// Switch into "editing this now-existing customer" mode
-							// and show server-generated fields (loyalty portal code,
-							// any auto-assigned loyalty program) immediately, so
-							// staff don't need to close and reopen the dialog to
-							// see them. loyalty_points is deliberately not set here:
-							// it isn't a real Customer field, and a brand-new
-							// customer has none yet regardless.
-							vm.customer_id = r.message.name;
-							vm.loyalty_program = r.message.loyalty_program || null;
-							vm.portal_code = r.message.posa_loyalty_portal_code || null;
-						} else {
-							vm.close_dialog();
-						}
-					} else {
-						frappe.utils.play_sound("error");
-						vm.toastStore.show({
-							title: __("Customer creation failed."),
-							color: "error",
-						});
+			// Properly awaited (not fire-and-forget via a bare callback) so
+			// submit_dialog()'s in-flight guard reliably releases only once
+			// the real creation/update -- success or failure -- has actually
+			// completed, instead of releasing as soon as this function
+			// returns while the request is still on the wire.
+			try {
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.customers.create_customer",
+					args: apiArgs,
+				});
+				if (!r.exc && r.message && r.message.name) {
+					const wasCreate = !vm.customer_id;
+					let text = __("Customer created successfully.");
+					if (vm.customer_id) {
+						text = __("Customer updated successfully.");
 					}
-				},
-			});
+					vm.toastStore.show({
+						title: text,
+						color: "success",
+					});
+					args.name = r.message.name;
+					frappe.utils.play_sound("submit");
+					await customersStore.addOrUpdateCustomer({
+						name: args.name,
+						customer_name: args.customer_name,
+						mobile_no: args.mobile_no,
+						email_id: args.email_id,
+						tax_id: args.tax_id,
+						primary_address: args.address_line1,
+					});
+					if (wasCreate) {
+						// Switch into "editing this now-existing customer" mode
+						// and show server-generated fields (loyalty portal code,
+						// any auto-assigned loyalty program) immediately, so
+						// staff don't need to close and reopen the dialog to
+						// see them. loyalty_points is deliberately not set here:
+						// it isn't a real Customer field, and a brand-new
+						// customer has none yet regardless.
+						vm.customer_id = r.message.name;
+						vm.loyalty_program = r.message.loyalty_program || null;
+						vm.portal_code = r.message.posa_loyalty_portal_code || null;
+					} else {
+						vm.close_dialog();
+					}
+				} else {
+					frappe.utils.play_sound("error");
+					vm.toastStore.show({
+						title: __("Customer creation failed."),
+						color: "error",
+					});
+				}
+			} catch (error) {
+				console.error("Error creating/updating customer:", error);
+				frappe.utils.play_sound("error");
+				vm.toastStore.show({
+					title: __("Customer creation failed."),
+					color: "error",
+				});
+			}
 		},
 		onDateSelect() {
 			// Close the menu
