@@ -7,6 +7,7 @@
 			data-pos-keyboard-target="invoice-action"
 			data-testid="invoice-action-save-clear"
 			:loading="saveLoading"
+			:disabled="saveLoading"
 			@click="$emit('save-and-clear')"
 		>
 			{{ __("Save & Clear") }}
@@ -143,6 +144,7 @@
 				data-pos-keyboard-target="invoice-action"
 				data-testid="invoice-action-save-clear"
 				:loading="saveLoading"
+				:disabled="saveLoading"
 			>
 				{{ __("Save & Clear") }}
 			</v-btn>
