@@ -5,6 +5,7 @@ from frappe.utils import (
     cint,
     flt,
     getdate,
+    get_datetime,
     nowdate,
 )
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
@@ -352,7 +353,7 @@ def _get_submission_ledger(client_request_id, company, pos_profile, document_typ
     return _get_submission_ledger_by_key(ledger_key)
 
 
-def _save_submission_ledger(ledger_doc, retries=2):
+def _save_submission_ledger(ledger_doc, retries=2, ignore_if_duplicate=False):
     if not ledger_doc:
         return None
 
@@ -366,15 +367,27 @@ def _save_submission_ledger(ledger_doc, retries=2):
 
     if hasattr(ledger_doc, "is_new"):
         if ledger_doc.is_new() and hasattr(ledger_doc, "insert"):
-            _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.insert(ignore_permissions=True), retries)
+            _save_ledger_with_lock_retry(
+                ledger_doc,
+                lambda: ledger_doc.insert(ignore_permissions=True, ignore_if_duplicate=ignore_if_duplicate),
+                retries,
+            )
             return ledger_doc
 
     if ledger_name and not ledger_exists and hasattr(ledger_doc, "insert"):
-        _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.insert(ignore_permissions=True), retries)
+        _save_ledger_with_lock_retry(
+            ledger_doc,
+            lambda: ledger_doc.insert(ignore_permissions=True, ignore_if_duplicate=ignore_if_duplicate),
+            retries,
+        )
     elif ledger_name and hasattr(ledger_doc, "save"):
         _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.save(ignore_permissions=True), retries)
     elif hasattr(ledger_doc, "insert"):
-        _save_ledger_with_lock_retry(ledger_doc, lambda: ledger_doc.insert(ignore_permissions=True), retries)
+        _save_ledger_with_lock_retry(
+            ledger_doc,
+            lambda: ledger_doc.insert(ignore_permissions=True, ignore_if_duplicate=ignore_if_duplicate),
+            retries,
+        )
     return ledger_doc
 
 
@@ -470,18 +483,40 @@ def _get_or_create_submission_ledger(client_request_id, invoice, data, document_
         "request_data": _json_dumps(data),
         "invoice_payload": _json_dumps(invoice),
     }
-    try:
-        ledger_doc = frappe.get_doc(payload)
-        saved = _save_submission_ledger(ledger_doc)
-        return (saved, True) if return_created else saved
-    except frappe.DuplicateEntryError:
-        # A concurrent request already created this ledger row — fall back to
-        # fetching it. Any other error (e.g. validation) must propagate so the
-        # invoice is never processed without idempotency protection.
-        ledger = _get_submission_ledger_by_key(ledger_key)
-        if not ledger:
-            frappe.throw(_("A concurrent request is already processing this invoice. Please try again."))
-        return (ledger, False) if return_created else ledger
+    ledger_doc = frappe.get_doc(payload)
+
+    # ignore_if_duplicate=True suppresses both Frappe's own "Duplicate Name"
+    # msgprint and the DuplicateEntryError it would otherwise raise on a
+    # primary-key collision (frappe/model/base_document.py's db_insert() —
+    # the msgprint fires unconditionally before the exception, so catching
+    # the exception afterward, as this used to do, can't prevent it from
+    # ever reaching the cashier). Any OTHER error (e.g. this doctype's own
+    # validate()) still propagates normally, so the invoice is never
+    # processed without idempotency protection.
+    #
+    # The tradeoff: insert() now looks identical whether this call's INSERT
+    # actually ran or silently no-opped against a row a concurrent request
+    # already created — Frappe exposes no signal either way, and reading
+    # ledger_doc.creation right after insert() isn't proof by itself either:
+    # set_user_and_timestamp() always assigns it via now() before
+    # db_insert() runs, whether or not the row actually gets written.
+    # Re-fetching by key and comparing that timestamp against the DB's own
+    # stored value settles it reliably: a genuine match means this call's
+    # INSERT physically executed (creation is stored with datetime(6),
+    # microsecond precision, and two independently-timed requests landing
+    # on the exact same microsecond is not a realistic race in practice);
+    # a mismatch means a concurrent request's insert won, and this request
+    # must fall through to the existing wait-and-replay path in
+    # submit_invoice() exactly as before, not treat itself as the owner.
+    _save_submission_ledger(ledger_doc, ignore_if_duplicate=True)
+    my_creation = get_datetime(ledger_doc.creation)
+
+    ledger = _get_submission_ledger_by_key(ledger_key)
+    if not ledger:
+        frappe.throw(_("A concurrent request is already processing this invoice. Please try again."))
+
+    created_by_this_call = get_datetime(ledger.get("creation")) == my_creation
+    return (ledger, created_by_this_call) if return_created else ledger
 
 
 def _ledger_response(ledger_doc, replayed=True):
