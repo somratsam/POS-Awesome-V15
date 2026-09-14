@@ -112,6 +112,12 @@ def _install_framework_stubs():
     frappe_utils.getdate = lambda value: value
     frappe_utils.nowdate = lambda: "2026-03-21"
     frappe_utils.money_in_words = lambda value, currency=None: f"{value} {currency or ''}".strip()
+    # _get_or_create_submission_ledger() compares two `creation` timestamp
+    # strings for equality via get_datetime() -- a plain pass-through here
+    # is sufficient since tests set ledger_doc.creation directly (FakeDoc's
+    # insert() stubs simulate Frappe's set_user_and_timestamp() by hand,
+    # they never call the real now()).
+    frappe_utils.get_datetime = lambda value: value
 
     frappe_module._dict = _FrappeDict
     frappe_module._ = lambda text: text
@@ -2544,11 +2550,39 @@ class TestInvoiceIdempotency(unittest.TestCase):
         )
         invoice_doc.submit = lambda: setattr(invoice_doc, "docstatus", 1)
 
+        ledger_rows = {}
+
+        def ledger_aware_get_doc(*args):
+            if len(args) == 1 and isinstance(args[0], dict) and args[0].get("doctype") == "POS Invoice Submission Ledger":
+                ledger_doc = FakeDoc(**args[0])
+
+                def insert(ignore_permissions=False, ignore_if_duplicate=False):
+                    ledger_doc.name = ledger_doc.get("name") or ledger_doc.ledger_key
+                    ledger_doc.creation = "2026-01-01 00:00:00.000001"
+                    ledger_rows[ledger_doc.name] = ledger_doc
+                    return ledger_doc
+
+                ledger_doc.insert = insert
+                return ledger_doc
+            if len(args) == 2 and args[0] == "POS Invoice Submission Ledger":
+                return ledger_rows[args[1]]
+            return invoice_doc
+
+        def ledger_aware_get_value(*args, **kwargs):
+            doctype = args[0] if args else kwargs.get("doctype")
+            filters = args[1] if len(args) > 1 else kwargs.get("filters")
+            if doctype == "POS Invoice Submission Ledger" and isinstance(filters, dict):
+                for row in ledger_rows.values():
+                    if all(row.get(key) == value for key, value in filters.items()):
+                        return row.name
+                return None
+            return 0
+
         self.creation.frappe.db.has_column = lambda doctype, fieldname: False
-        self.creation.frappe.db.get_value = lambda *args, **kwargs: 0
+        self.creation.frappe.db.get_value = ledger_aware_get_value
         self.creation.frappe.db.exists = lambda doctype, name: name == "ACC-SINV-NEW-0001"
         self.creation.frappe.get_value = lambda *args, **kwargs: 0
-        self.creation.frappe.get_doc = lambda *args: invoice_doc
+        self.creation.frappe.get_doc = ledger_aware_get_doc
         self.creation._save_draft_with_latest_timestamp = lambda doc: doc
         self.creation._apply_invoice_gift_card_settlement = lambda *args, **kwargs: None
         self.creation._process_post_submit_payments = lambda *args, **kwargs: None
@@ -2598,17 +2632,41 @@ class TestInvoiceIdempotency(unittest.TestCase):
         )
         invoice_doc.submit = lambda: setattr(invoice_doc, "docstatus", 1)
 
+        ledger_rows = {}
+
         def explode_if_lookup_runs(*args, **kwargs):
+            doctype = args[0] if args else kwargs.get("doctype")
             filters = args[1] if len(args) > 1 else kwargs.get("filters")
             if isinstance(filters, dict) and "posa_client_request_id" in filters:
                 raise AssertionError("idempotency lookup should be skipped when the field is missing")
+            if doctype == "POS Invoice Submission Ledger" and isinstance(filters, dict):
+                for row in ledger_rows.values():
+                    if all(row.get(key) == value for key, value in filters.items()):
+                        return row.name
+                return None
             return 0
+
+        def ledger_aware_get_doc(*args):
+            if len(args) == 1 and isinstance(args[0], dict) and args[0].get("doctype") == "POS Invoice Submission Ledger":
+                ledger_doc = FakeDoc(**args[0])
+
+                def insert(ignore_permissions=False, ignore_if_duplicate=False):
+                    ledger_doc.name = ledger_doc.get("name") or ledger_doc.ledger_key
+                    ledger_doc.creation = "2026-01-01 00:00:00.000001"
+                    ledger_rows[ledger_doc.name] = ledger_doc
+                    return ledger_doc
+
+                ledger_doc.insert = insert
+                return ledger_doc
+            if len(args) == 2 and args[0] == "POS Invoice Submission Ledger":
+                return ledger_rows[args[1]]
+            return invoice_doc
 
         self.creation.frappe.db.has_column = lambda doctype, fieldname: False
         self.creation.frappe.db.get_value = explode_if_lookup_runs
         self.creation.frappe.db.exists = lambda doctype, name: name == "ACC-SINV-NEW-0002"
         self.creation.frappe.get_value = lambda *args, **kwargs: 0
-        self.creation.frappe.get_doc = lambda *args: invoice_doc
+        self.creation.frappe.get_doc = ledger_aware_get_doc
         self.creation._save_draft_with_latest_timestamp = lambda doc: doc
         self.creation._apply_invoice_gift_card_settlement = lambda *args, **kwargs: None
         self.creation._process_post_submit_payments = lambda *args, **kwargs: None
@@ -2676,8 +2734,14 @@ class TestInvoiceIdempotency(unittest.TestCase):
             return {"name": name}
 
         def attach_ledger_methods(ledger_doc):
-            def insert(ignore_permissions=False):
+            def insert(ignore_permissions=False, ignore_if_duplicate=False):
                 ledger_doc.name = ledger_doc.get("name") or ledger_doc.ledger_key
+                # Mimics Frappe's own set_user_and_timestamp(), which always
+                # assigns `creation` before db_insert() runs -- the real
+                # signal _get_or_create_submission_ledger() now relies on to
+                # tell "this call created the row" from "a concurrent
+                # request's insert won" apart.
+                ledger_doc.creation = "2026-01-01 00:00:00.000001"
                 ledger_rows[ledger_doc.name] = ledger_doc
                 return ledger_doc
 
@@ -2811,6 +2875,330 @@ class TestInvoiceIdempotency(unittest.TestCase):
         self.assertTrue(result["replayed"])
         self.creation.update_invoice.assert_not_called()
 
+    def test_submit_invoice_throws_the_translated_retry_message_when_the_wait_times_out(self):
+        """The counterpart to the "waits and replays" test above: when
+        _wait_for_submission_ledger_result gives up (the owning request
+        hasn't published a result within the timeout), the cashier must
+        see the friendly, translated retry message -- never a raw
+        duplicate-name error, and never an unhandled exception."""
+        ledger_doc = FakeDoc(
+            doctype="POS Invoice Submission Ledger",
+            name="ledger-timeout-001",
+            ledger_key="ledger-timeout-001",
+            client_request_id="ledger-timeout-001",
+            company="Test Company",
+            pos_profile="Main POS",
+            document_type="Sales Invoice",
+            state="RECEIVED",
+        )
+
+        def fake_get_value(doctype, filters=None, fieldname=None, **kwargs):
+            if doctype == "POS Invoice Submission Ledger":
+                return ledger_doc.name
+            return 0
+
+        original_get_doc = self.creation.frappe.get_doc
+        original_db_get_value = self.creation.frappe.db.get_value
+        self.addCleanup(setattr, self.creation.frappe, "get_doc", original_get_doc)
+        self.addCleanup(setattr, self.creation.frappe.db, "get_value", original_db_get_value)
+
+        self.creation.frappe.db.has_column = lambda doctype, fieldname: True
+        self.creation.frappe.db.get_value = fake_get_value
+        self.creation.frappe.get_doc = lambda doctype, name: ledger_doc
+        self.creation.frappe.get_value = lambda *args, **kwargs: 0
+        self.creation.update_invoice = Mock(side_effect=AssertionError("a timed-out wait must not fall through to creating a draft"))
+        self.creation._wait_for_submission_ledger_result = lambda active_ledger: None
+
+        with self.assertRaisesRegex(
+            Exception, "This invoice request is already being processed"
+        ):
+            self.creation.submit_invoice(
+                json.dumps(
+                    {
+                        "doctype": "Sales Invoice",
+                        "pos_profile": "Main POS",
+                        "company": "Test Company",
+                        "currency": "USD",
+                        "customer": "CUST-0001",
+                        "items": [],
+                        "payments": [],
+                        "posa_client_request_id": "ledger-timeout-001",
+                    }
+                ),
+                json.dumps({"idempotency_key": "ledger-timeout-001"}),
+                submit_in_background=0,
+            )
+
+        self.creation.update_invoice.assert_not_called()
+
+    def test_get_or_create_submission_ledger_owns_the_row_it_actually_inserts(self):
+        """The success case: no concurrent request, this call's insert()
+        genuinely creates the row, and _get_or_create_submission_ledger()
+        must report ledger_created=True so submit_invoice() proceeds to
+        actually process the invoice instead of waiting for an owner that
+        doesn't exist."""
+        created = {}
+
+        def fake_get_value(doctype, filters=None, fieldname=None, **kwargs):
+            if doctype == "POS Invoice Submission Ledger" and isinstance(filters, dict):
+                row = created.get("ledger")
+                if row and filters.get("ledger_key") == row.ledger_key:
+                    return row.name
+                return None
+            return 0
+
+        def fake_get_doc(*args):
+            if len(args) == 1 and isinstance(args[0], dict) and args[0].get("doctype") == "POS Invoice Submission Ledger":
+                ledger_doc = FakeDoc(**args[0])
+
+                def insert(ignore_permissions=False, ignore_if_duplicate=False):
+                    self.assertTrue(ignore_permissions)
+                    self.assertTrue(
+                        ignore_if_duplicate,
+                        "must opt into duplicate-tolerant insert so Frappe's own "
+                        "'Duplicate Name' msgprint never fires for the normal, "
+                        "non-racing case either",
+                    )
+                    ledger_doc.name = ledger_doc.ledger_key
+                    ledger_doc.creation = "2026-01-01 00:00:00.500000"
+                    created["ledger"] = ledger_doc
+                    return ledger_doc
+
+                ledger_doc.insert = insert
+                return ledger_doc
+            if len(args) == 2 and args[0] == "POS Invoice Submission Ledger":
+                return created["ledger"]
+            raise AssertionError(f"unexpected get_doc call: {args}")
+
+        original_get_doc = self.creation.frappe.get_doc
+        original_db_get_value = self.creation.frappe.db.get_value
+        self.addCleanup(setattr, self.creation.frappe, "get_doc", original_get_doc)
+        self.addCleanup(setattr, self.creation.frappe.db, "get_value", original_db_get_value)
+        self.creation.frappe.db.get_value = fake_get_value
+        self.creation.frappe.get_doc = fake_get_doc
+
+        ledger, ledger_created = self.creation._get_or_create_submission_ledger(
+            "owner-request-001",
+            {"pos_profile": "Main POS", "company": "Test Company"},
+            {},
+            "Sales Invoice",
+            return_created=True,
+        )
+
+        self.assertIs(ledger, created["ledger"])
+        self.assertTrue(ledger_created)
+
+    def test_get_or_create_submission_ledger_detects_it_lost_a_concurrent_insert_race(self):
+        """The exact race this fix targets: two requests for the same
+        client_request_id both pass the initial existence check before
+        either has inserted, so both attempt to create the ledger row.
+        With ignore_if_duplicate=True, the loser's insert() call silently
+        no-ops instead of raising DuplicateEntryError -- this must not be
+        mistaken for ownership, or both requests would proceed to process
+        the same invoice, exactly the double-submission this mechanism
+        exists to prevent. The loser must instead be told it does not own
+        the row (ledger_created=False) so submit_invoice()'s existing
+        wait-and-replay path handles it, without ever needing to catch (or
+        trigger) a duplicate-entry exception along the way."""
+        state = {"winner_ledger": None}
+
+        def fake_get_value(doctype, filters=None, fieldname=None, **kwargs):
+            if doctype == "POS Invoice Submission Ledger" and isinstance(filters, dict):
+                winner = state["winner_ledger"]
+                if winner and filters.get("ledger_key") == winner.ledger_key:
+                    return winner.name
+                return None
+            return 0
+
+        def fake_get_doc(*args):
+            if len(args) == 1 and isinstance(args[0], dict) and args[0].get("doctype") == "POS Invoice Submission Ledger":
+                loser_ledger = FakeDoc(**args[0])
+
+                def insert(ignore_permissions=False, ignore_if_duplicate=False):
+                    self.assertTrue(
+                        ignore_if_duplicate,
+                        "must opt into duplicate-tolerant insert so Frappe's own "
+                        "'Duplicate Name' msgprint never fires",
+                    )
+                    # The winning concurrent request's row becomes visible
+                    # right as this call's own insert executes -- this call
+                    # loses the race, exactly like a real unique-index
+                    # conflict, but must not raise.
+                    winner_ledger = FakeDoc(**dict(args[0]))
+                    winner_ledger.name = winner_ledger.ledger_key
+                    winner_ledger.creation = "2026-01-01 00:00:00.900000"
+                    state["winner_ledger"] = winner_ledger
+                    loser_ledger.creation = "2026-01-01 00:00:00.100000"
+                    return loser_ledger
+
+                loser_ledger.insert = insert
+                return loser_ledger
+            if len(args) == 2 and args[0] == "POS Invoice Submission Ledger":
+                return state["winner_ledger"]
+            raise AssertionError(f"unexpected get_doc call: {args}")
+
+        original_get_doc = self.creation.frappe.get_doc
+        original_db_get_value = self.creation.frappe.db.get_value
+        self.addCleanup(setattr, self.creation.frappe, "get_doc", original_get_doc)
+        self.addCleanup(setattr, self.creation.frappe.db, "get_value", original_db_get_value)
+        self.creation.frappe.db.get_value = fake_get_value
+        self.creation.frappe.get_doc = fake_get_doc
+
+        ledger, ledger_created = self.creation._get_or_create_submission_ledger(
+            "race-request-001",
+            {"pos_profile": "Main POS", "company": "Test Company"},
+            {},
+            "Sales Invoice",
+            return_created=True,
+        )
+
+        self.assertIs(ledger, state["winner_ledger"])
+        self.assertFalse(
+            ledger_created,
+            "the request that lost the insert race must not think it owns "
+            "the ledger, or two requests would both proceed to process the "
+            "same invoice",
+        )
+
+    def test_submit_invoice_two_concurrent_calls_share_one_result_with_no_duplicate_error(self):
+        """End-to-end simulation of the reported production symptom: two
+        rapid submissions carrying the same client_request_id (a client
+        retry racing the original attempt). Neither call may raise a
+        duplicate-entry error, and both must resolve to the exact same
+        invoice, not two separate ones. The first call's insert()
+        genuinely creates the ledger row; the second call finds it via
+        _get_or_create_submission_ledger()'s own existence check and
+        replays its result -- the narrower race, where a second call's own
+        insert() attempt collides with the first mid-flight and must
+        silently no-op rather than raise, is covered directly and more
+        precisely by
+        test_get_or_create_submission_ledger_detects_it_lost_a_concurrent_insert_race
+        above, which isolates that exact window without the rest of
+        submit_invoice()'s machinery in the way."""
+        ledger_rows = {}
+        submitted_docs = {}
+        submit_count = {"value": 0}
+
+        def make_invoice_doc(name):
+            invoice_doc = FakeDoc(
+                doctype="Sales Invoice",
+                name=name,
+                docstatus=0,
+                pos_profile="Main POS",
+                company="Test Company",
+                currency="USD",
+                customer="CUST-0001",
+                is_return=0,
+                items=[],
+                payments=[],
+                taxes=[],
+                flags=types.SimpleNamespace(ignore_permissions=False),
+                redeem_loyalty_points=0,
+                loyalty_program=None,
+                cost_center=None,
+                write_off_amount=0,
+                rounded_total=0,
+                grand_total=0,
+                remarks="",
+            )
+
+            def submit():
+                submit_count["value"] += 1
+                invoice_doc.docstatus = 1
+
+            invoice_doc.submit = submit
+            submitted_docs[name] = invoice_doc
+            return invoice_doc
+
+        def fake_update_invoice(payload):
+            name = f"ACC-SINV-RACE-{len(submitted_docs) + 1:04d}"
+            make_invoice_doc(name)
+            return {"name": name}
+
+        def attach_ledger_methods(ledger_doc):
+            def insert(ignore_permissions=False, ignore_if_duplicate=False):
+                ledger_doc.name = ledger_doc.get("name") or ledger_doc.ledger_key
+                ledger_doc.creation = "2026-01-01 00:00:00.100000"
+                ledger_rows[ledger_doc.name] = ledger_doc
+                return ledger_doc
+
+            def save(ignore_permissions=False):
+                ledger_rows[ledger_doc.name] = ledger_doc
+                return ledger_doc
+
+            ledger_doc.insert = insert
+            ledger_doc.save = save
+            return ledger_doc
+
+        def fake_get_doc(*args):
+            if len(args) == 1 and isinstance(args[0], dict):
+                payload = dict(args[0])
+                if payload.get("doctype") == "POS Invoice Submission Ledger":
+                    return attach_ledger_methods(FakeDoc(**payload))
+            if len(args) == 2 and args[0] == "Sales Invoice":
+                return submitted_docs[args[1]]
+            if len(args) == 2 and args[0] == "POS Invoice Submission Ledger":
+                return ledger_rows[args[1]]
+            raise AssertionError(f"unexpected get_doc call: {args}")
+
+        def fake_get_value(doctype, filters=None, fieldname=None, **kwargs):
+            if doctype == "POS Invoice Submission Ledger" and isinstance(filters, dict):
+                for row in ledger_rows.values():
+                    if all(row.get(key) == value for key, value in filters.items()):
+                        return row.name
+                return None
+            return 0
+
+        original_get_doc = self.creation.frappe.get_doc
+        original_db_get_value = self.creation.frappe.db.get_value
+        original_db_exists = self.creation.frappe.db.exists
+        self.addCleanup(setattr, self.creation.frappe, "get_doc", original_get_doc)
+        self.addCleanup(setattr, self.creation.frappe.db, "get_value", original_db_get_value)
+        self.addCleanup(setattr, self.creation.frappe.db, "exists", original_db_exists)
+
+        self.creation.frappe.db.has_column = lambda doctype, fieldname: not (
+            doctype in {"Sales Invoice", "POS Invoice"} and fieldname == "posa_client_request_id"
+        )
+        self.creation.frappe.db.get_value = fake_get_value
+        self.creation.frappe.db.exists = (
+            lambda doctype, name: doctype == "Sales Invoice" and name in submitted_docs
+        )
+        self.creation.frappe.get_value = lambda *args, **kwargs: 0
+        self.creation.frappe.get_doc = fake_get_doc
+        self.creation.update_invoice = fake_update_invoice
+        self.creation._save_draft_with_latest_timestamp = lambda doc: doc
+        self.creation._apply_invoice_gift_card_settlement = lambda *args, **kwargs: None
+
+        payload = {
+            "doctype": "Sales Invoice",
+            "pos_profile": "Main POS",
+            "company": "Test Company",
+            "currency": "USD",
+            "customer": "CUST-0001",
+            "items": [],
+            "payments": [],
+            "posa_client_request_id": "concurrent-request-001",
+        }
+        data = {"idempotency_key": "concurrent-request-001"}
+
+        first = self.creation.submit_invoice(
+            json.dumps(payload),
+            json.dumps(data),
+            submit_in_background=0,
+        )
+        second = self.creation.submit_invoice(
+            json.dumps(payload),
+            json.dumps(data),
+            submit_in_background=0,
+        )
+
+        self.assertEqual(first["name"], second["name"])
+        self.assertEqual(len(ledger_rows), 1)
+        self.assertEqual(submit_count["value"], 1)
+        self.assertEqual(len(submitted_docs), 1)
+        self.assertTrue(second["replayed"])
+        self.assertTrue(second["idempotent"])
+
     def test_submit_invoice_fast_queues_existing_draft_for_background_submission(self):
         ledger_rows = {}
         enqueued = {}
@@ -2832,8 +3220,14 @@ class TestInvoiceIdempotency(unittest.TestCase):
         )
 
         def attach_ledger_methods(ledger_doc):
-            def insert(ignore_permissions=False):
+            def insert(ignore_permissions=False, ignore_if_duplicate=False):
                 ledger_doc.name = ledger_doc.get("name") or ledger_doc.ledger_key
+                # See the matching comment in
+                # test_submit_invoice_replays_from_durable_ledger_without_invoice_custom_field:
+                # _get_or_create_submission_ledger() now reads `creation`
+                # right after insert() to tell whether this call actually
+                # created the row.
+                ledger_doc.creation = "2026-01-01 00:00:00.000001"
                 ledger_rows[ledger_doc.name] = ledger_doc
                 return ledger_doc
 
@@ -2854,6 +3248,8 @@ class TestInvoiceIdempotency(unittest.TestCase):
                 return draft_doc
             if args == ("POS Opening Shift", "POS-OPEN-0001"):
                 return opening_doc
+            if len(args) == 2 and args[0] == "POS Invoice Submission Ledger":
+                return ledger_rows[args[1]]
             raise AssertionError(f"unexpected get_doc call: {args}")
 
         def fake_get_value(doctype, filters=None, fieldname=None, **kwargs):
@@ -2912,6 +3308,7 @@ class TestInvoiceIdempotency(unittest.TestCase):
 
     def test_save_submission_ledger_inserts_named_new_doc(self):
         calls = {"insert": 0, "save": 0}
+        insert_kwargs = {}
         ledger_doc = FakeDoc(
             doctype="POS Invoice Submission Ledger",
             name="ledger-key-001",
@@ -2920,8 +3317,10 @@ class TestInvoiceIdempotency(unittest.TestCase):
         )
         ledger_doc.is_new = lambda: True
 
-        def insert(ignore_permissions=False):
+        def insert(ignore_permissions=False, ignore_if_duplicate=False):
             calls["insert"] += 1
+            insert_kwargs["ignore_permissions"] = ignore_permissions
+            insert_kwargs["ignore_if_duplicate"] = ignore_if_duplicate
             return ledger_doc
 
         def save(ignore_permissions=False):
@@ -2936,6 +3335,14 @@ class TestInvoiceIdempotency(unittest.TestCase):
         self.assertIs(result, ledger_doc)
         self.assertEqual(calls["insert"], 1)
         self.assertEqual(calls["save"], 0)
+        self.assertEqual(
+            insert_kwargs,
+            {"ignore_permissions": True, "ignore_if_duplicate": False},
+            "callers that don't explicitly ask for duplicate-tolerant insert "
+            "(the default) must still get the original raise-on-collision "
+            "behavior -- only _get_or_create_submission_ledger() opts into "
+            "ignore_if_duplicate=True",
+        )
 
     def test_save_submission_ledger_retries_and_recovers_from_a_deadlock(self):
         """Simulates the exact scenario this fix targets: a real MySQL
