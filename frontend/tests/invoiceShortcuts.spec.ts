@@ -588,4 +588,31 @@ describe("invoiceShortcuts", () => {
 			expect(vm.show_payment).toHaveBeenCalledTimes(1);
 		});
 	});
+
+	describe("Save & Clear shortcut ignores a held key's repeated keydown", () => {
+		it("does not re-trigger save_and_clear_invoice on a repeated Alt+S keydown from a held key", async () => {
+			const vm = { ...createVm(), save_and_clear_invoice: vi.fn(async () => {}) };
+			const event = new KeyboardEvent("keydown", {
+				key: "s",
+				code: "KeyS",
+				altKey: true,
+				repeat: true,
+				bubbles: true,
+				cancelable: true,
+			});
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.save_and_clear_invoice).not.toHaveBeenCalled();
+		});
+
+		it("triggers save_and_clear_invoice on a genuine (non-repeat) Alt+S keydown", async () => {
+			const vm = { ...createVm(), save_and_clear_invoice: vi.fn(async () => {}) };
+			const event = createAltEvent("s", "KeyS");
+
+			await (invoiceShortcuts as any).handleInvoiceShortcut.call(vm, event);
+
+			expect(vm.save_and_clear_invoice).toHaveBeenCalledTimes(1);
+		});
+	});
 });

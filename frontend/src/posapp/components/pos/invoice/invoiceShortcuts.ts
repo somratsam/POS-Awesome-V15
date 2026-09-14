@@ -480,6 +480,9 @@ const invoiceShortcuts: Record<string, unknown> & ThisType<InvoiceShortcutsVm> =
 
 			if (isLetter(event, "s")) {
 				consumeEvent(event);
+				if (event.repeat) {
+					return;
+				}
 				this.save_and_clear_invoice?.();
 				return;
 			}

@@ -192,36 +192,51 @@ export async function cancel_invoice(context: any) {
 }
 
 export async function save_and_clear_invoice(context: any) {
-	const { clearInvoice } = getItemAdditionApi();
-	let old_invoice = null;
-	const doc = get_invoice_doc(context);
+	// Guard against a rapid double-click/double-tap (or Print Draft, which
+	// calls this same function internally, firing right alongside a Save &
+	// Clear click) creating two separate draft invoices -- without this, two
+	// concurrent calls each see no invoice_doc.name yet and each take the
+	// "create new" branch below. Same pattern as show_payment()'s
+	// _paymentInFlight guard.
+	if (context._saveAndClearInFlight) {
+		return;
+	}
+	context._saveAndClearInFlight = true;
 
 	try {
-		if (doc.name) {
-			old_invoice = await context.update_invoice(doc);
-		} else if (doc.items.length) {
-			old_invoice = await context.update_invoice(doc);
-		} else {
+		const { clearInvoice } = getItemAdditionApi();
+		let old_invoice = null;
+		const doc = get_invoice_doc(context);
+
+		try {
+			if (doc.name) {
+				old_invoice = await context.update_invoice(doc);
+			} else if (doc.items.length) {
+				old_invoice = await context.update_invoice(doc);
+			} else {
+				context.toastStore.show({
+					title: `Nothing to save`,
+					color: "error",
+				});
+			}
+		} catch (error) {
+			console.error("Error saving and clearing invoice:", error);
+		}
+
+		if (!old_invoice) {
 			context.toastStore.show({
-				title: `Nothing to save`,
+				title: `Error saving the current invoice`,
 				color: "error",
 			});
+		} else {
+			clearInvoice(context);
+			if (context.eventBus) {
+				context.eventBus.emit("focus_item_search");
+			}
+			return old_invoice;
 		}
-	} catch (error) {
-		console.error("Error saving and clearing invoice:", error);
-	}
-
-	if (!old_invoice) {
-		context.toastStore.show({
-			title: `Error saving the current invoice`,
-			color: "error",
-		});
-	} else {
-		clearInvoice(context);
-		if (context.eventBus) {
-			context.eventBus.emit("focus_item_search");
-		}
-		return old_invoice;
+	} finally {
+		context._saveAndClearInFlight = false;
 	}
 }
 
