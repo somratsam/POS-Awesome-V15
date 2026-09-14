@@ -1597,6 +1597,17 @@ const applyPaymentCustomerInfo = (info, customer) => {
 	customersStore.setCustomerInfo(nextInfo);
 };
 
+// How long a customer-selection-time get_customer_info() fetch
+// (fetch_customer_details() in invoice_utils/customer.ts, stamped into
+// customersStore's freshness tracker via setCustomerInfo()) is trusted as
+// still current when Pay is clicked moments later, instead of re-fetching
+// the exact same data. Long enough to skip the always-redundant case (a
+// cashier normally clicks Pay seconds after selecting a customer), short
+// enough that a customer whose balance changed on another terminal while
+// this cart was being built still gets refreshed data within the same
+// checkout.
+const CUSTOMER_INFO_FRESHNESS_MS = 30000;
+
 const refreshPaymentCustomerInfo = async (doc) => {
 	const customer = typeof doc?.customer === "string" ? doc.customer.trim() : "";
 	if (!customer) {
@@ -1609,6 +1620,10 @@ const refreshPaymentCustomerInfo = async (doc) => {
 	}
 
 	if (isOffline()) {
+		return;
+	}
+
+	if (customersStore.isCustomerInfoFresh(customer, CUSTOMER_INFO_FRESHNESS_MS)) {
 		return;
 	}
 

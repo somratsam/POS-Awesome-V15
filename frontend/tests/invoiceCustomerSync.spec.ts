@@ -5,6 +5,8 @@ const getStoredCustomerMock = vi.fn();
 vi.mock("../src/offline/index", () => ({
 	getStoredCustomer: (...args: any[]) => getStoredCustomerMock(...args),
 	getCachedPriceListItems: vi.fn(() => null),
+	setCustomerStorage: vi.fn(async () => {}),
+	saveStoredValueSnapshot: vi.fn(),
 }));
 
 import {
@@ -77,5 +79,52 @@ describe("invoice customer sync", () => {
 
 		expect(context.customer_info).toEqual({});
 		expect(context.selected_price_list).toBe("Standard");
+	});
+
+	it("stamps the shared customersStore freshness tracker on a successful, non-stale fetch", async () => {
+		getStoredCustomerMock.mockResolvedValue(null);
+		const fetchedInfo = {
+			customer: "CUST-FRESH",
+			name: "CUST-FRESH",
+			customer_name: "Fresh Customer",
+			customer_price_list: "Standard",
+		};
+		(globalThis as any).frappe.call.mockResolvedValue({ message: fetchedInfo });
+
+		const setCustomerInfo = vi.fn();
+		const context: any = {
+			customer: "CUST-FRESH",
+			customer_info: {},
+			items: [],
+			pos_profile: { selling_price_list: "Standard", currency: "PKR" },
+			selected_price_list: "Standard",
+			price_list_currency: "PKR",
+			update_items_details: vi.fn(),
+			customersStore: { setCustomerInfo },
+		};
+
+		await fetch_customer_details(context);
+
+		expect(setCustomerInfo).toHaveBeenCalledWith(fetchedInfo);
+	});
+
+	it("does not throw when customersStore is unavailable (defensive optional chaining)", async () => {
+		getStoredCustomerMock.mockResolvedValue(null);
+		(globalThis as any).frappe.call.mockResolvedValue({
+			message: { customer: "CUST-NO-STORE", customer_name: "No Store" },
+		});
+
+		const context: any = {
+			customer: "CUST-NO-STORE",
+			customer_info: {},
+			items: [],
+			pos_profile: { selling_price_list: "Standard", currency: "PKR" },
+			selected_price_list: "Standard",
+			price_list_currency: "PKR",
+			update_items_details: vi.fn(),
+			// customersStore deliberately omitted
+		};
+
+		await expect(fetch_customer_details(context)).resolves.not.toThrow();
 	});
 });

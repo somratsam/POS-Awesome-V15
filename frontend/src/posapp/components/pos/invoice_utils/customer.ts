@@ -53,6 +53,10 @@ export async function fetch_customer_details(context: any) {
 		) {
 			context.customer_info = r.message;
 			await setCustomerStorage([r.message]);
+			// Stamp the shared customersStore freshness tracker so the payment
+			// screen's own refreshPaymentCustomerInfo() (Payments.vue) can skip
+			// re-fetching this exact same info moments later on Pay click.
+			context.customersStore?.setCustomerInfo?.(r.message);
 			if (context?.pos_profile?.company) {
 				const totalCredit = Number(r.message?.stored_value_balance || 0);
 				saveStoredValueSnapshot(
