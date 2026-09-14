@@ -61,6 +61,23 @@ const set_pos_profile_queries = (frm) => {
 		};
 	});
 
+	// ERPNext core hardcodes this field's query to doc_type = "POS Invoice"
+	// (accounts/doctype/pos_profile/pos_profile.js), regardless of which
+	// doctype this profile actually creates. Override it to match
+	// create_pos_invoice_instead_of_sales_invoice, so a profile that
+	// creates Sales Invoices (the flag off) can actually select one of its
+	// own Sales Invoice print formats as the default here -- previously
+	// impossible, since only POS Invoice-doctype formats were selectable.
+	set_field_query("print_format", function (doc) {
+		return {
+			filters: {
+				doc_type: doc.create_pos_invoice_instead_of_sales_invoice
+					? "POS Invoice"
+					: "Sales Invoice",
+			},
+		};
+	});
+
 	set_child_query("account", "posa_allowed_expense_accounts", function (doc) {
 		return {
 			filters: {
