@@ -1065,7 +1065,7 @@ def _set_if_field_exists(doc, fieldname, value):
         doc.set(fieldname, value)
 
 
-def _validate_customer_credit_redemption(invoice_doc, data):
+def _validate_customer_credit_redemption(invoice_doc, data, available_credit_rows=None):
     """Enforce the "redeem all available credit, or none" policy.
 
     Only runs when the client explicitly flags this as a genuine "Use
@@ -1080,6 +1080,13 @@ def _validate_customer_credit_redemption(invoice_doc, data):
     same function the frontend calls to display it, instead of trusting the
     client-supplied per-row total_credit figures (those drive the frontend's
     own pre-submit UX only).
+
+    available_credit_rows: pass the result of an already-made
+    get_available_credit() call (submit_invoice() and
+    _apply_customer_credit_print_fields() both need it for the same
+    customer/company within the same request) to avoid querying it twice.
+    Falls back to fetching it itself when not provided, so this function
+    still works standalone.
     """
     if invoice_doc.get("is_return"):
         return
@@ -1088,10 +1095,10 @@ def _validate_customer_credit_redemption(invoice_doc, data):
     if not invoice_doc.customer:
         return
 
-    real_total = sum(
-        flt(row.get("total_credit"))
-        for row in get_available_credit(invoice_doc.customer, invoice_doc.company)
-    )
+    if available_credit_rows is None:
+        available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
+
+    real_total = sum(flt(row.get("total_credit")) for row in available_credit_rows)
 
     invoice_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
     loyalty_covered = flt(invoice_doc.get("loyalty_amount"))
@@ -1118,15 +1125,16 @@ def _validate_customer_credit_redemption(invoice_doc, data):
         )
 
 
-def _apply_customer_credit_print_fields(invoice_doc, data):
+def _apply_customer_credit_print_fields(invoice_doc, data, available_credit_rows=None):
+    """available_credit_rows: see _validate_customer_credit_redemption's
+    docstring -- same reuse-across-both-calls purpose."""
     redeemed_credit = flt((data or {}).get("redeemed_customer_credit"))
     credit_rows = (data or {}).get("customer_credit_dict") or []
 
     if cint((data or {}).get("customer_credit_redemption_requested")) and invoice_doc.customer:
-        available_credit = sum(
-            flt(row.get("total_credit"))
-            for row in get_available_credit(invoice_doc.customer, invoice_doc.company)
-        )
+        if available_credit_rows is None:
+            available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
+        available_credit = sum(flt(row.get("total_credit")) for row in available_credit_rows)
     else:
         available_credit = 0
         if isinstance(credit_rows, list):
@@ -2225,7 +2233,19 @@ def submit_invoice(invoice, data, submit_in_background=False):
 
     invoice_doc.remarks = _build_invoice_remarks(invoice_doc)
 
-    _validate_customer_credit_redemption(invoice_doc, data)
+    # Computed once here and reused by both calls below (_validate_customer_
+    # credit_redemption's own is_return guard means it won't always use it,
+    # but _apply_customer_credit_print_fields always will under this same
+    # condition) -- get_available_credit() does several queries, and both
+    # calls want it for the identical customer/company within this same
+    # request.
+    available_credit_rows = None
+    if cint((data or {}).get("customer_credit_redemption_requested")) and invoice_doc.customer:
+        available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
+
+    _validate_customer_credit_redemption(
+        invoice_doc, data, available_credit_rows=available_credit_rows
+    )
 
     # calculating cash
     total_cash = 0
@@ -2268,7 +2288,9 @@ def submit_invoice(invoice, data, submit_in_background=False):
                 is_payment_entry = 1
 
     _apply_invoice_gift_card_settlement(invoice_doc, data)
-    _apply_customer_credit_print_fields(invoice_doc, data)
+    _apply_customer_credit_print_fields(
+        invoice_doc, data, available_credit_rows=available_credit_rows
+    )
     _normalize_return_payment_rows(
         invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
     )
