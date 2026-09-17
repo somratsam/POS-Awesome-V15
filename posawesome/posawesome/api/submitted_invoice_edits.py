@@ -396,6 +396,12 @@ def list_submitted_invoices(
         metadata_fields.append("pos_closing_entry")
     if doctype == "POS Invoice":
         metadata_fields.append("consolidated_invoice")
+    has_credit_exchange_columns = _has_column(doctype, "posa_redeemed_customer_credit") and _has_column(
+        doctype, "posa_pos_opening_shift"
+    )
+    if has_credit_exchange_columns:
+        metadata_fields.append("posa_redeemed_customer_credit")
+        metadata_fields.append("posa_pos_opening_shift")
 
     requested_fields = list(dict.fromkeys([*fields, *metadata_fields]))
     rows = frappe.get_list(
@@ -409,7 +415,57 @@ def list_submitted_invoices(
         row["doctype"] = doctype
         doc = frappe._dict(row)
         row.update(get_submitted_invoice_edit_metadata(doc))
+    if has_credit_exchange_columns:
+        _apply_credit_exchange_badges(rows)
     return rows
+
+
+def _apply_credit_exchange_badges(rows):
+    """Attach a label-only "Exchange" or "Credit Note" badge to each
+    relevant row, using the same canonical same-shift check as the Z
+    Report, the live Overview screen, and the receipt print format (see
+    posawesome.posawesome.api.credit_exchange.get_customers_with_same_shift_return).
+
+    A return invoice is always "Credit Note" -- it issued credit,
+    regardless of whether/when it's later redeemed. A redemption invoice
+    (posa_redeemed_customer_credit > 0) is "Exchange" only when its
+    customer has a matching same-shift return, else "Credit Note" too --
+    it's still credit-note activity, just not a same-shift pairing. Rows
+    that are neither get no badge at all.
+
+    Batched by pos_opening_shift (one call per distinct shift represented
+    in this page of rows, not one per row) to avoid N+1 queries -- unlike
+    the Z Report/Overview, a single Invoice Management list page can span
+    many different shifts across days.
+    """
+    from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
+
+    redemption_rows_by_shift = {}
+    for row in rows or []:
+        row["exchange_credit_badge"] = None
+        if row.get("is_return"):
+            row["exchange_credit_badge"] = "Credit Note"
+            continue
+        redeemed = flt(row.get("posa_redeemed_customer_credit"))
+        shift = row.get("posa_pos_opening_shift")
+        if redeemed > 0 and shift and row.get("customer"):
+            redemption_rows_by_shift.setdefault(shift, []).append(row)
+
+    for shift, shift_rows in redemption_rows_by_shift.items():
+        customers = list({row.get("customer") for row in shift_rows})
+        try:
+            same_shift_customers = set(get_customers_with_same_shift_return(customers, shift))
+        except Exception:
+            # A shift the current user can't be authorized against (e.g.
+            # a different POS Profile's data slipping through a caller's
+            # own filters) must not break the whole list -- fall back to
+            # the safe default (Credit Note, not Exchange) for that shift's
+            # rows rather than raising.
+            same_shift_customers = set()
+        for row in shift_rows:
+            row["exchange_credit_badge"] = (
+                "Exchange" if row.get("customer") in same_shift_customers else "Credit Note"
+            )
 
 
 @frappe.whitelist()

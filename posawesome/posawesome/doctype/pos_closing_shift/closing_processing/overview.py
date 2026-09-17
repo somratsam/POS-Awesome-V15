@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import flt, json
 from collections import defaultdict
 from frappe import _
+from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
@@ -486,25 +487,23 @@ def get_closing_shift_overview(pos_opening_shift):
                 conversion_rate,
             )
 
-    # "Exchanges Today": zero-cost alias over the same already-fetched
-    # `invoices` list -- no new query. Needs its own two passes (collect
-    # returning customers, then sum redemptions) since a customer's return
-    # can appear before or after their redeeming invoice in the list, unlike
-    # the single-pass accumulation above. Mirrors this function's own
-    # is_return definition (also true for a negative total without the flag
-    # set) for internal consistency with the returns figures above.
-    returning_customers = set()
-    for invoice in invoices:
-        invoice_total = invoice.get("rounded_total") or invoice.get("grand_total") or 0
-        is_return = bool(invoice.get("is_return")) or flt(invoice_total) < 0
-        if is_return and invoice.get("customer"):
-            returning_customers.add(invoice.get("customer"))
+    # "Exchanges Today": delegates the "which customers had a same-shift
+    # return" question to get_customers_with_same_shift_return() -- the
+    # single canonical check also used by the Z Report, the receipt print
+    # format, and Invoice Management, so this live pre-close figure agrees
+    # with the post-close one rather than using its own separate
+    # is_return-or-negative-total definition (a real, confirmed divergence
+    # this replaces -- see PROGRESS_NOTES.md).
+    exchange_customers = list({invoice.get("customer") for invoice in invoices if invoice.get("customer")})
+    returning_customers = set(
+        get_customers_with_same_shift_return(exchange_customers, opening_shift_doc.name)
+    )
 
     same_shift_exchange_total = 0.0
     for invoice in invoices:
-        invoice_total = invoice.get("rounded_total") or invoice.get("grand_total") or 0
-        is_return = bool(invoice.get("is_return")) or flt(invoice_total) < 0
-        if is_return or invoice.get("customer") not in returning_customers:
+        if invoice.get("is_return"):
+            continue
+        if invoice.get("customer") not in returning_customers:
             continue
         redeemed = flt(invoice.get("posa_redeemed_customer_credit"))
         if redeemed > 0:
