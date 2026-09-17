@@ -216,6 +216,7 @@ export function useClosingShift(eventBus: any) {
 			),
 			customer_credit_issued: normalizeCredit(payload.customer_credit_issued),
 			customer_credit_redeemed: normalizeCredit(payload.customer_credit_redeemed),
+			same_shift_exchange_total: toNumber(payload.same_shift_exchange_total),
 			cash_expected: {
 				mode_of_payment: payload.cash_expected?.mode_of_payment || "",
 				company_currency_total: toNumber(

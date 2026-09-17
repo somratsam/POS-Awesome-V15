@@ -297,6 +297,14 @@
 										>
 											{{ repairStateLabel(changeAllocationRepairState(item)) }}
 										</v-chip>
+										<v-chip
+											v-if="item.exchange_credit_badge"
+											size="small"
+											:color="exchangeCreditBadgeColor(item.exchange_credit_badge)"
+											variant="tonal"
+										>
+											{{ __(item.exchange_credit_badge) }}
+										</v-chip>
 									</div>
 								</template>
 								<template #item.actions="{ item }">
@@ -393,6 +401,14 @@
 													{{
 														repairStateLabel(changeAllocationRepairState(invoice))
 													}}
+												</v-chip>
+												<v-chip
+													v-if="invoice.exchange_credit_badge"
+													size="small"
+													:color="exchangeCreditBadgeColor(invoice.exchange_credit_badge)"
+													variant="tonal"
+												>
+													{{ __(invoice.exchange_credit_badge) }}
 												</v-chip>
 											</div>
 											<div class="invoice-record-card__subtitle">
@@ -2776,6 +2792,17 @@ export default {
 			if (state === "repaired") return "success";
 			if (state === "candidate") return "warning";
 			return "primary";
+		},
+		exchangeCreditBadgeColor(badge) {
+			// "Exchange" (a same-shift return+redemption pairing) vs "Credit
+			// Note" (credit-note activity with no same-shift pairing) -- the
+			// same two labels and the same canonical same-shift check used
+			// by the receipt, the Z Report, and the Closing Shift Overview
+			// (see get_customers_with_same_shift_return() in
+			// posawesome/posawesome/api/credit_exchange.py).
+			if (badge === "Exchange") return "info";
+			if (badge === "Credit Note") return "warning";
+			return "secondary";
 		},
 		isRepairCandidate(invoice) {
 			const repairState =

@@ -96,7 +96,7 @@ class POSClosingShift(Document):
         # separate, independent method -- does not feed into or get fed by
         # update_customer_credit_totals()'s own stored figures.
         self.same_shift_exchange_total = flt(
-            get_same_shift_exchange_total(get_shift_invoice_rows(self))
+            get_same_shift_exchange_total(get_shift_invoice_rows(self), self.pos_opening_shift)
         )
 
     def on_submit(self):

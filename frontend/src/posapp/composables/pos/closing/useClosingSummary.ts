@@ -309,6 +309,20 @@ export function useClosingSummary(
 			: [];
 	});
 
+	// "Exchanges Today": a subset of the two credit figures above, not a
+	// third additive amount -- how much of today's credit activity was a
+	// customer returning an item and redeeming that same-shift credit in
+	// one visit. Computed server-side via the same canonical check used by
+	// the Z Report, the receipt, and Invoice Management (see
+	// get_customers_with_same_shift_return() in
+	// posawesome/posawesome/api/credit_exchange.py), so this live pre-close
+	// figure agrees with the post-close Z Report's own "Exchanges Today"
+	// line, unlike before.
+	const sameShiftExchangeTotal = computed(() => {
+		const ov = unref(overview);
+		return Number(ov?.same_shift_exchange_total || 0);
+	});
+
 	const cashExpectedByCurrency = computed(() => {
 		return Array.isArray(cashExpectedSummary.value.by_currency)
 			? cashExpectedSummary.value.by_currency
@@ -406,6 +420,10 @@ export function useClosingSummary(
 			customerCreditIssuedSummary.value.company_currency_total,
 			overviewCompanyCurrency.value,
 		);
+		const sameShiftExchangeValue = formatCurrencyWithSymbol(
+			sameShiftExchangeTotal.value,
+			overviewCompanyCurrency.value,
+		);
 		const cashValue = formatCurrencyWithSymbol(
 			cashExpectedSummary.value.company_currency_total,
 			overviewCompanyCurrency.value,
@@ -467,6 +485,14 @@ export function useClosingSummary(
 				caption: `${__("Return invoices")}: ${formatCount(customerCreditIssuedSummary.value.count || 0)}`,
 				icon: "mdi-account-cash-outline",
 				color: "accent-warning",
+			},
+			{
+				key: "same-shift-exchange",
+				label: __("Exchanges Today"),
+				value: sameShiftExchangeValue,
+				caption: __("Included in Customer Credit Used & Issued above"),
+				icon: "mdi-swap-horizontal",
+				color: "accent-info",
 			},
 			{
 				key: "cash-expected",

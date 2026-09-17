@@ -1,5 +1,6 @@
 import frappe
 from frappe.utils import cint, cstr, flt, getdate
+from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.invoices import (
     submit_printed_invoices,
@@ -97,28 +98,32 @@ def get_shift_invoice_rows(closing_shift_doc):
     return rows
 
 
-def get_same_shift_exchange_total(invoice_rows):
+def get_same_shift_exchange_total(invoice_rows, pos_opening_shift, returning_customers=None):
     """Return the "Exchanges Today" total: for every customer who both
     returned an item and redeemed customer credit within this same shift,
     sum the redeemed amount on their non-return invoice(s).
 
-    Mirrors the existing invoice-level logic in the "Swan Sales Invoice"
-    print format (an existence check per customer -- did they have any
-    same-shift return -- not per-source amount attribution). All rows
-    passed in already belong to the same POS Opening Shift by construction
-    (get_shift_invoice_rows() resolves them from a single closing shift's
-    pos_transactions), so no shift filter is needed here, unlike the
-    print format's own SQL which has to filter by posa_pos_opening_shift
-    explicitly.
+    Delegates the "which customers had a same-shift return" question to
+    get_customers_with_same_shift_return() -- the single canonical check
+    also used by the receipt print format, the live Overview screen, and
+    Invoice Management, so all four surfaces agree on what counts as an
+    exchange. This function's own job is only the second half: summing
+    posa_redeemed_customer_credit across those customers' non-return
+    invoices in invoice_rows.
+
+    returning_customers: optionally pass a precomputed set/list (as
+    get_customers_with_same_shift_return() would return) to skip the
+    query -- used by this function's own tests to exercise the summing
+    logic without a live database. Falls back to querying it itself when
+    not provided, which is what every real caller does.
 
     Display-only: does not feed update_customer_credit_totals() or any
     other stored accounting figure.
     """
-    returning_customers = {
-        row.get("customer")
-        for row in invoice_rows
-        if row.get("is_return") and row.get("customer")
-    }
+    if returning_customers is None:
+        customers = list({row.get("customer") for row in invoice_rows if row.get("customer")})
+        returning_customers = get_customers_with_same_shift_return(customers, pos_opening_shift)
+    returning_customers = set(returning_customers)
 
     total = 0.0
     for row in invoice_rows:
