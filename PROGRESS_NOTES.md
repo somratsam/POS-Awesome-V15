@@ -4593,3 +4593,702 @@ navigation, and qty/uom/rate's own auto-advance are all unchanged.
 **Promoted:** committed to `develop-swan` (`dc40192`), cherry-picked to
 `stable` (`0b4ca38`), both pushed as the last of tonight's seven-commit
 batch. Not yet deployed to production -- pending the user's go-ahead.
+
+## 42. TRACKED, NOT YET FIXED -- pre-Pay total can transiently show tax as exclusive when the site's tax template is inclusive (2026-09-13)
+
+**Status: deferred.** Found and diagnosed while manually verifying the
+Pay-click `reload_current_invoice_from_backend()` removal (see the
+commit `f545d53`, "remove redundant reload_current_invoice_from_backend()
+round trip from Pay click"). Confirmed unrelated to that fix -- present
+on `stable` too, and lives entirely in code that fix never touched. Not
+fixed yet; recorded here so it isn't lost.
+
+**Symptom:** on Swan's OMR POS Profile ("Test Pos", tax template `VAT 5%
+Inclusive - S`), a cart with a 44% item discount briefly showed a
+pre-Pay total of 113.904 that didn't match the payment screen's
+internally-consistent 108.480 (net) + 5.420 (tax) = 113.900 a moment
+later. Repeated with clean discount percentages (70/55/50/40%) and the
+gap did not reproduce -- only 44% showed it in the user's manual test.
+
+**Root cause (traced, not yet fixed):** `get_invoice_doc()`
+(`frontend/src/posapp/components/pos/invoice_utils/document.ts:296-364`)
+has a client-side fallback that estimates tax itself whenever the cart's
+current state hasn't yet synced tax rows from the server
+(`context.invoice_doc.taxes` empty). That fallback branches on
+`getTaxInclusiveSetting()` (`offline/cache.ts:1676`, reading cached
+`memory.tax_inclusive` / localStorage `posa_tax_inclusive`): if that flag
+reads `false`, it computes `tax_amount = net_total * rate / 100` -- an
+**exclusive** formula ("add 5% on top") -- even when the real template is
+inclusive (5% already baked into item prices, confirmed live:
+`tabSales Taxes and Charges` row for `VAT 5% Inclusive - S` has
+`included_in_print_rate=1`). `108.480 * 1.05 = 113.90400000000001`,
+an exact match to the reported number -- strong confirmation this
+specific fallback fired for that click.
+
+The flag itself is normally set correctly from the server at app
+bootstrap (`bootstrapConfig.ts:71`) but defaults to `false`
+(`offline/db.ts:378`) and is explicitly reset to `false` by
+`clearAllCache()` (`offline/db.ts:1328,1369`) until the next bootstrap
+completes. For a **single-item cart**, ERPNext's real per-row tax
+rounding cannot itself diverge from a whole-total rounding (one row =
+one rounding decision either way), which rules out "discount percentage
+lands on an awkward rounding boundary" as the mechanism here -- the 44%
+correlation in the user's test is much more likely to be which click
+happened to catch the cart mid-sync (or the flag momentarily stale)
+than any property of the number 44 itself.
+
+**Blast radius:** display-only. Checked the actual saved invoices in the
+database -- their `net_total`/`total_taxes_and_charges`/`grand_total`
+are always self-consistent (server-computed), so this never posts a
+wrong amount. It's a transient client-side preview glitch that could
+confuse a cashier (a number visibly changing between cart and payment
+screen), not a ledger-correctness bug.
+
+**Next steps when picked up:** confirm live via
+`localStorage.getItem('posa_tax_inclusive')` during a repro (expect
+`"false"`/`null` on this profile if this is really what's firing); most
+direct fix is likely making the fallback in `document.ts` never guess
+wrong in this specific way -- e.g. always re-derive `tax_inclusive` from
+the already-cached tax template's own `included_in_print_rate` rather
+than trusting a separately-cached flag that can go stale independently
+of the template it's describing.
+
+## 43. TRACKED, NOT YET FIXED -- update_invoice()'s draft-save path has no server-side lock/dedup against concurrent creates (2026-09-13)
+
+**Status: deferred.** Found while investigating and fixing the PAY-button
+double-click bug (`c2a9270`, "guard the PAY button and its keyboard
+shortcuts against a rapid double-click/double-tap"). That commit closes
+the *practical* trigger -- a cashier's double-click, double-tap, or held
+keyboard shortcut can no longer fire two concurrent `show_payment()`
+calls from the POS UI. This item is the part that fix deliberately did
+**not** touch: nothing on the server itself stops two genuinely
+concurrent `update_invoice()` calls (however they're triggered) from
+creating two separate draft invoices. Not fixed yet; recorded here so
+the gap isn't lost now that the UI-level symptom is gone and less likely
+to surface it by accident.
+
+**Mechanism (traced, not yet fixed):** `_get_mutable_invoice_doc()`
+(`posawesome/posawesome/api/invoice_processing/creation.py:1285-1288`)
+decides create-vs-update purely from the client-supplied `data.name`:
+```python
+invoice_name = (data or {}).get("name")
+if not invoice_name:
+    return frappe.get_doc(data)   # brand-new doc, no lock, no dedup check
+```
+For a fresh sale, the client has no `name` until the *first*
+`update_invoice()` response comes back (`context.invoice_doc.name` is
+set from that response, not before). Two concurrent calls with no `name`
+both take this branch independently and both proceed through
+`invoice_doc.docstatus = 0; invoice_doc.save()`
+(`creation.py:1908-1912`) -- a genuine DB insert each, with nothing
+serializing them.
+
+The one thing that looks like it should help doesn't apply to this path.
+`update_invoice()` calls `extract_invoice_client_request_id(data)`
+(`creation.py:1676`) and `set_invoice_client_request_id(invoice_doc,
+client_request_id)` (`creation.py:1716`), but that only *stamps* a
+`posa_client_request_id` field onto the doc before save -- it never
+calls the actual dedup lookup, `find_invoice_by_client_request_id()`
+(`posawesome/posawesome/api/idempotency.py:96-125`, a plain
+`frappe.db.get_value` with no `for_update`/row lock either). That lookup
+is only ever called from the separate `submit_invoice()` function (the
+later payment-confirmation RPC), not from the draft-save PAY triggers.
+Confirmed the frontend never even attaches a `posa_client_request_id`/
+`idempotency_key` on this path either -- `frontend/src/posapp/components/
+pos/invoice_utils/server.ts`'s `update_invoice()` and `document.ts`'s
+`get_invoice_doc()` never set either field, so `client_request_id` is
+`None` end-to-end for every Pay-click draft save. The `unique: 1` DB
+constraint on `posa_client_request_id`
+(`posawesome/fixtures/custom_field.json:8776-8798`) never engages either,
+since the field is null on every concurrent insert (and MySQL/MariaDB
+unique indexes don't block multiple NULLs).
+
+**Blast radius today:** low, now that `c2a9270` removed the only
+practical way a normal cashier session could trigger two concurrent
+calls from the POS UI itself. Remaining exposure is anything that calls
+`update_invoice()` concurrently *without* going through
+`show_payment()`'s guard -- a client bypassing the UI (two raw API
+calls), a race between two browser tabs/devices on the same POS
+session, or any future UI entry point that ends up calling
+`process_invoice()`/`update_invoice()` without routing through
+`show_payment()`. `@frappe.whitelist()` makes `update_invoice()`
+reachable by any authenticated session regardless of what the UI does
+(see the existing CLAUDE.md lesson on this), so this isn't only a POS
+Awesome frontend concern.
+
+**Next steps when picked up:** the client-request-id plumbing already
+exists for `submit_invoice()` and just needs extending to this path --
+(1) have the frontend actually attach a real `posa_client_request_id`
+to the Pay-click payload (currently absent), and (2) wire
+`find_invoice_by_client_request_id()` into `update_invoice()`'s create
+branch so a repeated request with the same id updates the
+already-created doc instead of inserting a second one. That lookup
+alone isn't a true lock (still a read-then-decide race under real
+concurrency, per its own docstring/implementation), so closing this
+fully likely also needs either a short-lived cache-based lock (the same
+pattern `terminal_state.py`'s cashier-unlock state already uses,
+keyed by session + POS Profile) held for the duration of the create, or
+a DB-level uniqueness constraint that would reject the second insert
+outright rather than relying on an application-level check-then-act.
+
+## 44. TRACKED, NOT YET FIXED -- an in-progress cart has zero persistence until Pay/Save & Clear; a crash, refresh, or freeze loses it completely (2026-09-14)
+
+**Status: deferred.** Found while investigating, at the user's request, what
+happens to a large in-progress cart (100-150 items) if the browser tab
+crashes, is refreshed, loses network, or the app freezes before "Pay" or
+"Save & Clear" is ever clicked. Investigation only -- nothing built yet;
+recorded here so it isn't lost and can be picked up as its own feature.
+
+**Mechanism (traced, confirmed as a true negative, not an unsearched gap):**
+the in-progress cart lives entirely in the Pinia `invoiceStore`
+(`frontend/src/posapp/stores/invoiceStore.ts`) -- `itemsData`
+(`reactive(Map)`, line 91), `itemOrder` (`ref<string[]>`, line 90), and
+`invoiceDoc` (line 87) -- with no persistence layer attached at all:
+
+- No Pinia persistence plugin is registered (`stores/index.ts:22-25` calls
+  plain `createPinia()`); `frontend/package.json` has no persistence-plugin
+  dependency.
+- Every store mutator (`addItem` line 393, `removeItemByRowId` line 558,
+  etc.) calls `touch()` (line 109), which only bumps
+  `metadata.changeVersion` in memory -- nothing writes to `localStorage`,
+  `sessionStorage`, or IndexedDB.
+- The offline/IndexedDB layer (`frontend/src/offline/`) is a different
+  problem entirely and does not touch this: its Dexie schema
+  (`offline/db.ts:53-109`) has tables for cached lookup data
+  (items/customers/prices), the invoice outbox, and offline-queued
+  invoices -- no table represents an in-progress, not-yet-submitted cart.
+  The earliest point anything in the cart's lifecycle touches persistent
+  storage is `update_invoice()`'s Pay-click draft-save (writes to the
+  **server DB**, not local storage, and only fires when the cashier opens
+  the Payments screen -- `invoice_utils/dialogs.ts:16` ->
+  `invoice_utils/server.ts:101-166`) or `submitInvoice()`'s outbox/offline
+  queue (`usePaymentSubmission.ts:958`, only reached after payment is
+  confirmed). Nothing in `add_item`/`remove_item`/qty-and-rate-edit code
+  paths (`useItemAddition.ts`, `invoice_utils/actions.ts`) calls
+  `isOffline()` or touches `offline/` at all -- confirmed via grep, zero
+  matches.
+- Boot sequence (`posapp.ts`'s `initializeApp()` line 257 ->
+  `mountPosApp()` line 363 -> `Pos.vue`'s `onMounted()` lines 758-783)
+  always starts from a fresh, empty `createPinia()` instance and never
+  attempts to read back prior cart state from anywhere. No "resume last
+  session"/"recover draft" logic exists, not even partial or broken. No
+  "hold/park invoice" feature exists in this codebase either (grepped for
+  `hold_invoice|held_invoice|park.*invoice|suspend.*invoice` -- zero
+  matches), so there isn't even a manual escape hatch for a cashier who
+  senses trouble and wants to protect a large cart mid-build.
+- Network loss specifically changes nothing about this: `isOffline()` only
+  affects cached-lookup fallbacks and the two Pay-time save paths above --
+  a dropped connection mid-build is invisible to the live cart, which
+  keeps working purely in memory with the same (zero) protection it had
+  while online.
+
+**Blast radius:** high-severity but narrow-window -- a cart of any size
+(5 items or 150) is equally unprotected; only elapsed build time/typed
+effort at risk scales with cart size. A crash/refresh/freeze at any point
+before Pay or Save & Clear is a full, silent, unrecoverable loss of every
+item and every per-line edit (custom rate, discount, UOM, serial/batch
+selection) on that cart -- no error surfaced to the cashier, nothing to
+undo, just an empty cart on the next load.
+
+**Suggested approach when picked up (not designed in detail, no code
+written):**
+1. New Dexie table/schema for a draft-cart snapshot (items, order,
+   invoice_doc, sticky fields) -- none exists today; the closest available
+   primitive is `offline/db.ts`'s `persist(key)` (coalesced, worker-batched
+   writes, documented at `offline/db.ts:22-29`), whose batching machinery
+   is reusable but whose existing tables (`KEY_TABLE_MAP`,
+   `offline/db.ts:111+`) don't include anything shaped like this.
+2. A debounced writer hooked to `invoiceStore`'s existing
+   `metadata.changeVersion`/`touch()` signal (already bumped on every
+   mutation for total recalculation, `invoiceStore.ts:109-114` and the
+   `triggerUpdateTotals` debounce at lines 183-196) -- no new
+   change-detection plumbing needed, just a sibling that also persists.
+3. A best-effort `beforeunload` flush plus a `visibilitychange`-driven
+   periodic save -- both hook points are already used elsewhere in this
+   app for unrelated purposes (`plugins/print.ts:167-249` for print-popup
+   detection; `useNetworkLifecycle.ts:206-217`, `useItemSync.ts:14-33`,
+   `offline/sync/runtime.ts:89-96` for connectivity/sync-timer behavior),
+   so the wiring idiom is established even though no cart-specific
+   instance of it exists yet.
+4. A boot-time check (`posapp.ts`/`Pos.vue`) that detects a leftover draft
+   and prompts "Recover your last cart?" -- this is the part needing real
+   product decisions, not just code: staleness/expiry policy (a draft from
+   three days ago shouldn't resurrect), what happens if the POS
+   profile/customer/pricing context has changed since, and what happens if
+   a different cashier logs into the same terminal before the prompt is
+   acted on.
+
+**Rough size estimate:** a medium feature, not a quick fix -- the
+storage/debounce plumbing (items 1-2 above) is probably about a day's work
+given the existing primitives; the recovery-prompt UX and staleness/edge
+-case handling (items 3-4) is where the real time and product-decision
+surface is. Nothing architecturally blocks it -- explicitly not a "needs a
+redesign" situation, just unbuilt.
+
+## 45. TRACKED, NOT YET FIXED -- search_customers()'s unindexed LIKE '%...%' mobile-number fallback scan (2026-09-14)
+
+**Status: deferred.** Found while investigating, at the user's request,
+whether `search_customers()` (`posawesome/posawesome/api/customers.py:251-
+297`) has a real performance problem -- it does a `mobile_no LIKE
+'%fragment%'` scan pulling up to 500-1000 rows, filtered further in
+Python, used as the online fallback for mobile-number search. Investigation
+only -- nothing built yet; recorded here so it isn't lost, and explicitly
+gated on getting a real production number before deciding whether it's
+worth doing (see below).
+
+**Mechanism (traced):** `search_customers()` builds a 4-digit fragment from
+the longest normalized digit-key in the search term (`digits[-4:]`,
+`customers.py:265-266`) and filters `Customer` with
+`{"mobile_no": ["like", f"%{fragment}%"], "disabled": 0}` (plus an optional
+`customer_group` restriction), capped at `limit_page_length=max(result_limit
+* 5, 500)` (`customers.py:267-291`). The result is then re-filtered in
+Python via `_mobile_matches_search()` (`customers.py:43-50`) for the real,
+fuzzy match (handles leading `0`/`00` country-code prefixes and 8/9/10-digit
+tail variants across both sides of the comparison).
+
+**What's actually slow, precisely identified:** not row count, not the
+Python-side filtering (a few hundred cheap string-containment checks,
+microseconds) -- it's the `LIKE '%...%'` pattern itself. Confirmed via the
+vanilla ERPNext `Customer` doctype JSON (`erpnext/selling/doctype/customer/
+customer.json`) that `mobile_no` has no `search_index` flag, and confirmed
+live on `staging.local` (`SHOW INDEX FROM \`tabCustomer\``) that only
+`PRIMARY`, `customer_name`, and `customer_group` are indexed -- `mobile_no`
+has none. But a plain index on `mobile_no` would not actually fix this
+query: a **leading wildcard defeats a standard B-tree index** in
+MySQL/MariaDB regardless of whether one exists, since only prefix matches
+(`'abc%'`) can use it. The `LIMIT` also doesn't bound scan cost, only result
+size -- if a fragment matches fewer than 500 rows (the common case), the
+engine must still examine every row before concluding there's nothing more,
+so scan cost scales with total table size, not match count.
+
+**Frequency, traced precisely:** this is a rare fallback, not a hot path.
+The only frontend caller is `fetchServerMobileMatches()`
+(`frontend/src/posapp/stores/customersStore.ts:384-413`), invoked from
+`performSearch()` (`customersStore.ts:463-510`) only when (a) the search
+term is mobile-number-shaped AND (b) the local IndexedDB cache -- which
+*is* properly indexed via Dexie's `.where(...).startsWith(...)`
+(`customersStore.ts:415-461`) -- already returned zero matches. Most mobile
+searches never reach the server at all.
+
+**Real-world urgency -- explicitly unverified, needs a real number:** the
+only customer data reachable from this dev environment is `staging.local`
+(30 total customers, 4 with a mobile number -- confirmed via direct query)
+and `rewards.staging.local` (a different site entirely, no `tabCustomer`
+table at all). Neither is representative of Swan's real production scale,
+and production (`e.swan-intl.com`) is not reachable from this environment.
+**Do not treat this as urgent or not-urgent without checking the real
+production `Customer` row count first** -- at a few thousand rows this is
+probably a non-issue given how rarely the fallback fires; at tens of
+thousands+ it's a real, felt slowness the next time it fires.
+
+**Suggested approach when picked up (not designed in detail, no code
+written):** a plain index on `mobile_no` would be a no-op for this query
+shape (see above) -- the real fix needs a normalized, indexable column:
+1. A stored, digits-only mobile column kept in sync via a `before_save`/
+   `validate` hook on `Customer` (covering create AND update -- including
+   non-UI paths like bulk import/API-created customers, not just the POS
+   flow, or the indexed column will silently drift out of sync).
+2. A **reversed-digits** variant of that column, since the real search need
+   is "ends with these last 4 digits" -- a suffix search, which becomes a
+   *prefix* search (`LIKE 'reversed_fragment%'`, indexable) once the digits
+   are stored reversed.
+3. A backfill migration for existing customers.
+4. Cheaper, lower-benefit interim mitigation that needs no schema change:
+   tightening the `disabled=0`/`customer_group` pre-filters reduces rows
+   examined post-filter, but only helps when a POS profile actually
+   restricts customer groups (many don't -- the filter is conditional), and
+   doesn't change the fundamental un-indexability of the `LIKE '%...%'`
+   scan itself.
+
+**Risk to the fix, if built:** the SQL pre-filter that feeds the Python
+layer must remain a **true superset** of what `_mobile_matches_search()`
+currently considers a match (its fuzzy, multi-variant country-code/tail
+comparison) -- a narrower or differently-shaped pre-filter risks silently
+dropping a legitimate match before Python ever sees it. Testing would need
+to specifically cover country-code-prefixed numbers and varying tail-length
+matches, confirming identical result sets before/after for the same search
+terms, not just "the query runs faster."
+
+## 46. TRACKED, NOT YET FIXED -- print-format list re-fetched unnecessarily on every POS-profile/invoice-type change; a fix was built and then reverted after a staging discrepancy (2026-09-14)
+
+**Status: deferred, fix reverted.** `get_print_formats()`
+(`frontend/src/posapp/components/pos/Payments.vue:1033-1061`) re-fetches
+the print-format list on every POS-profile and invoice-type change, even
+though print formats essentially never change mid-shift. A caching fix was
+designed, implemented, and passed its own full regression checklist
+(241/241 frontend files, 1257/1257 tests; clean `bench build`; new
+regression guards confirmed to genuinely fail without the fix via
+`git stash` revert/reconfirm) -- but the user found a discrepancy while
+manually testing it on staging (see below) and asked to drop it and revert
+rather than ship something not fully understood. **The implementation was
+fully reverted** (`Payments.vue` restored to its last-committed state; the
+three new files -- `utils/paymentPrintFormatCache.ts`,
+`tests/paymentPrintFormatCache.spec.ts`,
+`tests/paymentsPrintFormatCacheWiring.spec.ts` -- deleted, all untracked,
+never committed). Nothing of the fix remains in the working tree. Recorded
+here, including the design that was built and the unresolved discrepancy,
+so a future session doesn't have to re-derive the investigation from
+scratch.
+
+**Root cause, as traced:** two watchers in `Payments.vue` call
+`get_print_formats()` unconditionally -- the `uiStore.posProfile` watcher
+(`immediate: true`, fires on *any* reference change to the profile object)
+and the `invoiceType` watcher (fires on every Invoice/Return/Order/
+Quotation toggle). The backend
+(`posawesome/posawesome/api/print_formats.py:9-12`) does
+`frappe.get_all("Print Format", filters={"doc_type": doctype})` -- the
+result depends **only on `doctype`**, not company or profile at all.
+Profile/invoiceType only decide *which* doctypes get resolved
+(`utils/paymentPrintDoctype.ts`'s `resolvePaymentPrintFormatDoctypes` ->
+`resolvePosDocumentDoctype`, driven by `invoiceType` plus two profile
+booleans -- `posa_allow_sales_order`/`posa_create_only_sales_order` and
+`create_pos_invoice_instead_of_sales_invoice`). Toggling Invoice <-> Return
+resolves to the identical `["Sales Invoice", "POS Invoice"]` doctype set
+both times, yet re-fetched on every toggle.
+
+**The design that was built (reverted, not lost -- can be re-implemented
+directly from this description):** a module-level cache
+(`Map<string, string[]>`, keyed by doctype) in a new plain `.ts` file,
+deliberately **not** component-local state -- `Payments.vue` is mounted/
+unmounted on every payment-dialog open/close in dialog mode
+(`components/pos/shell/Pos.vue:21-32`, `v-dialog v-if="usePaymentDialog"`),
+so a `ref` in `<script setup>` would be wiped on every reopen and provide
+close to no benefit in that mode; a module-level singleton survives across
+mounts for the life of the tab. Session-lifetime, no TTL (print formats
+are static config, unlike #3's customer-balance freshness check). Only
+successful fetches were cached, never a failed one, so a transient network
+error would retry next call instead of leaving formats permanently empty.
+Per-doctype granularity so a partial cache hit (e.g. Invoice's two
+doctypes already cached, then switching to Order) only fetches the
+still-missing doctype.
+
+**The staging discrepancy that stopped this (not yet investigated further):**
+the user observed **4 print-format-related network calls still firing on
+one dialog open** on staging, which doesn't match what the design/tests
+predicted -- with `invoiceType === "Invoice"` or `"Return"`,
+`resolvePaymentPrintFormatDoctypes` should resolve to exactly 2 doctypes
+(`["Sales Invoice", "POS Invoice"]`), meaning at most 2
+`get_print_formats` calls on a cold cache and 0 on a warm one, never 4 on
+a single open. This was not chased down before the revert -- worth
+investigating properly next time rather than assuming the cache logic
+itself was correct just because its unit/wiring tests passed. Candidate
+explanations to check first when this is picked back up (none confirmed):
+whether `get_print_formats()` is somehow being invoked more than once per
+dialog open (e.g. both watchers firing in the same tick on initial mount,
+`uiStore.posProfile`'s `immediate: true` plus a near-simultaneous
+`invoiceType` watcher firing), whether "4 network calls" in the browser's
+network tab actually means 4 *distinct* `frappe.call` invocations to
+`get_print_formats` specifically versus other requests being miscounted
+alongside it, or whether the resolved doctype list is larger than 2 in
+whatever POS profile/invoice-type combination was being tested (worth
+confirming live via `resolvePaymentPrintFormatDoctypes`'s actual inputs on
+that profile rather than assuming the Invoice/Return branch was the one in
+effect).
+
+**Next steps when picked up:** reproduce the 4-call observation first
+(browser devtools network tab, filtered to `get_print_formats`, on the
+exact profile/invoice-type combination the user tested) and get a precise
+count and set of arguments for each call *before* re-implementing anything
+-- the fix design above is very likely still correct, but should be
+verified against a real repro rather than re-shipped on the strength of
+its unit tests alone a second time.
+
+## 47. TRACKED, NOT YET FIXED -- customer_balance_replay is dead code, and an offline credit-conflict-at-sync falls back to a generic "saved as draft" toast with no explanation (2026-09-14)
+
+**Status: deferred.** Two related gaps in the offline-sync path for
+credit-redeeming sales, found and reported by the user. Investigation
+only -- nothing built yet; recorded here so it isn't lost.
+
+**Gap 1 -- dead code:** `customer_balance_replay` is built and attached to
+an offline sale's queued entry whenever store credit was redeemed
+(`frontend/src/offline/invoices.ts`, inside `prepareOfflineInvoiceEntry()`,
+lines 192-209):
+```ts
+if (
+    Number(cleanEntry?.data?.redeemed_customer_credit || 0) > 0 &&
+    cleanEntry?.invoice?.customer &&
+    replaySources.length
+) {
+    cleanEntry.data.customer_balance_replay = {
+        customer: cleanEntry.invoice.customer,
+        redeemed_customer_credit: cleanEntry.data.redeemed_customer_credit,
+        sources: replaySources,
+        timestamp: Date.now(),
+    };
+}
+```
+Confirmed via a repo-wide grep for `customer_balance_replay`: it is written
+at exactly this one call site and read nowhere else in the codebase --
+the only other match is `frontend/tests/storedValue.spec.ts:176`, which
+only asserts the field is *built* correctly, not that anything downstream
+*consumes* it. Nothing in the sync-replay logic (`syncOfflineInvoices()`,
+same file, described below) ever reads `queuedInvoice.data.customer_balance_replay`.
+It's a genuinely unfinished feature -- built, wired to nothing, silently
+carried along in every offline credit-redemption payload for no effect.
+
+**Gap 2 -- generic failure message hides the real cause:**
+`syncOfflineInvoices()` (`offline/invoices.ts:322-370`) tries
+`submit_invoice` for each queued offline entry; on **any** failure
+(`catch (error)`, line 341) it falls back to `update_invoice()` (an
+unsubmitted draft, `docstatus=0`) with zero inspection of *why* the
+submit failed -- `error` is only `console.error`'d (line 342-345), never
+examined or threaded through. The resulting `totals` object
+(`{pending, synced, drafted}`, lines 380-384) carries only counts, no
+per-entry reason, and the toast built from it is a flat, cause-blind
+string in three separate places (`Navbar.vue:1118-1128`,
+`stores/syncStore.ts:85-90`, `composables/runtime/useQueueMetrics.ts:83-87`
+-- all three format the same `"{0} offline invoice{1} saved as draft"`
+template): a cashier sees "3 offline invoices saved as draft" with no clue
+whether that's a credit conflict, a stock issue, or something else
+entirely.
+
+**Confirmed real cause for the credit-conflict case specifically:** traced
+into the backend `submit_invoice()` path -- `_validate_customer_credit_redemption()`
+(`posawesome/posawesome/api/invoice_processing/creation.py:1068-1126`)
+re-fetches `get_available_credit()` **server-side** at actual submit time
+(not trusting the client-supplied credit figures the offline sale was
+built against) and `frappe.throw()`s one of two specific, identifiable
+messages when the recomputed credit no longer matches what the offline
+sale tried to redeem (e.g. "The full available customer credit ({0}) must
+be applied -- partial redemption is not allowed.", line 1121-1125). This is
+exactly the exception `syncOfflineInvoices()`'s generic `catch` block
+swallows without inspecting -- the specific, real reason ("credit was
+already spent elsewhere while this sale was offline") is available in
+`error.message`/`error.exc_type` at the exact point it's discarded.
+
+**Suggested approach when picked up (not designed in detail, no code
+written):**
+1. Decide `customer_balance_replay`'s fate first, since gap 2's fix may
+   depend on it: either (a) finish it -- have the sync-retry path
+   genuinely attempt to replay/re-derive the credit redemption against
+   fresh server state using the `sources`/`redeemed_customer_credit` it
+   already carries, or (b) remove it as dead weight if a replay attempt is
+   deemed not worth building (e.g. if the "recompute and reject" behavior
+   in `_validate_customer_credit_redemption()` is actually the desired,
+   safe behavior and a client-side replay would just be redundant/risky).
+2. Regardless of (1), thread the real failure reason through
+   `syncOfflineInvoices()`'s catch block instead of discarding `error` --
+   at minimum, detect this specific credit-conflict exception (by message
+   match or, better, a dedicated `exc_type`/error code from the backend
+   the frontend can check reliably rather than string-matching a
+   translatable message) and surface a distinct toast/detail line
+   specifically for it, instead of the generic drafted-count message.
+   `totals`/`normalized` would need a new field (e.g. a reasons breakdown,
+   not just a count) to carry this from `syncOfflineInvoices()` through to
+   the three toast call sites.
+
+**Risk to the fix, if built:** the credit-recompute-at-submit behavior in
+`_validate_customer_credit_redemption()` itself must not change --
+its whole point is that it's the trustworthy, server-side final check
+(the frontend/offline figures are pre-submit UX only, explicitly
+documented in that function's own docstring). Any fix here should only
+add *visibility* into why a draft fallback happened, not alter when or
+whether one happens. If (1)(a) -- an actual replay attempt -- is pursued,
+it needs its own careful design: a naive replay against possibly-stale
+`sources` could re-introduce exactly the kind of double-spend the
+recompute-and-reject behavior exists to prevent.
+
+## 48. TRACKED, NOT YET FIXED -- Invoice Management reprint has no in-app preview before silent QZ print (2026-09-14)
+
+**Status: deferred, feature idea, investigated and scoped, not built.** The
+user asked whether an in-app "preview before print" step would make sense
+specifically for Invoice Management's reprint button, as distinct from the
+original Pay-time print -- reprint isn't a time-pressured checkout moment
+(a cashier looking something up, resolving a dispute, reprinting a lost
+receipt), unlike the original sale, where speed genuinely matters and a
+preview would be actively counterproductive (confirmed separately: with
+QZ Tray configured, as "Test Pos" is, both the original print and today's
+reprint go completely silently to the physical printer with zero visual
+step of any kind -- no browser dialog, no in-app preview, nothing rendered
+on screen; verified by tracing `printDocumentViaQz()` in
+`frontend/src/posapp/services/qzTray.ts:515-544`, which fetches print HTML
+server-side via `frappe.www.printview.get_html_and_style` and sends it
+straight to the printer with no DOM rendering step at all). This entry
+records the investigated feasibility and shape of a reprint-only preview,
+for a future session to build.
+
+**Mechanism this would build on:** the reprint button
+(`InvoiceManagement.vue`'s `printInvoice()`, lines 3836-3895) already
+branches on how the profile is configured -- `printDocumentViaConfiguredQz()`
+when QZ Tray is set up (silent, no visual step), `silentPrint()` as a raw
+-print/QZ-failure fallback, or `window.open(url, "Print")` when QZ isn't
+configured at all (opens Frappe's own generic `/printview` page, which
+already shows the real invoice before the browser's native print dialog
+fires -- an implicit preview of sorts, just not a custom POS Awesome UI).
+The HTML a new preview would show is **already fetched today, on every
+silent print** -- `printDocumentViaQz()` calls
+`frappe.www.printview.get_html_and_style` (already whitelisted, already in
+active use) to get the exact HTML+style that goes straight to the printer.
+No new backend endpoint or data source would be needed.
+
+**Why this is safely isolated from Pay-time printing:** reprint
+(`InvoiceManagement.vue`'s `printInvoice()`) and the original sale print
+(`Payments.vue`'s print flow) are already separate functions in separate
+files with no shared call path -- they only share a few *read-only* utility
+functions (`resolvePaymentPrintFormat`, `printDocumentViaQz`,
+`printHtmlViaQz`), none of which would need behavior changes for this. The
+one real touch point is exporting a currently-private helper
+(`buildPrintHtml` in `qzTray.ts:86`, not currently exported) -- a pure
+visibility change with zero behavior difference, zero risk to how Pay-time
+printing works today.
+
+**What it would involve (not designed in full, no code written):**
+1. A new small dialog component (e.g. `PrintPreviewDialog.vue`) -- a
+   Vuetify modal rendering the fetched HTML+style, most safely via a
+   sandboxed `<iframe srcdoc="...">` (the print HTML is a full rendered
+   document with its own styling, not something safe to inject directly
+   via `v-html` into the app's own DOM) plus Print/Cancel actions.
+2. Export `buildPrintHtml` from `qzTray.ts` (currently module-private,
+   `qzTray.ts:86`).
+3. Modify `printInvoice()`'s QZ branch specifically: fetch the HTML via
+   the existing `frappe.www.printview.get_html_and_style` call, open the
+   preview dialog with that content, and only call the existing
+   `printHtmlViaQz()` (already exported, `qzTray.ts:437`) on confirm --
+   reusing the same already-fetched HTML for the actual print, so preview
+   and print are guaranteed to match and nothing is fetched twice.
+4. New tests: a new dialog-component spec, plus a raw-source wiring test
+   for the modified `printInvoice()` branch (this file very likely uses
+   the same `.js`-suffix-importing-`.ts` convention as `Payments.vue` --
+   would need to confirm and follow the same raw-source-assertion pattern
+   if so).
+
+**Two open scope questions, not yet decided:**
+1. **Raw/ESC-POS printing** (`posa_raw_printing`, currently off for "Test
+   Pos" but a real configuration option) is a fundamentally different
+   rendering pipeline -- escape codes for a thermal printer, not HTML.
+   There's no "rendered document" to preview the same way; a preview there
+   would need to be, at best, a plain confirm prompt with no real visual
+   content, or the raw-print path could be left out of the preview feature
+   entirely (print immediately as today, preview only gates the HTML/QZ
+   path).
+2. **The browser-fallback path** (no QZ configured -- `window.open(url,
+   "Print")`) already opens a visible tab showing the real invoice before
+   the browser's native print dialog fires, which arguably already
+   functions as an implicit preview. Worth deciding whether to route this
+   path through the new in-app modal too for a consistent look across all
+   three configurations, or leave it as-is since it already has a
+   visual step, just not a custom-styled one.
+
+**Rough size estimate:** small-to-medium -- smaller than the cart
+-persistence gap (§44, no new backend/schema work needed at all here; the
+fetch endpoint already exists and is already used exactly this way) and
+roughly comparable in scope to the discount-navigation fix or the
+customer-info-freshness caching work done earlier the same night. Estimated
+at roughly a focused half-day-to-a-day including the full regression
+checklist, mostly bounded by getting "Confirm actually prints correctly"
+right across the QZ/raw/browser-fallback branches and building the new
+dialog component, not by complexity in the core idea.
+
+## 49. Item discount editing: single toggle split into independent Disc %/Disc Amt POS Profile settings, plus a closed server-side manual-discount gap (2026-09-30)
+
+**Trigger:** the user wanted item-level discount editing in the cart
+locked down -- visible but non-editable, no role exception -- and asked
+for the backend to be checked first, since a frontend-only disable
+doesn't stop a tampered request payload.
+
+**Investigation found a real, pre-existing gap, not specific to
+discounts:** `posa_allow_user_to_edit_item_discount` (and its siblings
+`posa_allow_user_to_edit_rate`/`posa_allow_user_to_edit_additional_discount`)
+were referenced nowhere in the Python backend except a fixture export
+list and a one-time UI-reorganization patch -- never in any validation
+logic. `invoice_processing/creation.py` builds the Sales Invoice/POS
+Invoice doc straight from the client payload (`frappe.get_doc(data)` /
+`invoice_doc.update(data)`), trusting whatever `rate`/`discount_amount`/
+`discount_percentage` the client sent, per item, with no re-derivation
+from `price_list_rate` or an Item Price record. The only existing
+discount-related server check, `item_sale_controls.py`'s
+`validate_invoice_item_sale_controls()` (wired to the `Sales
+Invoice`/`POS Invoice` `validate` doc-event hook), only blocked discounts
+on items flagged `retailmind_non_discountable` and enforced an unrelated
+below-cost margin floor -- neither tied to the edit-permission toggles at
+all. Confirmed the same gap exists for `posa_allow_user_to_edit_rate`
+too, left untouched as out of scope.
+
+**First pass (superseded the same session):** hardcoded both Disc % and
+Disc Amt cart cells to always-disabled in `CartItemRow.vue`/
+`ItemsTableExpandedRow.vue`, and added a backend check
+(`collect_manual_item_discount_errors()`, wired alongside the existing
+`item_sale_controls.py` checks on the same `validate` hook) that rejected
+any non-offer item discount outright. Built, full regression run,
+reported -- then the user changed direction before testing it: keep the
+two toggles as independent per-field controls instead of removing them.
+
+**Final design, built and shipped instead:**
+- **New POS Profile field:** `posa_allow_user_to_edit_item_discount_amount`
+  ("Allow user to edit item discount amount") -- hand-added to
+  `custom_field.json` (never via `bench export-fixtures`, per this file's
+  own standing caution about that tool truncating the file), anchored
+  with `insert_after: "posa_allow_user_to_edit_item_discount"`. Verified
+  via live `frappe.get_meta("POS Profile")` on staging.local, both before
+  and after a second `bench migrate`, that it lands in the existing
+  "Pricing and Discount Controls" section right after its sibling and
+  stays put (idempotent) -- not just trusted from the fixture's own
+  `insert_after` value.
+- **Frontend:** the single `disableDiscountEdit` computed split back into
+  two independent ones -- `disableDiscountPercentEdit` (gated by
+  `posa_allow_user_to_edit_item_discount`, restored to its original
+  condition including the `posa_is_replace`/`posa_offer_applied`/
+  `retailmind_non_discountable` item-state exceptions) and
+  `disableDiscountAmountEdit` (identical shape, gated by the new field).
+  Same split applied in `ItemsTableExpandedRow.vue`.
+- **Backend:** `collect_manual_item_discount_errors()` now resolves both
+  POS Profile flags via `frappe.db.get_value()` and only rejects a
+  non-offer item discount when **both** are off. Either toggle being on
+  is a full exemption -- `discount_percentage` and `discount_amount` are
+  mathematically equivalent (typing one derives the other), so they were
+  deliberately not treated as two separate security boundaries; the two
+  toggles are a UI/workflow distinction for staff (which cell is
+  editable), not two different trust levels. This is the same trust
+  boundary the app already had before this whole change started, not a
+  new gap -- the fix only closes the case where both toggles are off.
+  `posa_offer_applied` remains the one disclosed, unclosed bypass
+  regardless of toggle state (no server-side POS Offers re-computation
+  exists to verify it against; already flagged as a known limitation,
+  not fixed here).
+- Chose reject (`frappe.throw`) over silently zeroing the discount on a
+  violation, confirmed by reading Frappe's own `Document.hook()`/
+  `compose()` in `document.py`: the core controller's `validate()`
+  (which computes `rate`/`amount`/`grand_total` from the client-supplied
+  discount) runs *before* app-level `doc_events` hooks fire, so zeroing
+  the discount field after the fact would leave the invoice's total
+  still reflecting the discount while the field itself read zero -- an
+  inconsistent, misleading record. Matches the existing
+  `non_discountable` check's own reject convention.
+
+**On Swan's live profiles:** both toggles currently off everywhere
+(the pre-existing `posa_allow_user_to_edit_item_discount` was manually
+turned off by the user on staging specifically to test the fully-locked
+state before deciding whether to ever turn one on for a given store) --
+so today, neither Disc % nor Disc Amt is editable by anyone, matching
+what was tested and confirmed on staging before this was committed.
+
+**Full regression check (final design):** frontend suite 242/242 files,
+1254/1254 tests (3 new/updated in `cartItemRowKeyboard.spec.ts` covering
+the split gating). Backend `item_sale_controls` module: 30/30 pass (24
+prior + 6 new, covering both-off/either-on/no-profile-given at both the
+unit and `validate_invoice_item_sale_controls` integration level) via
+`bench --site staging.local run-tests --module` -- hit the same
+known pre-existing, unrelated `run-tests` cleanup-stage crash
+(`ModuleNotFoundError: frappe.utils.nestedset`) documented earlier in
+this file; confirmed the actual test results (`OK`) print before that
+crash, unaffected by it. `invoice_processing.test_creation` also run:
+66/74 pass, 8 pre-existing failures confirmed present via `git stash`
+with this change removed entirely -- unrelated (`AttributeError:
+mode_of_payment`), and that module's own test harness fully mocks
+`frappe`/the document lifecycle, so it never exercises
+`item_sale_controls.py` regardless. `bench build --app posawesome`:
+clean, exit 0. `bench migrate`: required (fixture touched), run twice,
+confirmed idempotent field placement both times. Security review: as
+above -- trust boundary unchanged from before this session started
+(a policy the user explicitly re-affirmed), `frappe.db.get_value` calls
+parameterized (no injection surface), no new whitelisted endpoints.
+Confirmed untouched: `posa_allow_user_to_edit_rate` and everything
+rate-related; the separate invoice-level `additional_discount` field in
+`InvoiceSummary.vue`; the POS Offers engine (`useInvoiceOffers.ts` sets
+`posa_offer_applied`/discount fields directly, never through the now
+independently-gated manual editors, so offers still work regardless of
+either toggle's state).
+
+**Promoted:** tested and confirmed on staging by the user, then
+committed to `develop-swan` only -- `stable`/production intentionally
+untouched per explicit instruction.

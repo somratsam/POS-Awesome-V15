@@ -135,7 +135,7 @@
 									calcPrices(item, $event.target.value, $event),
 								]"
 								:disabled="
-									!pos_profile.posa_allow_user_to_edit_item_discount ||
+									!pos_profile.posa_allow_user_to_edit_item_discount_amount ||
 									!!item.posa_is_replace ||
 									!!item.posa_offer_applied ||
 									!!item.retailmind_non_discountable
