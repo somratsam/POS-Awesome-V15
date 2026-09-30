@@ -118,6 +118,86 @@ def collect_item_sale_control_errors(items, is_return=False):
     return errors
 
 
+DISCOUNT_EDIT_POLICY_FIELDS = (
+    "posa_allow_user_to_edit_item_discount",
+    "posa_allow_user_to_edit_item_discount_amount",
+)
+
+
+def _manual_item_discount_editing_allowed(pos_profile):
+    """True if either item-discount edit toggle is on for this POS Profile.
+
+    discount_percentage and discount_amount are mathematically equivalent --
+    typing one derives the other -- so they are not treated as two separate
+    security boundaries. Either toggle being on means manual item discounts
+    are permitted (no backend restriction); the two toggles are a UI/workflow
+    distinction for staff (which cell is editable), not two trust levels.
+    """
+    if not pos_profile:
+        return False
+
+    values = (
+        frappe.db.get_value(
+            "POS Profile",
+            pos_profile,
+            list(DISCOUNT_EDIT_POLICY_FIELDS),
+            as_dict=True,
+        )
+        or {}
+    )
+    return any(cint(values.get(field)) for field in DISCOUNT_EDIT_POLICY_FIELDS)
+
+
+def collect_manual_item_discount_errors(items, is_return=False, pos_profile=None):
+    """Reject a client-supplied item discount when both edit toggles are off.
+
+    The only mechanism that can legitimately put a non-zero
+    discount_amount/discount_percentage on a line regardless of the POS
+    Profile toggles is the POS Offers engine (posa_offer_applied); anything
+    else is either a manually-entered value or a tampered request payload,
+    and is rejected only when neither
+    posa_allow_user_to_edit_item_discount nor
+    posa_allow_user_to_edit_item_discount_amount is enabled for this POS
+    Profile. Returns are exempt: a return invoice intentionally carries
+    forward the original sale's per-item discount so the credited amount
+    matches what was actually charged (see invoice_processing/returns.py),
+    matching the same is_return exemption collect_item_sale_control_errors
+    already uses.
+    """
+    if is_return:
+        return []
+
+    if _manual_item_discount_editing_allowed(pos_profile):
+        return []
+
+    errors = []
+    for row in items or []:
+        get = row.get if hasattr(row, "get") else lambda *_a, **_k: None
+        if get("posa_offer_applied"):
+            continue
+
+        discount_percentage = abs(flt(get("discount_percentage")))
+        discount_amount = abs(flt(get("discount_amount")))
+        if discount_percentage <= LOSS_EPSILON and discount_amount <= LOSS_EPSILON:
+            continue
+
+        item_code = get("item_code")
+        item_name = get("item_name") or item_code
+        errors.append(
+            {
+                "item_code": item_code,
+                "item_name": item_name,
+                "policy": "block",
+                "reason": "manual_item_discount_locked",
+                "message": _(
+                    "Item {0} has a discount that is not permitted. Item discounts can no longer be edited manually."
+                ).format(item_name),
+            }
+        )
+
+    return errors
+
+
 def _resolve_buying_price_list(pos_profile=None):
     if pos_profile and frappe.get_meta("POS Profile").has_field("buying_price_list"):
         profile_buying = frappe.db.get_value("POS Profile", pos_profile, "buying_price_list")
@@ -548,6 +628,13 @@ def validate_invoice_item_sale_controls(invoice_doc):
     errors = collect_item_sale_control_errors(
         invoice_doc.get("items") or [],
         is_return=bool(invoice_doc.get("is_return")),
+    )
+    errors.extend(
+        collect_manual_item_discount_errors(
+            invoice_doc.get("items") or [],
+            is_return=bool(invoice_doc.get("is_return")),
+            pos_profile=invoice_doc.get("pos_profile"),
+        )
     )
     policy = resolve_sale_floor_policy(invoice_doc.get("pos_profile"))
     floor_errors = collect_below_buying_price_errors(

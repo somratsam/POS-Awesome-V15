@@ -151,6 +151,152 @@ class TestItemSaleControls(unittest.TestCase):
 
         self.assertEqual(errors, [])
 
+    def test_manual_item_discount_amount_blocks_sale(self):
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_amount": 5}]
+        )
+
+        self.assertEqual(errors[0]["reason"], "manual_item_discount_locked")
+        self.assertEqual(errors[0]["policy"], "block")
+
+    def test_manual_item_discount_percentage_blocks_sale(self):
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_percentage": 10}]
+        )
+
+        self.assertEqual(errors[0]["reason"], "manual_item_discount_locked")
+
+    def test_offer_applied_item_discount_is_allowed(self):
+        errors = self.controls.collect_manual_item_discount_errors(
+            [
+                {
+                    "item_code": "ITEM-1",
+                    "item_name": "Item One",
+                    "discount_amount": 5,
+                    "posa_offer_applied": 1,
+                }
+            ]
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_manual_item_discount_allows_zero(self):
+        errors = self.controls.collect_manual_item_discount_errors(
+            [
+                {
+                    "item_code": "ITEM-1",
+                    "item_name": "Item One",
+                    "discount_amount": 0,
+                    "discount_percentage": 0,
+                }
+            ]
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_manual_item_discount_is_skipped_for_returns(self):
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_amount": 5}],
+            is_return=True,
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_manual_item_discount_allowed_when_percentage_toggle_on(self):
+        self.frappe.db.get_value = lambda doctype, name, fields, as_dict=False: {
+            "posa_allow_user_to_edit_item_discount": 1,
+            "posa_allow_user_to_edit_item_discount_amount": 0,
+        }
+
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_amount": 5}],
+            pos_profile="Main POS",
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_manual_item_discount_allowed_when_amount_toggle_on(self):
+        self.frappe.db.get_value = lambda doctype, name, fields, as_dict=False: {
+            "posa_allow_user_to_edit_item_discount": 0,
+            "posa_allow_user_to_edit_item_discount_amount": 1,
+        }
+
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_percentage": 10}],
+            pos_profile="Main POS",
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_manual_item_discount_blocked_when_both_toggles_off(self):
+        self.frappe.db.get_value = lambda doctype, name, fields, as_dict=False: {
+            "posa_allow_user_to_edit_item_discount": 0,
+            "posa_allow_user_to_edit_item_discount_amount": 0,
+        }
+
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_amount": 5}],
+            pos_profile="Main POS",
+        )
+
+        self.assertEqual(errors[0]["reason"], "manual_item_discount_locked")
+
+    def test_manual_item_discount_blocked_when_no_pos_profile_given(self):
+        errors = self.controls.collect_manual_item_discount_errors(
+            [{"item_code": "ITEM-1", "item_name": "Item One", "discount_amount": 5}],
+            pos_profile=None,
+        )
+
+        self.assertEqual(errors[0]["reason"], "manual_item_discount_locked")
+
+    def test_validate_invoice_item_sale_controls_allows_manual_discount_when_toggle_on(self):
+        invoice = {
+            "items": [
+                {
+                    "item_code": "ITEM-1",
+                    "item_name": "Item One",
+                    "qty": 1,
+                    "rate": 90,
+                    "discount_amount": 10,
+                }
+            ],
+            "pos_profile": "Main POS",
+        }
+        self.frappe.db.get_value = lambda doctype, name, fields, as_dict=False: {
+            "posa_allow_user_to_edit_item_discount": 1,
+            "posa_allow_user_to_edit_item_discount_amount": 0,
+        }
+
+        with patch.object(
+            self.controls,
+            "collect_below_buying_price_errors",
+            return_value=[],
+        ):
+            # Should not raise -- either toggle being on is a full exemption.
+            self.controls.validate_invoice_item_sale_controls(invoice)
+
+    def test_validate_invoice_item_sale_controls_blocks_manual_item_discount(self):
+        invoice = {
+            "items": [
+                {
+                    "item_code": "ITEM-1",
+                    "item_name": "Item One",
+                    "qty": 1,
+                    "rate": 90,
+                    "discount_amount": 10,
+                }
+            ],
+            "pos_profile": "Main POS",
+        }
+
+        with patch.object(
+            self.controls,
+            "collect_below_buying_price_errors",
+            return_value=[],
+        ):
+            with self.assertRaisesRegex(Exception, "discount"):
+                self.controls.validate_invoice_item_sale_controls(invoice)
+
     def test_database_buying_price_blocks_sale(self):
         self._install_buying_price()
         errors = self.controls.collect_below_buying_price_errors(

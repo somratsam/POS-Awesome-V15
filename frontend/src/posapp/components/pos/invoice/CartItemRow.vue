@@ -240,7 +240,7 @@
 						data-pos-keyboard-target="cart-discount-percent"
 						role="button"
 						:aria-label="__('Edit discount percentage')"
-						:aria-disabled="disableDiscountEdit ? 'true' : 'false'"
+						:aria-disabled="disableDiscountPercentEdit ? 'true' : 'false'"
 						@keydown.enter.prevent="openDiscountPercentEdit"
 						@keydown.space.prevent="openDiscountPercentEdit"
 					>
@@ -277,7 +277,7 @@
 						autocorrect="off"
 						autocapitalize="off"
 						:spellcheck="false"
-						:disabled="disableDiscountEdit"
+						:disabled="disableDiscountPercentEdit"
 					></v-text-field>
 				</div>
 			</td>
@@ -296,7 +296,7 @@
 						data-pos-keyboard-target="cart-discount-amount"
 						role="button"
 						:aria-label="__('Edit discount amount')"
-						:aria-disabled="disableDiscountEdit ? 'true' : 'false'"
+						:aria-disabled="disableDiscountAmountEdit ? 'true' : 'false'"
 						@keydown.enter.prevent="openDiscountAmountEdit"
 						@keydown.space.prevent="openDiscountAmountEdit"
 					>
@@ -325,7 +325,7 @@
 						autocorrect="off"
 						autocapitalize="off"
 						:spellcheck="false"
-						:disabled="disableDiscountEdit"
+						:disabled="disableDiscountAmountEdit"
 					></v-text-field>
 				</div>
 			</td>
@@ -655,9 +655,17 @@ const disableRateEdit = computed(
 	() => !props.posProfile?.posa_allow_user_to_edit_rate || !!props.item.posa_is_replace,
 );
 
-const disableDiscountEdit = computed(
+const disableDiscountPercentEdit = computed(
 	() =>
 		!props.posProfile?.posa_allow_user_to_edit_item_discount ||
+		!!props.item.posa_is_replace ||
+		!!props.item.posa_offer_applied ||
+		!!props.item.retailmind_non_discountable,
+);
+
+const disableDiscountAmountEdit = computed(
+	() =>
+		!props.posProfile?.posa_allow_user_to_edit_item_discount_amount ||
 		!!props.item.posa_is_replace ||
 		!!props.item.posa_offer_applied ||
 		!!props.item.retailmind_non_discountable,
@@ -874,7 +882,7 @@ function handleRatePaste(event) {
 }
 
 function openDiscountPercentEdit() {
-	if (disableDiscountEdit.value) return;
+	if (disableDiscountPercentEdit.value) return;
 	isEditingDiscountPercent.value = true;
 	replaceDiscountPercentOnNextInput.value = true;
 	editingDiscountPercentValue.value = String(
@@ -922,7 +930,7 @@ function handleDiscountPercentPaste(event) {
 }
 
 function openDiscountAmountEdit() {
-	if (disableDiscountEdit.value) return;
+	if (disableDiscountAmountEdit.value) return;
 	isEditingDiscountAmount.value = true;
 	replaceDiscountAmountOnNextInput.value = true;
 	editingDiscountAmountValue.value = String(Number(props.item.discount_amount || 0));

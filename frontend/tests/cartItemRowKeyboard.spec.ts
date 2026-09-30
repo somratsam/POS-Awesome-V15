@@ -198,6 +198,48 @@ describe("CartItemRow keyboard editing", () => {
 		).toBe("2");
 	});
 
+	it("never opens discount amount editing unless posa_allow_user_to_edit_item_discount_amount is on", async () => {
+		vi.stubGlobal("__", (value: string) => value);
+		const wrapper = mountRow(
+			{ discount_percentage: 0, discount_amount: 5, price_list_rate: 10 },
+			{ visibleColumns: [{ key: "discount_amount" }] },
+		);
+
+		const display = wrapper.get(
+			'[data-pos-keyboard-target="cart-discount-amount"]',
+		);
+		expect(display.attributes("aria-disabled")).toBe("true");
+
+		await display.trigger("click");
+		await wrapper.vm.$nextTick();
+
+		expect(wrapper.find('input[inputmode="decimal"]').exists()).toBe(false);
+	});
+
+	it("opens discount amount editing when posa_allow_user_to_edit_item_discount_amount is on", async () => {
+		vi.stubGlobal("__", (value: string) => value);
+		const wrapper = mountRow(
+			{ discount_percentage: 0, discount_amount: 5, price_list_rate: 10 },
+			{
+				visibleColumns: [{ key: "discount_amount" }],
+				posProfile: {
+					posa_allow_user_to_edit_item_discount: true,
+					posa_allow_user_to_edit_item_discount_amount: true,
+				},
+			},
+		);
+
+		await wrapper
+			.get('[data-pos-keyboard-target="cart-discount-amount"]')
+			.trigger("click");
+		await wrapper.vm.$nextTick();
+
+		expect(
+			wrapper.get<HTMLInputElement>('input[inputmode="decimal"]').element
+				.value,
+		).toBe("5");
+	});
+
 	it("replaces the existing quantity with the first typed value", async () => {
 		vi.stubGlobal("__", (value: string) => value);
 		const wrapper = mountRow({ qty: 2 });
@@ -213,15 +255,7 @@ describe("CartItemRow keyboard editing", () => {
 
 	it("renders cart numeric editors without browser number widgets or autocomplete", async () => {
 		vi.stubGlobal("__", (value: string) => value);
-		const wrapper = mountRow(
-			{ discount_percentage: 2, discount_amount: 0, price_list_rate: 10 },
-			{ visibleColumns: [{ key: "discount_percentage" }] },
-		);
-
-		await wrapper
-			.get('[data-pos-keyboard-target="cart-discount-percent"]')
-			.trigger("click");
-		await wrapper.vm.$nextTick();
+		const wrapper = mountRow({ qty: 2 });
 
 		const input = wrapper.get<HTMLInputElement>(
 			'input[inputmode="decimal"]',
