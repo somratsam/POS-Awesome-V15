@@ -1982,7 +1982,7 @@ export default {
 	},
 	data: () => ({
 		activeTab: "history",
-		viewMode: "card",
+		viewMode: "list",
 		loading: false,
 		pageSize: TAB_PAGE_SIZE,
 		tabPages: {
@@ -2326,6 +2326,11 @@ export default {
 		},
 		invoiceManagementDialog(value) {
 			if (value) {
+				// Hard default, not a remembered preference: always open in
+				// List View, every time, regardless of what the view was left
+				// on the last time this same (session-long-lived) component
+				// instance was open.
+				this.viewMode = "list";
 				this.activeTab = this.invoiceManagementTargetTab || "history";
 				this.draftSource = getDefaultCommercialDocumentSource(
 					this.posProfile,

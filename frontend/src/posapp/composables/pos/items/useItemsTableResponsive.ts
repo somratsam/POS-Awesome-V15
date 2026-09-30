@@ -22,12 +22,11 @@ export const DATA_TABLE_EXPAND_COLUMN: TableHeader = {
 };
 
 // Optional (non-required) columns are kept in this priority order as width
-// allows -- earlier entries survive narrower widths than later ones.
-// price_list_rate is selected by default for most POS Profiles (see
-// useInvoiceItems.ts's loadColumnPreferences), so it's prioritized over
-// uom/posa_is_offer, which are opt-in and used by fewer stores. Any
-// optional column not listed here (future additions) falls in after all
-// of these.
+// allows -- earlier entries survive narrower widths than later ones. In the
+// real cart (see useInvoiceItems.ts), price_list_rate is now a required
+// column and will never reach this optional-priority path -- it's listed
+// here only so this generic utility still has a sensible priority for any
+// caller (including its own tests) that passes it in as optional.
 const OPTIONAL_COLUMN_PRIORITY = ["price_list_rate", "uom", "posa_is_offer"];
 
 // Same 48px the data-table's expand column always renders at
