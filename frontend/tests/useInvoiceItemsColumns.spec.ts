@@ -55,7 +55,7 @@ describe("useInvoiceItems column preferences", () => {
 
 		invoiceItems.setSelectedColumns([
 			"uom",
-			"price_list_rate",
+			"posa_is_offer",
 			"item_name",
 			"discount_value",
 			"unknown_column",
@@ -65,9 +65,13 @@ describe("useInvoiceItems column preferences", () => {
 		// discount_value (an alias for discount_percentage) and item_name
 		// are NOT valid optional keys -- discount_percentage is required
 		// (see the dedicated test below), and item_name always was.
+		// price_list_rate is also required now (Orig. Price is always
+		// shown, see the dedicated test further below), so it's no longer
+		// a valid optional key either -- uom/posa_is_offer are the only
+		// two left.
 		expect(invoiceItems.selected_columns.value).toEqual([
 			"uom",
-			"price_list_rate",
+			"posa_is_offer",
 		]);
 		expect(invoiceItems.items_headers.value.map((column) => column.key)).toEqual(
 			expect.arrayContaining([
@@ -83,7 +87,7 @@ describe("useInvoiceItems column preferences", () => {
 			]),
 		);
 		expect(localStorage.getItem("posawesome_selected_columns")).toBe(
-			JSON.stringify(["uom", "price_list_rate"]),
+			JSON.stringify(["uom", "posa_is_offer"]),
 		);
 	});
 
@@ -109,7 +113,24 @@ describe("useInvoiceItems column preferences", () => {
 		expect(discountColumns.every((column) => column.required)).toBe(true);
 	});
 
-	it("uses shortened header labels for Discount %/Amount/Actions, verified against a real narrow render", async () => {
+	it("never lets Orig. Price (price_list_rate) be excluded either -- same tier as Disc %/Amt/Rate/Amount", async () => {
+		const { useInvoiceItems } = await import(
+			"../src/posapp/composables/pos/invoice/useInvoiceItems"
+		);
+		const invoiceItems = useInvoiceItems(ref("Invoice"));
+
+		invoiceItems.setSelectedColumns([]);
+
+		const visibleKeys = invoiceItems.items_headers.value.map((column) => column.key);
+		expect(visibleKeys).toContain("price_list_rate");
+
+		const priceListRateColumn = invoiceItems.available_columns.value.find(
+			(column) => column.key === "price_list_rate",
+		);
+		expect(priceListRateColumn?.required).toBe(true);
+	});
+
+	it("uses shortened header labels for Discount %/Amount/Actions/Orig. Price, verified against a real narrow render", async () => {
 		// The original full labels ("Discount %", "Discount Amount",
 		// "Actions") don't fit within these columns' real widths at the
 		// compaction this table now needs -- table-layout: fixed stops the
@@ -121,7 +142,10 @@ describe("useInvoiceItems column preferences", () => {
 		// screenshot and finding garbled, not ellipsized, header text).
 		// Shortening the labels sidesteps that CSS bug entirely rather than
 		// trying to patch it. Actions becomes icon-only, matching the
-		// expand column's existing empty-title convention.
+		// expand column's existing empty-title convention. Orig. Price
+		// (price_list_rate) joined this required, space-constrained tier
+		// later and gets the same short-label treatment for the same
+		// reason.
 		const { useInvoiceItems } = await import(
 			"../src/posapp/composables/pos/invoice/useInvoiceItems"
 		);
@@ -133,5 +157,6 @@ describe("useInvoiceItems column preferences", () => {
 		expect(byKey("discount_percentage")?.title).toBe("Disc %");
 		expect(byKey("discount_amount")?.title).toBe("Disc Amt");
 		expect(byKey("actions")?.title).toBe("");
+		expect(byKey("price_list_rate")?.title).toBe("Orig. Price");
 	});
 });

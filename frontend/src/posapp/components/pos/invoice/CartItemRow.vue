@@ -210,7 +210,7 @@
 				</div>
 			</td>
 
-			<!-- Price List Rate (Optional) -->
+			<!-- Orig. Price (Price List Rate before any discount/offer) -->
 			<td
 				v-else-if="column.key === 'price_list_rate'"
 				v-bind="getCellAttrs('price_list_rate', 'text-end')"

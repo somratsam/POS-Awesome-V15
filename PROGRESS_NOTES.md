@@ -5292,3 +5292,98 @@ either toggle's state).
 **Promoted:** tested and confirmed on staging by the user, then
 committed to `develop-swan` only -- `stable`/production intentionally
 untouched per explicit instruction.
+
+## 50. Orig. Price cart column made permanent, and Invoice Management hard-defaults to List View (2026-09-30)
+
+**Trigger:** two small requests investigated together. (1) Show the
+item's pre-discount price-list rate in the cart, always visible. (2)
+Invoice Management should always open in List View, not whatever it was
+last left on.
+
+**Investigation found item 1 was already fully built, just not in the
+right tier:** a "Price List Rate" column already existed end to end --
+defined in `useInvoiceItems.ts`'s `available_columns`, rendered
+read-only in `CartItemRow.vue`, and already exposed for free in the
+COLUMNS settings menu (`InvoiceItemsActionToolbar.vue` generically loops
+every non-required column). It just lived in the optional,
+user-toggleable tier alongside UOM/Offer? rather than the permanent
+tier Disc %/Disc Amt/Rate/Amount already occupy. The user resolved two
+open questions: relabel to "Orig. Price" (matching the "Disc %"/"Disc
+Amt" abbreviation style -- space is tight, no horizontal scroll
+wanted), and move it into the required/permanent tier.
+
+**Item 2's investigation:** `InvoiceManagement.vue`'s `viewMode`
+defaulted to `"card"` in a plain `data()` -- no `localStorage`, no
+persisted preference anywhere in the file. But `Pos.vue` mounts
+`<InvoiceManagement>` unconditionally (no `v-if`) alongside the POS
+shell's other dialogs, so the component is created once per page load
+and never destroyed -- its own `v-dialog` is just toggled open/closed.
+That's why it looked like it "remembered" a session state: switching to
+Card mid-session and reopening the dialog later left `viewMode`
+wherever it was last set, since the component instance never
+re-runs `data()`. The existing `invoiceManagementDialog` watcher already
+hard-resets `activeTab` to a target/default every time the dialog opens
+-- the same spot needed a matching `viewMode` reset, which it didn't
+have.
+
+**Fix, both items:**
+- `useInvoiceItems.ts`: `price_list_rate` column relabeled `"Price List
+  Rate"` -> `"Orig. Price"`, moved `required: false` -> `true`. Removed
+  the now-dead special case in `loadColumnPreferences`'s no-saved-
+  preference fallback that used to force-include it (redundant once
+  `required` already guarantees it). Updated a stale comment in
+  `useItemsTableResponsive.ts`'s `OPTIONAL_COLUMN_PRIORITY` that
+  described this column as "selected by default... optional," which
+  is no longer true in the real app (left the array entry itself in
+  place, since the utility is generic and some other caller could still
+  pass it in as optional).
+- `InvoiceManagement.vue`: added `this.viewMode = "list";` to the
+  `invoiceManagementDialog` watcher's open branch, right alongside the
+  existing `activeTab` reset. Also changed the `data()` default from
+  `"card"` to `"list"` for consistency, though the watcher is what
+  actually matters given the component's session-long lifetime.
+
+**One trade-off flagged, not fixed, by design:** the responsive
+column-hiding logic (`useItemsTableResponsive.ts`) never hides
+`required` columns regardless of viewport width, so Orig. Price can no
+longer be dropped to make room on a narrow screen -- exactly matching
+Disc %/Disc Amt/Rate/Amount's existing behavior, which is the tier the
+user explicitly asked for. This does shrink the room left for the two
+still-optional columns (UOM, Offer?) before they get dropped on narrow
+viewports. The user asked to defer concrete narrow-screen verification
+(1366x768/1280x800) to their own later testing rather than have it
+block this commit -- an in-progress investigation into a real-browser
+measurement harness (reusing the real `ItemsTable.vue`/`CartItemRow.vue`
+components and CSS, plus a real, previously-measured anchor point from
+`itemSelectorLayout.ts`'s own comments: a 1366px window's selector
+panel, 4/12 split, measures ~455px, implying the invoice panel's 8/12
+share is roughly ~910px at that width) was stopped mid-way at the
+user's request, not because it hit a dead end.
+
+**Full regression check:** frontend suite 243/243 files, 1258/1258
+tests. New `invoiceManagementViewModeDefault.spec.ts` (3 tests, using
+the same raw-options-object `.call(context)` technique
+`invoiceManagementRepairFilter.spec.ts` already established for this
+heavy component -- verified against the pre-fix code first: the
+`data()` test failed against the old `"card"` default, and the watcher
+test failed with no `viewMode` line present, before either passed).
+Updated `useInvoiceItemsColumns.spec.ts`: the test asserting
+`price_list_rate` was still a valid optional key now uses `posa_is_offer`
+instead; added a dedicated test that it can never be excluded, and an
+assertion for the new "Orig. Price" label. Backend: N/A, no `.py` files
+touched. `bench build --app posawesome`: clean, exit 0. `bench
+migrate`: N/A, no doctype/fixture/print-format files touched. Security
+review: N/A, no user input/auth/data-access surface touched -- column
+visibility/labeling and a UI default-state reset only. Confirmed
+untouched: the three other column-related test files
+(`useItemsTableResponsive.spec.ts`, `itemsTableResponsiveColumns.spec.ts`,
+`posNarrowSplitBand.spec.ts`) use their own standalone header fixtures
+decoupled from `useInvoiceItems.ts`'s real column list, so needed no
+changes; `PriceListRateDialog.vue` (an unrelated admin feature) and
+`ItemsTableExpandedRow.vue`'s own spelled-out "Price List Rate" mobile
+form label (not the space-constrained grid header this request was
+about) were both deliberately left alone.
+
+**Promoted:** committed to `develop-swan` only, `stable`/production
+untouched. Narrow-screen horizontal-scroll behavior deferred to the
+user's own manual testing rather than verified here.
