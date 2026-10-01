@@ -362,6 +362,7 @@ fixtures = [
                     "Item-retailmind_controlled_item",
                     "Item-retailmind_non_discountable",
                     "Item-retailmind_locked_for_sale",
+                    "Item-custom_description_arabic",
                     "POS Profile-posa_allow_duplicate_customer_names",
                     "POS Profile-column_break_anyol",
                     "POS Profile-pose_use_limit_search",

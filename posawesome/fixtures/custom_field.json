@@ -8776,6 +8776,16 @@
 	},
 	{
 		"doctype": "Custom Field",
+		"dt": "Item",
+		"fieldname": "custom_description_arabic",
+		"fieldtype": "Data",
+		"label": "Description Arabic",
+		"description": "Arabic translation of Description, printed next to it on the Swan Sales Invoice receipt.",
+		"insert_after": "description",
+		"name": "Item-custom_description_arabic"
+	},
+	{
+		"doctype": "Custom Field",
 		"dt": "POS Profile",
 		"fieldname": "posa_allow_item_quick_edit",
 		"fieldtype": "Check",

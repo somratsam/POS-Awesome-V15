@@ -5387,3 +5387,77 @@ about) were both deliberately left alone.
 **Promoted:** committed to `develop-swan` only, `stable`/production
 untouched. Narrow-screen horizontal-scroll behavior deferred to the
 user's own manual testing rather than verified here.
+
+## 51. Arabic description printed next to the English description on the "Swan Sales Invoice" receipt (2026-10-01)
+
+**Request.** Print a pre-stored Arabic translation next to each receipt
+line's English `description` (the category word, e.g. "JACKET"), with
+no change for items that have no translation yet. The user had already
+created `Item.custom_description_arabic` (Data, after `description`) by
+hand on production, run migrate, and bulk-filled it for the 552 Max&Co
+rows; the other 8 brands are still blank.
+
+**Field now git-tracked.** Hand-added `Item-custom_description_arabic`
+to `posawesome/fixtures/custom_field.json` (key set copied from the
+neighbouring `Item-retailmind_short_name` entry; no `export-fixtures`)
+and to `hooks.py`'s Custom Field filter list. Label "Description
+Arabic" -- the label Customize Form derives that fieldname from. Note
+for production: fixture import is `force=True`, so the next production
+migrate after this is promoted will overwrite the hand-made field's
+properties with this entry (column and data are untouched). On staging
+the console-made copy was deleted first so the field was provably
+created by migrate alone; it lands directly under `description`, in
+Item's own (collapsible) "Description" section -- the right place.
+
+**Print format (DB-only, not in git).** The user pasted production's
+current HTML; it matched staging's copy exactly (only a trailing
+newline differed), so no production-only hand-edits were at risk. Three
+additions, the rest byte-identical:
+
+- One batched lookup per receipt (`frappe.db.get_all("Item", name in
+  the invoice's item codes)`), guarded by
+  `frappe.db.exists("Custom Field", "Item-custom_description_arabic")`:
+  selecting a nonexistent column would raise a SQL error and fail the
+  print, so the same HTML is safe on a site without the field.
+- If the item has a non-blank Arabic value, the description line becomes
+  a flex row: English left, Arabic right in a `dir="rtl" lang="ar"`
+  span, escaped with `|e` (Frappe's Jinja has no autoescape). Otherwise
+  the original description line is emitted unchanged.
+- CSS: the English span doesn't shrink (capped at 60% width) and only
+  the Arabic wraps -- a first version let a long Arabic string squeeze
+  "HAT-CAP" into "HAT-"/"CAP". Spacing uses `margin-left`, not flex
+  `gap`, in case QZ Tray's embedded HTML engine predates flex gap.
+
+**Verified on staging** via `frappe.www.printview.get_html_and_style`
+(the function the QZ path calls), rendered as the non-admin Test Pos
+cashier `testserver@swan.com`, then rasterised in headless Chromium at
+80mm: field absent -> receipt prints, description lines identical to
+the original; one item with Arabic + one blank -> Arabic right-aligned
+on the same line, blank item unchanged; whitespace-only value treated as
+blank; `<b>` injection escaped; long Arabic wraps under itself, long
+English wraps under itself, no horizontal overflow. Receipt height with
+a typical short translation is unchanged (1410px either way). Staging
+item `30410232030043` keeps the test value "جاكيت"; all other probes
+were reverted. Not verified: an actual QZ Tray/thermal print (QZ's own
+renderer, not Chromium) -- the receipt's existing Arabic lines already
+print through that path.
+
+**Regression check.** Frontend: 243/243 files, 1258/1258 tests.
+Backend (isolated): new `test_item_description_arabic_field` 2/2
+(fails with the `hooks.py` line removed -- checked), plus the three
+existing fixture-parsing modules `test_customer_credit_invoice_fields`
+2/2, `test_sale_floor_profile_settings` 3/3,
+`test_gift_card_profile_settings` 3/3. `bench build`: N/A, no frontend
+files touched. `bench migrate`: twice, exit 0, idempotent (same
+placement both runs, test value preserved). Security: no new
+whitelisted method; the lookup runs inside `get_html_and_style`, which
+already enforces read permission on the Sales Invoice, reads one field
+of only that invoice's items, and its filter values go through
+`db_query`'s parameterised `in` condition; output escaped. Untouched:
+Z Report (separate format, hardcoded name in `printZReport()`), the
+DUPLICATE reprint banner and every other receipt section (byte-identical
+lines), raw ESC/POS path (off, not Jinja).
+
+**Promoted:** committed to `develop-swan` only, `stable`/production
+untouched. Production still needs the updated print format HTML pasted
+into Desk by the user (DB-only record).
