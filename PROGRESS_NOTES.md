@@ -5524,3 +5524,69 @@ unchanged. Regression check: frontend 243/243 files, 1258/1258 tests;
 `test_z_report` 3/3, `test_print_assets` 4/4 (same pre-existing
 teardown error); build N/A; migrate twice, exit 0, live equals git.
 Committed to `develop-swan` only.
+
+## 53. Promotion of 15 pending commits to stable, combined receipt HTML, stale-test fixes (2026-10-02)
+
+**Promoted to `stable`** (`0b4ca38..972e712`, pushed): `f545d53`,
+`c2a9270`, `1ae53b9`, `b720667`, `f79fb6c`, `b384128`, `e535058`,
+`99fc978`, `b15a938`, `4d8bc26`, `d334397`, `fe750d4`, `3082dc6`,
+`7286bf5`, `501bed0` in that order, plus the test fix `ae9b484` below.
+The last five conflicted only in `PROGRESS_NOTES.md` (stable's copy stops
+at section 28; each commit appends a later section). Per the user's
+choice, stable keeps its own notes unchanged: code taken, notes dropped.
+Every promoted commit's code diff verified byte-identical to its original
+(`git patch-id`), and `stable`'s tree now differs from `develop-swan`
+only in `PROGRESS_NOTES.md` and `CLAUDE.md`.
+
+**Combined receipt HTML.** `4d8bc26` had also switched the DB-only
+"Swan Sales Invoice" receipt to the shared
+`credit_exchange.get_customers_with_same_shift_return()` on staging
+(2026-09-15, per the Version log), but a 2026-09-30 edit put the old
+inline SQL back, and production never had it -- so section 51's Arabic
+HTML (built from production's copy) still used the old SQL. Built one
+combined HTML: production's copy + Arabic description (section 51) +
+only the exchange-logic hunk of the 09-15 version (its layout was older
+and was not reused). Verified on staging as the cashier against
+`ACC-SINV-2026-00083` with the return's state changed inside a
+rolled-back transaction: submitted same-shift return -> "Exchange Value"
+both ways; cancelled or draft return -> old SQL wrongly said "Exchange
+Value", combined says "Credit Applied"; return in another shift ->
+"Credit Applied" both ways. Staging's print format now holds it.
+Production must paste it **after** migrate: it calls a method that only
+exists once `4d8bc26` is deployed.
+
+**Stale tests found by the promotion's regression check, fixed in
+`ae9b484`** (test-only, each module failed before and passes after):
+`test_payment` still expected the change reconciliation against the
+cash account (`1ae53b9` deliberately switched it to the receivable
+account); `test_overview_loyalty` (3), `test_cash_movement_integration`
+(1) and `test_pos_closing_shift` (3) predate `4d8bc26`'s overview call
+into `credit_exchange`, whose opening-shift lookup hit fake shifts that
+returned the wrong shape or didn't exist. They now resolve to the
+test's own opening shift; one asserts the exchange lookup authorizes
+against that shift's profile/company. These had gone unnoticed because
+earlier regression checks didn't run these modules.
+
+**Regression check on `stable` (final).** Frontend 243/243 files,
+1258/1258 tests. Backend, 20 modules in isolation: 14 OK (incl. the 4
+fixed above, `test_same_shift_exchange` 5/5, `test_z_report` 3/3,
+`test_item_sale_controls` 30/30, `test_payments` 9/9); 4 fail exactly as
+on pre-promotion `stable` `0b4ca38` (`test_creation` 8 errors,
+`test_invoice_cancel_hooks` 2, `test_invoices` 1 import error,
+`test_workspace_gift_card` 2); 2 can't start (below). `bench build`
+exit 0. `bench migrate` twice, exit 0, Z Report live == git, Arabic
+field after `description`, both discount toggles present.
+
+**Open, not fixed:**
+- `test_credit_exchange` and `test_submitted_invoice_edits_credit_badge`
+  (both new in `4d8bc26`) crash before running any test: Frappe's
+  test-record preloader (`compat_preload_test_records_upfront` ->
+  `make_test_records`) tries to insert ERPNext's "Standard Buying" Price
+  List, which already exists on staging -> `DuplicateEntryError`. So the
+  tests written for the shared exchange logic have never actually run
+  here. Separate investigation, deliberately not blocking this release.
+- Security gap in `d334397`: `collect_manual_item_discount_errors()`
+  skips any line carrying `posa_offer_applied`, a client-supplied flag
+  never re-validated server-side, so a hand-crafted request could bypass
+  the new manual-discount restriction. Not a regression (no server check
+  existed before `d334397`); needs its own fix.
