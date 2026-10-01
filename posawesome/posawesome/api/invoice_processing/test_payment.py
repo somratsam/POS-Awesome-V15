@@ -195,7 +195,10 @@ class TestCreateChangePaymentEntries(unittest.TestCase):
         self.assertEqual(reconcile_args[0]["against_voucher_type"], "Sales Invoice")
         self.assertEqual(reconcile_args[0]["against_voucher"], "SINV-0001")
         self.assertEqual(reconcile_args[0]["allocated_amount"], 4)
-        self.assertEqual(reconcile_args[0]["account"], "Cash")
+        # The invoice's receivable account, not the cash account the change is paid
+        # from: update_voucher_outstanding() looks up the invoice's Payment Ledger
+        # Entries by this account, so "Cash" made it silently find nothing.
+        self.assertEqual(reconcile_args[0]["account"], "Debtors - TC")
         self.assertEqual(reconcile_args[0]["party_type"], "Customer")
         self.assertEqual(reconcile_args[0]["party"], "CUST-0001")
         self.assertEqual(reconcile_args[0]["dr_or_cr"], "credit_in_account_currency")
