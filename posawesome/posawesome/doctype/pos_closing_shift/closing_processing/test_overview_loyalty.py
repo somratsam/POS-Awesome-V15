@@ -45,14 +45,20 @@ def _install_stubs():
     )
     frappe_module.get_all = lambda *args, **kwargs: []
     frappe_module.get_meta = lambda *args, **kwargs: SimpleNamespace(get=lambda key, default=None: [])
-    frappe_module.db = SimpleNamespace(
-        get_value=lambda doctype, name, field: (
-            0
-            if (doctype, name, field)
-            == ("POS Profile", "POS-PROFILE-1", "create_pos_invoice_instead_of_sales_invoice")
-            else "Cash"
-        )
-    )
+    def db_get_value(doctype, name, field):
+        if doctype == "POS Opening Shift":
+            # The same opening shift frappe.get_doc returns above, as resolved by
+            # credit_exchange.get_customers_with_same_shift_return().
+            return ("POS-PROFILE-1", "My Co")
+        if (doctype, name, field) == (
+            "POS Profile",
+            "POS-PROFILE-1",
+            "create_pos_invoice_instead_of_sales_invoice",
+        ):
+            return 0
+        return "Cash"
+
+    frappe_module.db = SimpleNamespace(get_value=db_get_value)
     frappe_utils_module.flt = lambda value=0, precision=None: float(value or 0)
     frappe_utils_module.json = __import__("json")
 

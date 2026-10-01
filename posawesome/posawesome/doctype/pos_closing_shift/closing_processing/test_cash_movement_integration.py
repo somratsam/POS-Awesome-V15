@@ -6,6 +6,14 @@ from unittest.mock import patch
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing import creation, overview
 
 
+def _resolve_opening_shift(mock_exchange_frappe, returning_customers=()):
+    """Point credit_exchange.get_customers_with_same_shift_return() -- called by
+    the overview's "Exchanges Today" figure -- at the same opening shift this
+    test's get_doc returns, instead of a real database lookup."""
+    mock_exchange_frappe.db.get_value.return_value = ("POS-PROFILE-1", "My Co")
+    mock_exchange_frappe.get_all.return_value = list(returning_customers)
+
+
 class DummyClosingShift:
     def __init__(self):
         self.pos_opening_shift = None
@@ -68,6 +76,8 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         self.assertEqual(row.opening_amount, 50)
         self.assertEqual(row.expected_amount, 30)
 
+    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
+    @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
@@ -84,6 +94,8 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         mock_get_pos_invoices,
         mock_get_payments_entries,
         mock_get_authorized_pos_profile,
+        mock_exchange_frappe,
+        mock_exchange_auth,
     ):
         mock_get_pos_invoices.return_value = []
         mock_get_payments_entries.return_value = []
@@ -102,6 +114,7 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
             {"movement_type": "Deposit", "amount": 15},
         ]
 
+        _resolve_opening_shift(mock_exchange_frappe)
         result = overview.get_closing_shift_overview("POS-OPEN-1")
 
         self.assertEqual(result["cash_movements"]["count"], 2)

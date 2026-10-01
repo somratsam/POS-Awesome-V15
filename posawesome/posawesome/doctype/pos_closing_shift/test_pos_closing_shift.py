@@ -49,6 +49,14 @@ class DummyClosingShiftDoc:
         return self._tables.get(key, default)
 
 
+def _resolve_opening_shift(mock_exchange_frappe, returning_customers=()):
+    """Point credit_exchange.get_customers_with_same_shift_return() -- called by
+    the overview's "Exchanges Today" figure -- at the same opening shift this
+    test's get_doc returns, instead of a real database lookup."""
+    mock_exchange_frappe.db.get_value.return_value = ("POS-PROFILE-1", "My Co")
+    mock_exchange_frappe.get_all.return_value = list(returning_customers)
+
+
 class TestPOSClosingShift(unittest.TestCase):
     def _make_doc(self, data):
         doc = Mock()
@@ -235,6 +243,8 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result[0].invoice, "SINV-RET-0001")
         self.assertEqual(result[0].return_against, "ACC-SINV-2026-00222")
 
+    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
+    @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
@@ -245,6 +255,8 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_get_pos_invoices,
         mock_get_payments_entries,
         mock_get_authorized_pos_profile,
+        mock_exchange_frappe,
+        mock_exchange_auth,
     ):
         mock_frappe.get_doc.return_value = SimpleNamespace(
             doctype="POS Opening Shift",
@@ -263,6 +275,7 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_get_payments_entries.return_value = []
         mock_frappe.get_all.return_value = []
 
+        _resolve_opening_shift(mock_exchange_frappe)
         overview.get_closing_shift_overview("POS-OPEN-1")
 
         mock_get_pos_invoices.assert_called_once_with(
@@ -270,7 +283,10 @@ class TestPOSClosingShift(unittest.TestCase):
             "Sales Invoice",
             submit_printed=0,
         )
+        mock_exchange_auth.assert_called_once_with("POS-PROFILE-1", company="My Co")
 
+    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
+    @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
@@ -281,6 +297,8 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_get_pos_invoices,
         mock_get_payments_entries,
         mock_get_authorized_pos_profile,
+        mock_exchange_frappe,
+        mock_exchange_auth,
     ):
         mock_frappe.get_doc.return_value = SimpleNamespace(
             doctype="POS Opening Shift",
@@ -321,6 +339,7 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_get_payments_entries.return_value = []
         mock_frappe.get_all.return_value = []
 
+        _resolve_opening_shift(mock_exchange_frappe)
         result = overview.get_closing_shift_overview("POS-OPEN-1")
 
         self.assertEqual(result["loyalty_redemption"]["company_currency_total"], 10)
@@ -328,6 +347,8 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result["loyalty_redemption"]["count"], 1)
         self.assertEqual(result["payments_by_mode"][0]["company_currency_total"], 90)
 
+    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
+    @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
@@ -338,6 +359,8 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_get_pos_invoices,
         mock_get_payments_entries,
         mock_get_authorized_pos_profile,
+        mock_exchange_frappe,
+        mock_exchange_auth,
     ):
         mock_frappe.get_doc.return_value = SimpleNamespace(
             doctype="POS Opening Shift",
@@ -386,6 +409,7 @@ class TestPOSClosingShift(unittest.TestCase):
         mock_get_payments_entries.return_value = []
         mock_frappe.get_all.return_value = []
 
+        _resolve_opening_shift(mock_exchange_frappe)
         result = overview.get_closing_shift_overview("POS-OPEN-1")
 
         self.assertEqual(result["loyalty_redemption"]["company_currency_total"], 10)
