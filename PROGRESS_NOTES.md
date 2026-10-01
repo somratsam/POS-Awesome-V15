@@ -5461,3 +5461,51 @@ lines), raw ESC/POS path (off, not Jinja).
 **Promoted:** committed to `develop-swan` only, `stable`/production
 untouched. Production still needs the updated print format HTML pasted
 into Desk by the user (DB-only record).
+
+## 52. Z Report header: store name text replaced by the per-store receipt logo (2026-10-02)
+
+**Request.** Drop the store/branch name text from the top of the Z Report
+and show the store's receipt logo instead, using the same mechanism as
+the regular receipt. Whether the name was dynamic or hardcoded was
+explicitly out of scope.
+
+**Change** (`print_format/z_report/z_report.json`, git-tracked standard
+format, unlike the DB-only receipt): the
+`<div class="store-name">{{ report.store_name }}</div>` line and its
+now-unused `.store-name` CSS rule are replaced by the exact logo block
+the "Swan Sales Invoice" receipt uses --
+`frappe.call("posawesome.posawesome.api.print_assets.get_receipt_logo_data_uri",
+pos_profile=doc.pos_profile)`, rendered as a centred 40mm `<img>` only
+when a logo is set. The company line (`report.company`), title and
+everything below are unchanged. `get_z_report_data()` still returns
+`store_name`; nothing else reads it now, left in place. Live staging
+record was confirmed identical to git before migrating (no live-only
+edits for migrate's delete-and-recreate to wipe).
+
+**Verified on staging** via `get_html_and_style` (the Z Report's QZ
+print path), as cashier `testserver@swan.com`, rasterised in headless
+Chromium: Test Pos's closing shift embeds Test Pos's logo
+(`swanGalleriaLogo_bw66e47d.png`) and no longer contains "Swan
+Galleria"; a second, temporary POS Profile with a different test logo
+and a copied closing shift (inserted inside a transaction that was
+rolled back; test PNG deleted from disk) embeds its own logo and not
+Test Pos's; with no logo set the report starts at the company line, no
+broken image. Authorization unchanged and re-checked:
+`get_receipt_logo_data_uri()` returns "" for a plain user not assigned to
+the profile and the logo once assigned (managers -- e.g. testserver's
+Sales Manager role -- can read any profile, by design of
+`get_authorized_pos_profile()`).
+
+**Regression check.** Frontend: 243/243 files, 1258/1258 tests.
+Backend (isolated): `test_z_report` 3/3, `test_print_assets` 4/4 (both
+followed by the known pre-existing teardown ImportError, reproduced
+identically with this change stashed). `bench build`: N/A, no frontend
+files touched. `bench migrate`: twice, exit 0, live record equals git
+after both. Security: no new endpoint or query; reuses the existing
+whitelisted logo endpoint with its own per-profile authorization, keyed
+by the closing shift's own `pos_profile`. Untouched: the receipt print
+format, `printZReport()`'s QZ call, Z Report data/figures.
+
+**Promoted:** committed to `develop-swan` only, `stable`/production
+untouched. Unlike the receipt, this reaches production via the normal
+pull + migrate -- no Desk paste needed.
