@@ -5509,3 +5509,18 @@ format, `printZReport()`'s QZ call, Z Report data/figures.
 **Promoted:** committed to `develop-swan` only, `stable`/production
 untouched. Unlike the receipt, this reaches production via the normal
 pull + migrate -- no Desk paste needed.
+
+**Follow-up (same day): company name line removed too.** The user
+wanted the header to be the logo only, so the
+`<div class="company-name">{{ report.company }}</div>` line and its
+`.company-name` CSS rule were removed as well; the "Z REPORT" title and
+everything below are unchanged (the only remaining `report.company*`
+reference is `company_currency`, the "OMR" suffix). With no logo set,
+the report now starts directly at the "Z REPORT" title. Re-verified the
+same way (cashier render of Test Pos and a rolled-back second profile,
+Chromium screenshots): logo is the first element, no store or company
+name text anywhere, per-profile logos correct, plain-user authorization
+unchanged. Regression check: frontend 243/243 files, 1258/1258 tests;
+`test_z_report` 3/3, `test_print_assets` 4/4 (same pre-existing
+teardown error); build N/A; migrate twice, exit 0, live equals git.
+Committed to `develop-swan` only.
