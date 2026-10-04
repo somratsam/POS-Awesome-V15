@@ -5590,3 +5590,91 @@ field after `description`, both discount toggles present.
   never re-validated server-side, so a hand-crafted request could bypass
   the new manual-discount restriction. Not a regression (no server check
   existed before `d334397`); needs its own fix.
+
+## 54. Size/Color/Brand per invoice line and POS Cashier name as Report View columns (2026-10-05, `397b01d`)
+
+**Request.** Staff need Size, Color and Brand per line item, and the POS
+Cashier's real name (not email), as ordinary Sales Invoice Report View
+columns: Pick Columns, filters incl. date range, Group By, export.
+
+**Found first (live, staging).**
+- Size/Color exist only in Item's `Item Variant Attribute` table (exactly
+  `Size` and `Color`, 2001 variants each, plus one stray `Test Size`), which
+  Report View can't reach from Sales Invoice.
+- Brand was already stored: ERPNext's own `Sales Invoice Item.brand`
+  (121/126 lines filled), but `hidden: 1` -- and Report View's Pick
+  Columns/Group By skip hidden fields (`report_view.js`, `group_by.js`).
+- `posa_cashier` (Link User) is set server-side at submit from the PIN-
+  unlocked terminal cashier and displays the email.
+- `fetch_from` was rejected for the name: on a submit, Frappe only applies
+  fetched values when `allow_on_submit` is set, and the cashier is set in
+  the same save as the submit -- it could silently stay empty.
+
+**Built.**
+- New fields (hand-added to `custom_field.json` + hooks fixture list):
+  `Sales Invoice Item-posa_item_size`, `-posa_item_color` (Data, read-only,
+  after `brand` in the "Description" section) and
+  `Sales Invoice-posa_cashier_name` (Data, read-only, list view + standard
+  filter). The name field is anchored after
+  `posa_below_cost_override_details`, the end of a hidden 4-field chain
+  already anchored on `posa_cashier`, to avoid an `insert_after` tie; it
+  renders directly under POS Cashier.
+- Property Setters `Sales Invoice Item-brand-hidden` (0) and
+  `-brand-read_only` (1), in `property_setter.json` + hooks.
+- `invoice_reporting_fields.set_invoice_reporting_fields()`, called from
+  the existing Sales Invoice `validate` hook (`invoice.py`): Size/Color and
+  Brand always from the Item (never the client payload), cashier full name
+  (falls back to the user id). Snapshot at save time. Sales Invoice only.
+- Patch `backfill_invoice_reporting_fields`: creates the three fields from
+  the fixture's own definitions first (patches run before fixture sync),
+  backfills via SQL, and reports unmatched variant lines / other attribute
+  names to migrate output and Error Log ("Invoice reporting backfill:
+  unmatched Size/Color") instead of failing.
+
+**Verified on staging.** Migrate twice, field placement stable. Backfill:
+121/126 lines (the 5 blanks are the non-variant "Consulting" item),
+115/120 invoices with a cashier name (5 have no `posa_cashier`); report
+flagged only `Test Size`. Real draft insert (rolled back): variant row got
+38 / NAVY BLUE 002 / MAX&CO., cashier name "Aziz". Report View's own query
+API exercised for columns + Size filter + date range, and Group By Brand,
+Size-within-brand, Cashier Name. New module `test_invoice_reporting_fields`
+11/11 (wiring test confirmed to fail without the hook call). Frontend
+243/243, 1258/1258 (one transient failure on the first run, clean rerun,
+no frontend files touched). Not clicked through in a browser (headless
+Chromium can't start here: missing `libnspr4`).
+
+**Production.** After pull + `bench migrate` (no build), check Error Log
+for the backfill report; if production's attributes aren't spelled exactly
+`Size`/`Color`, adjust `ITEM_ATTRIBUTE_FIELDS` and rerun.
+
+## 55. TRACKED, NOT YET FIXED -- two stale test modules hiding untested behaviour, incl. draft-invoice scoping (2026-10-05)
+
+**Status: deferred to its own session.** Diagnosed while running the
+regression check for section 54; failures identical with that change
+stashed.
+
+- `test_invoice_cancel_hooks` (2 errors): its hand-made `frappe` stubs lack
+  `frappe.utils.cint`, which `invoice.py` -> `item_sale_controls.py` (and
+  `tax_contracts.py`) import. The two tests that load `invoice.py` never
+  reach an assertion. The file also leaves its stubs in `sys.modules` (no
+  cleanup, unlike `test_invoices.py`), so later Frappe code in the same
+  process crashes with `cannot import name 'child_table_fields' from
+  'frappe.model'` -- possibly related to the known full-suite `run-tests`
+  crash (unverified).
+- `test_invoices` (1 import error, 0 tests run): its fake `creation` module
+  lacks `trusted_invoice_shift_reassignment`, imported by
+  `invoices.py` -> `submitted_invoice_edits.py`.
+- Both breaking imports already exist in base release `cd5eba1`; these
+  tests have likely never passed on this fork.
+
+**The real gap** is what these tests were meant to guard, currently with
+no automated coverage: cancel-hook submission-ledger cleanup;
+**draft-invoice scoping** (`get_draft_invoices`: cashiers limited to their
+own shift, supervisors company-wide -- a permission boundary); submitted-
+invoice editability (recent normal invoice editable, returns blocked).
+Unknown whether any of these is actually broken until the tests run.
+
+**Suggested approach:** update or replace the stubs (patch real `frappe`
+as `test_invoice_reporting_fields.py` does), add `sys.modules` cleanup to
+the cancel-hooks test, then run the assertions; treat any assertion
+failure as a potential real bug.
