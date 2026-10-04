@@ -413,6 +413,9 @@ fixtures = [
                     "Sales Invoice-posa_return_valid_upto",
                     "Sales Invoice-posa_cashier",
                     "POS Invoice-posa_cashier",
+                    "Sales Invoice-posa_cashier_name",
+                    "Sales Invoice Item-posa_item_size",
+                    "Sales Invoice Item-posa_item_color",
                     "Sales Invoice-posa_below_cost_override",
                     "Sales Invoice-posa_below_cost_override_by",
                     "Sales Invoice-posa_below_cost_override_reason",
@@ -441,6 +444,8 @@ fixtures = [
                     "POS Invoice-posa_pos_opening_shift-no_copy",
                     "Sales Invoice Reference-sales_invoice-reqd",
                     "Sales Invoice-update_outstanding_for_self-default",
+                    "Sales Invoice Item-brand-hidden",
+                    "Sales Invoice Item-brand-read_only",
                 ),
             ]
         ],

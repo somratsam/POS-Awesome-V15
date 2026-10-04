@@ -65,5 +65,37 @@
   "property_type": "Text",
   "row_name": null,
   "value": "0"
+ },
+ {
+  "default_value": null,
+  "doc_type": "Sales Invoice Item",
+  "docstatus": 0,
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocField",
+  "field_name": "brand",
+  "is_system_generated": 0,
+  "modified": "2026-10-04 23:59:00.000000",
+  "module": null,
+  "name": "Sales Invoice Item-brand-hidden",
+  "property": "hidden",
+  "property_type": "Check",
+  "row_name": null,
+  "value": "0"
+ },
+ {
+  "default_value": null,
+  "doc_type": "Sales Invoice Item",
+  "docstatus": 0,
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocField",
+  "field_name": "brand",
+  "is_system_generated": 0,
+  "modified": "2026-10-04 23:59:00.000000",
+  "module": null,
+  "name": "Sales Invoice Item-brand-read_only",
+  "property": "read_only",
+  "property_type": "Check",
+  "row_name": null,
+  "value": "1"
  }
 ]

@@ -7,6 +7,7 @@ from frappe import _
 from frappe.model.mapper import get_mapped_doc
 from frappe.utils import add_days, flt
 
+from posawesome.posawesome.api.invoice_reporting_fields import set_invoice_reporting_fields
 from posawesome.posawesome.api.item_sale_controls import (
     validate_pos_invoice_item_sale_controls,
 )
@@ -28,6 +29,7 @@ def validate(doc, method):
     auto_set_delivery_charges(doc)
     calc_delivery_charges(doc)
     apply_tax_inclusive(doc)
+    set_invoice_reporting_fields(doc)
 
 
 def before_submit(doc, method):
