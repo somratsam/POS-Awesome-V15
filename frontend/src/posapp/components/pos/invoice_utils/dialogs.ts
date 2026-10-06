@@ -5,6 +5,12 @@ import {
 	loadDocumentSourceRecord,
 } from "../../../utils/documentSources";
 import { resolvePosDocumentDoctype } from "../../../utils/posDocumentMode";
+import {
+	findLinesMissingDiscountReason,
+	isDiscountReasonRequired,
+	preselectDiscountReason,
+	setLineDiscountReason,
+} from "../../../utils/discountReasons";
 
 declare const __: (_text: string, _args?: any[]) => string;
 declare const frappe: any;
@@ -12,6 +18,50 @@ declare const frappe: any;
 const showCompactPanel = (context: any, panel: "selector" | "invoice") => {
 	context?.eventBus?.emit?.("set_compact_panel", panel);
 };
+
+/**
+ * With the store's POS Profile switch on, payment is blocked until every
+ * discounted line has a reason: lines still missing one are listed for a
+ * reason pick, and false (stay on the cart) is returned unless all of them
+ * end up with one. With the switch off this returns true straight away.
+ */
+export async function ensureDiscountReasons(context: any) {
+	if (
+		context.isReturnInvoice ||
+		context.invoice_doc?.is_return ||
+		!isDiscountReasonRequired(context.pos_profile)
+	) {
+		return true;
+	}
+	if (!findLinesMissingDiscountReason(context.items).length) {
+		return true;
+	}
+	const blocked = () => {
+		context.toastStore?.show?.({
+			title: __("Choose a reason for each discount before payment."),
+			color: "warning",
+			key: "discount-reason-missing",
+		});
+		return false;
+	};
+	if (typeof context.uiStore?.requestDiscountReason !== "function") {
+		return blocked();
+	}
+	const missing = findLinesMissingDiscountReason(context.items);
+	const result = await context.uiStore.requestDiscountReason({
+		mode: "pay",
+		lines: missing,
+		preselect: preselectDiscountReason(context.items, context.uiStore.discountReasons),
+	});
+	if (!result?.reason) {
+		return blocked();
+	}
+	for (const line of missing) {
+		setLineDiscountReason(context.invoiceStore, line, result.reason);
+	}
+	// Re-check rather than trust the pick: payment needs every line covered.
+	return findLinesMissingDiscountReason(context.items).length ? blocked() : true;
+}
 
 export async function show_payment(context: any) {
 	// Guard against a rapid double-click/double-tap or a held keyboard
@@ -53,6 +103,10 @@ export async function show_payment(context: any) {
 		const isValid = context.validate ? await context.validate() : true;
 
 		if (!isValid) {
+			return;
+		}
+
+		if (!(await ensureDiscountReasons(context))) {
 			return;
 		}
 

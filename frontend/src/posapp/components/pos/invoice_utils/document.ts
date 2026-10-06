@@ -572,6 +572,9 @@ export function get_invoice_items(context: any) {
 			// where O(N) cache lookups occur if this flag is missing.
 			is_stock_item: item.is_stock_item,
 			discount_percentage: flt(item.discount_percentage),
+			// Why the cashier gave this line's discount (server normalises it;
+			// see posawesome/posawesome/api/discount_reasons.py).
+			posa_discount_reason: item.posa_discount_reason || null,
 			batch_no: item.batch_no,
 			posa_notes: item.posa_notes,
 			posa_delivery_date: itemDeliveryDate,

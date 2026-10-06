@@ -1,0 +1,109 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:reason_name",
+ "creation": "2026-10-06 12:00:00.000000",
+ "description": "Reasons a cashier can pick when giving a line discount at the POS.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "reason_name",
+  "enabled",
+  "column_break_ord",
+  "display_order",
+  "is_system"
+ ],
+ "fields": [
+  {
+   "fieldname": "reason_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reason",
+   "length": 140,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "1",
+   "description": "Untick to stop offering this reason at the POS. Past invoices keep it.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "column_break_ord",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Lower numbers are shown first in the POS reason picker.",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Display Order"
+  },
+  {
+   "default": "0",
+   "description": "Set automatically on \"Not recorded\", which marks discounted lines submitted without a reason. Never offered to cashiers.",
+   "fieldname": "is_system",
+   "fieldtype": "Check",
+   "label": "System Reason",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-07 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "POSAwesome",
+ "name": "POS Discount Reason",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "POS Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User"
+  }
+ ],
+ "sort_field": "display_order",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

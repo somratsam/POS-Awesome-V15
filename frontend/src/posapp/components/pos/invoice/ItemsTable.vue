@@ -79,11 +79,18 @@
 					@update-discount-percent="handleDiscountPercentUpdate"
 					@update-discount-amount="handleDiscountAmountUpdate"
 					@discount-percent-edit-submitted="
-						(submittedItem) => handleGridEditorSubmitted(submittedItem, 'discount_percentage')
+						(submittedItem) => {
+							handleGridEditorSubmitted(submittedItem, 'discount_percentage');
+							promptDiscountReason(submittedItem, { returnToCell: 'discount_percentage' });
+						}
 					"
 					@discount-amount-edit-submitted="
-						(submittedItem) => handleGridEditorSubmitted(submittedItem, 'discount_amount')
+						(submittedItem) => {
+							handleGridEditorSubmitted(submittedItem, 'discount_amount');
+							promptDiscountReason(submittedItem, { returnToCell: 'discount_amount' });
+						}
 					"
+					@edit-discount-reason="(reasonItem) => promptDiscountReason(reasonItem, { force: true })"
 					@open-name-dialog="openNameDialog"
 					@reset-item-name="resetItemName"
 					@toggle-offer="toggleOffer"
@@ -157,6 +164,17 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch, getCurrentInstance } from "vue";
 import { useInvoiceStore } from "../../../stores/invoiceStore";
+import { useUIStore } from "../../../stores/uiStore";
+import {
+	clearDiscountReasonIfUndiscounted,
+	findLinesMissingDiscountReason,
+	hasDiscountReason,
+	hasManualLineDiscount,
+	isDiscountReasonRequired,
+	lineNeedsDiscountReason,
+	preselectDiscountReason,
+	setLineDiscountReason,
+} from "../../../utils/discountReasons";
 import BatchSerialSelectionDialog from "./BatchSerialSelectionDialog.vue";
 import { loadItemSelectorSettings } from "../../../utils/itemSelectorSettings";
 import { logComponentRender } from "../../../utils/perf";
@@ -246,6 +264,7 @@ const emit = defineEmits<{
 const { proxy } = getCurrentInstance() as any;
 const eventBus = proxy?.eventBus;
 const invoiceStore = useInvoiceStore();
+const uiStore = useUIStore();
 const tableContainer = ref<HTMLElement | null>(null);
 const virtualTable = ref<any>(null);
 type CartGridMode = "inactive" | "row" | "cell";
@@ -627,9 +646,23 @@ const commitActiveGridEditorAndMoveEntry = async (delta: number) => {
 // Mirrors stayOnGridEntryFromItem's "commit but don't advance" behavior for
 // the keyboard-grid capture-phase path (handleGridKeydown), where gridMode
 // is already "cell" so that plain-bubble path is never reached.
-const commitActiveGridEditorAndStay = async () => {
+const commitActiveGridEditorAndStay = async (event?: KeyboardEvent) => {
+	// The cell actually being edited: clicking into another row's editor
+	// doesn't move the grid's remembered row/cell, so prefer the event's own.
+	const targetCell = (event?.target as HTMLElement | null)?.closest?.("[data-column-key]") as
+		| HTMLElement
+		| null;
+	const eventRowIndex = event ? getRowIndexFromEvent(event) : -1;
+	const cellKey = targetCell?.dataset?.columnKey || activeCellKey.value;
+	const rowItem = items.value?.[eventRowIndex >= 0 ? eventRowIndex : activeRowIndex.value];
 	await commitActiveGridEditor();
 	void focusActiveGridTarget({ activateDirectEdit: false });
+	// Keyboard-grid Enter commits by blur, so the row's own
+	// *-edit-submitted event never fires: confirm the discount here too
+	// (the other half of the same "discount confirmed with Enter" step).
+	if (rowItem && (cellKey === "discount_percentage" || cellKey === "discount_amount")) {
+		void promptDiscountReason(rowItem, { returnToCell: cellKey });
+	}
 };
 
 const commitActiveGridEditorAndMoveBoundary = async (
@@ -967,6 +1000,7 @@ const handleDiscountPercentUpdate = (item: any, newDiscount: any) => {
 		target: { value: newDiscount },
 	});
 	props.calcPrices(item, newDiscount, { target: { id: "discount_percentage" } });
+	clearDiscountReasonIfUndiscounted(invoiceStore, item);
 };
 
 const handleDiscountAmountUpdate = (item: any, newDiscount: any) => {
@@ -974,6 +1008,46 @@ const handleDiscountAmountUpdate = (item: any, newDiscount: any) => {
 		target: { value: newDiscount },
 	});
 	props.calcPrices(item, newDiscount, { target: { id: "discount_amount" } });
+	clearDiscountReasonIfUndiscounted(invoiceStore, item);
+};
+
+// Ask for a reason right after a discount is confirmed with Enter -- from
+// the row's own editor (*-edit-submitted) or the keyboard grid's capture-
+// phase Enter (commitActiveGridEditorAndStay); not on a plain blur, which
+// can be the cashier scanning the next item (the prompt would take that
+// scan's keystrokes). The prompt can't be dismissed; a line that still
+// lacks one (e.g. edited without Enter) shows a red "Reason?" chip, and Pay
+// won't go to payment until every discounted line has a reason.
+const promptDiscountReason = async (
+	item: any,
+	options: { force?: boolean; returnToCell?: CartGridColumnKey } = {},
+) => {
+	if (props.isReturnInvoice || !isDiscountReasonRequired(props.pos_profile)) return;
+	const line = (item?.posa_row_id && invoiceStore.itemsData?.get?.(item.posa_row_id)) || item;
+	if (!hasManualLineDiscount(line)) return;
+	if (!options.force && !lineNeedsDiscountReason(line)) return;
+	// Both Enter paths can report the same confirmation; ask once.
+	const pending = uiStore.discountReasonRequest;
+	if (pending?.mode === "line" && pending.lines?.[0]?.posa_row_id === line.posa_row_id) return;
+
+	const others = findLinesMissingDiscountReason(items.value).filter(
+		(other: any) => other.posa_row_id !== line.posa_row_id,
+	);
+	const result = await uiStore.requestDiscountReason({
+		mode: "line",
+		lines: [line],
+		preselect: hasDiscountReason(line)
+			? line.posa_discount_reason
+			: preselectDiscountReason(items.value, uiStore.discountReasons),
+		otherMissingCount: others.length,
+	});
+	if (result) {
+		for (const target of result.applyToOthers ? [line, ...others] : [line]) {
+			setLineDiscountReason(invoiceStore, target, result.reason);
+		}
+	}
+	// Back on the discount cell, as the stay-put Enter would leave it.
+	if (options.returnToCell) stayOnGridEntryFromItem(line, options.returnToCell);
 };
 
 const handleRowClick = (event: any, item: any) => {
@@ -1149,7 +1223,7 @@ const handleGridKeydown = (event: KeyboardEvent) => {
 			event.stopPropagation();
 			if (activeCellKey.value && isCartGridDirectEditColumnKey(activeCellKey.value)) {
 				if (isStayPutGridColumnKey(activeCellKey.value)) {
-					void commitActiveGridEditorAndStay();
+					void commitActiveGridEditorAndStay(event);
 				} else {
 					void commitActiveGridEditorAndMoveEntry(event.shiftKey ? -1 : 1);
 				}

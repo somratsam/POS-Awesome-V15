@@ -55,6 +55,7 @@ def _install_stubs():
     frappe_utils_module.flt = lambda value=0, precision=None: float(value or 0)
 
     closing_data_module.get_shift_invoice_rows = lambda doc: []
+    closing_data_module.get_shift_line_discount_totals = lambda doc: {}
     closing_data_module.get_payment_mode_counts = lambda sale_names, return_names: {}
     closing_utils_module.get_base_value = lambda row, amount_field, base_field, conversion_rate=None: 0.0
 

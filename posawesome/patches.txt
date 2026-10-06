@@ -37,3 +37,4 @@ posawesome.patches.secure_mpesa_callback_transactions
 posawesome.patches.add_below_cost_sale_policy
 posawesome.patches.insert_receipt_logo_field_in_print_chain
 posawesome.patches.backfill_invoice_reporting_fields
+posawesome.patches.seed_pos_discount_reasons

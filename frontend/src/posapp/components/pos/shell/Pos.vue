@@ -13,6 +13,7 @@
 		<MpesaPayments></MpesaPayments>
 		<Variants></Variants>
 		<StockLookupDialog></StockLookupDialog>
+		<DiscountReasonDialog></DiscountReasonDialog>
 		<OpeningDialog
 			v-if="dialog"
 			:dialog="dialog"
@@ -304,6 +305,7 @@ import ZReportHistoryDialog from "../closing/ZReportHistoryDialog.vue";
 import NewAddress from "../customer/NewAddress.vue";
 import Variants from "../items/Variants.vue";
 import StockLookupDialog from "../items/StockLookupDialog.vue";
+import DiscountReasonDialog from "../invoice/DiscountReasonDialog.vue";
 import Returns from "../flows/Returns.vue";
 import MpesaPayments from "../payments/Mpesa-Payments.vue";
 import { inject, ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from "vue";
@@ -951,6 +953,7 @@ export default {
 		NewAddress,
 		Variants,
 		StockLookupDialog,
+		DiscountReasonDialog,
 		MpesaPayments,
 		SalesOrders,
 		ZReportHistoryDialog,

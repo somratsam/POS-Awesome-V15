@@ -7,6 +7,7 @@ from frappe import _
 from frappe.model.mapper import get_mapped_doc
 from frappe.utils import add_days, flt
 
+from posawesome.posawesome.api.discount_reasons import apply_discount_reasons
 from posawesome.posawesome.api.invoice_reporting_fields import set_invoice_reporting_fields
 from posawesome.posawesome.api.item_sale_controls import (
     validate_pos_invoice_item_sale_controls,
@@ -25,6 +26,7 @@ SUBMISSION_LEDGER_DOCTYPE = "POS Invoice Submission Ledger"
 def validate(doc, method):
     validate_shift(doc)
     validate_pos_invoice_item_sale_controls(doc)
+    apply_discount_reasons(doc)
     set_patient(doc)
     auto_set_delivery_charges(doc)
     calc_delivery_charges(doc)

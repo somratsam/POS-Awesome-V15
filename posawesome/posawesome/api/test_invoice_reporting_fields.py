@@ -108,6 +108,7 @@ class TestValidateHookWiring(unittest.TestCase):
         names = (
             "validate_shift",
             "validate_pos_invoice_item_sale_controls",
+            "apply_discount_reasons",
             "set_patient",
             "auto_set_delivery_charges",
             "calc_delivery_charges",

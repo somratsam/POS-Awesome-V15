@@ -56,12 +56,12 @@ describe("ItemsTable.vue keeps discount fields from auto-advancing consistently 
 		);
 		expect(enterBranch).not.toBeNull();
 		expect(enterBranch![0]).toMatch(/isStayPutGridColumnKey\(activeCellKey\.value\)/);
-		expect(enterBranch![0]).toMatch(/commitActiveGridEditorAndStay\(\)/);
+		expect(enterBranch![0]).toMatch(/commitActiveGridEditorAndStay\((event)?\)/);
 	});
 
 	it("commitActiveGridEditorAndStay commits without moving to another cell", () => {
 		const fnMatch = itemsTableSource.match(
-			/const commitActiveGridEditorAndStay = async \(\) => \{[\s\S]*?\n\};/,
+			/const commitActiveGridEditorAndStay = async \([^)]*\) => \{[\s\S]*?\n\};/,
 		);
 		expect(fnMatch).not.toBeNull();
 		const fn = fnMatch![0];

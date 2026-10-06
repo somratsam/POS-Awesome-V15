@@ -163,6 +163,9 @@ export const useUIStore = defineStore("ui", () => {
 
   // POS Profile & Settings
   const posProfile = ref<POSProfile | null>(null);
+  // Line-discount reasons offered at the till (boot data, cached offline
+  // with the rest of the register data).
+  const discountReasons = ref<any[]>([]);
   const stockSettings = ref<Record<string, any>>({});
   const companyDoc = ref<any>(null);
   const posOpeningShift = ref<any>(null);
@@ -182,8 +185,15 @@ export const useUIStore = defineStore("ui", () => {
     companyDoc.value = doc;
   }
 
-  function setRegisterData(data: { pos_profile?: POSProfile; stock_settings?: any; company?: any; pos_opening_shift?: any }) {
+  function setRegisterData(data: {
+    pos_profile?: POSProfile;
+    stock_settings?: any;
+    company?: any;
+    pos_opening_shift?: any;
+    discount_reasons?: any[];
+  }) {
     if (data.pos_profile) posProfile.value = data.pos_profile;
+    if (Array.isArray(data.discount_reasons)) discountReasons.value = data.discount_reasons;
     if (data.stock_settings) stockSettings.value = data.stock_settings;
     if (data.company) companyDoc.value = data.company;
     if (data.pos_opening_shift) posOpeningShift.value = data.pos_opening_shift;
@@ -256,6 +266,44 @@ export const useUIStore = defineStore("ui", () => {
   function closeVariants() {
     variantsDialog.value = false;
     variantsData.value = null;
+  }
+
+  // Discount reason prompt (DiscountReasonDialog.vue). A request resolves
+  // with { reason, applyToOthers }, or null when it is superseded or the
+  // cashier goes back to the cart from the Pay check.
+  type DiscountReasonResult = { reason: string; applyToOthers: boolean } | null;
+  const discountReasonRequest = ref<{
+    mode: "line" | "pay";
+    lines: any[];
+    preselect: string | null;
+    otherMissingCount: number;
+  } | null>(null);
+  let discountReasonResolver: ((_result: DiscountReasonResult) => void) | null = null;
+
+  function resolveDiscountReason(result: DiscountReasonResult) {
+    const resolver = discountReasonResolver;
+    discountReasonResolver = null;
+    discountReasonRequest.value = null;
+    resolver?.(result);
+  }
+
+  function requestDiscountReason(request: {
+    mode: "line" | "pay";
+    lines: any[];
+    preselect?: string | null;
+    otherMissingCount?: number;
+  }): Promise<DiscountReasonResult> {
+    // Only one prompt at a time: a newer request cancels an unanswered one.
+    if (discountReasonResolver) resolveDiscountReason(null);
+    discountReasonRequest.value = {
+      mode: request.mode,
+      lines: request.lines || [],
+      preselect: request.preselect || null,
+      otherMissingCount: request.otherMissingCount || 0,
+    };
+    return new Promise((resolve) => {
+      discountReasonResolver = resolve;
+    });
   }
 
   function openStockLookup(context: { priceList?: string | null; customer?: string | null } = {}) {
@@ -375,6 +423,10 @@ export const useUIStore = defineStore("ui", () => {
     variantsData,
     openVariants,
     closeVariants,
+    discountReasons,
+    discountReasonRequest,
+    requestDiscountReason,
+    resolveDiscountReason,
     stockLookupDialog,
     stockLookupContext,
     openStockLookup,
