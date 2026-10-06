@@ -34,8 +34,11 @@ const itemSelectionSpies = vi.hoisted(() => ({
 	registerContext: vi.fn(),
 }));
 
+const offlineState = vi.hoisted(() => ({ offline: false }));
+
 vi.mock("../src/offline/index", () => ({
 	memoryInitPromise: Promise.resolve(),
+	isOffline: () => offlineState.offline,
 }));
 
 vi.mock("../src/posapp/composables/core/useResponsive", () => ({
@@ -629,5 +632,57 @@ describe("ItemsSelector stock wiring", () => {
 			false,
 			context,
 		);
+	});
+	const mountSelector = async (props: Record<string, unknown> = {}) => {
+		const { useUIStore } = await import("../src/posapp/stores/uiStore");
+		const uiStore = useUIStore();
+		uiStore.setPosProfile({
+			name: "POS-1",
+			currency: "PKR",
+			selling_price_list: "Standard Selling",
+		} as any);
+		const ItemsSelector = (await import(
+			"../src/posapp/components/pos/items/ItemsSelector.vue"
+		)).default;
+		const wrapper = shallowMount(ItemsSelector, {
+			props,
+			global: {
+				provide: {
+					eventBus: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
+				},
+			},
+		});
+		await wrapper.vm.$nextTick();
+		return { wrapper, uiStore, header: wrapper.findComponent({ name: "ItemHeader" }) };
+	};
+
+	it("forwards show-stock-lookup to ItemHeader on the selling screen and opens Check Stock on its event", async () => {
+		offlineState.offline = false;
+		const { header, uiStore } = await mountSelector({ context: "pos" });
+
+		expect(header.exists()).toBe(true);
+		expect(header.attributes("show-stock-lookup")).toBe("true");
+
+		header.vm.$emit("open-stock-lookup");
+		expect(uiStore.stockLookupDialog).toBe(true);
+		expect(uiStore.stockLookupContext).toMatchObject({ priceList: "Standard Selling" });
+	});
+
+	it("does not open Check Stock while offline", async () => {
+		offlineState.offline = true;
+		const { header, uiStore } = await mountSelector({ context: "pos" });
+		header.vm.$emit("open-stock-lookup");
+		expect(uiStore.stockLookupDialog).toBe(false);
+		offlineState.offline = false;
+	});
+
+	it.each([
+		["Purchase Orders", { context: "purchase" }],
+		["Barcode Printing", { context: "barcode" }],
+		["the counter search dialog", { context: "pos", presentation: "counter-grid-dialog" }],
+	])("hides Check Stock on %s", async (_label, props) => {
+		const { header } = await mountSelector(props);
+		expect(header.exists()).toBe(true);
+		expect(header.attributes("show-stock-lookup")).toBe("false");
 	});
 });

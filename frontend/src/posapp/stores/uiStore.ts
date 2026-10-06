@@ -21,7 +21,8 @@
  * `openPaymentDialog` / `closePaymentDialog`, `openInvoiceManagement` /
  * `closeInvoiceManagement`, `openDrafts` / `closeDrafts`, `openOrders` /
  * `closeOrders`, `openNewAddress` / `closeNewAddress`, `openMpesaPayments` /
- * `closeMpesaPayments`, `openVariants` / `closeVariants`.
+ * `closeMpesaPayments`, `openVariants` / `closeVariants`, `openStockLookup` /
+ * `closeStockLookup`.
  *
  * **Counter-based triggers**
  * Some side effects are driven by incrementing a counter ref rather than emitting
@@ -218,6 +219,11 @@ export const useUIStore = defineStore("ui", () => {
   const variantsDialog = ref(false);
   const variantsData = ref<any>(null);
 
+  // Check Stock (scan-to-look-up) dialog. Visibility only -- scan routing
+  // is owned by the dialog itself (stockLookupScanRoute.ts), not this flag.
+  const stockLookupDialog = ref(false);
+  const stockLookupContext = ref<{ priceList?: string | null; customer?: string | null } | null>(null);
+
   function triggerItemSearchFocus() {
     searchFocusTrigger.value++;
   }
@@ -250,6 +256,15 @@ export const useUIStore = defineStore("ui", () => {
   function closeVariants() {
     variantsDialog.value = false;
     variantsData.value = null;
+  }
+
+  function openStockLookup(context: { priceList?: string | null; customer?: string | null } = {}) {
+    stockLookupContext.value = context;
+    stockLookupDialog.value = true;
+  }
+
+  function closeStockLookup() {
+    stockLookupDialog.value = false;
   }
 
   const draggedItem = ref<any>(null);
@@ -360,6 +375,10 @@ export const useUIStore = defineStore("ui", () => {
     variantsData,
     openVariants,
     closeVariants,
+    stockLookupDialog,
+    stockLookupContext,
+    openStockLookup,
+    closeStockLookup,
     draggedItem,
     setDraggedItem,
     offersCount,

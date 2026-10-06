@@ -68,6 +68,23 @@
 							>
 							</v-btn>
 							<v-btn
+								v-if="showStockLookup"
+								icon="mdi-tag-search-outline"
+								size="small"
+								color="primary"
+								variant="text"
+								data-testid="pos-check-stock"
+								:disabled="scannerLocked"
+								@click.stop="$emit('open-stock-lookup')"
+								:aria-label="__('Check stock')"
+								:title="
+									scannerLocked
+										? __('Acknowledge the error to resume scanning')
+										: __('Check stock')
+								"
+							>
+							</v-btn>
+							<v-btn
 								icon="mdi-tune-vertical"
 								size="small"
 								color="primary"
@@ -229,6 +246,7 @@ const props = defineProps({
 	searchExpanded: { type: Boolean, default: false },
 	searchControls: { type: String, default: "" },
 	searchActiveDescendant: { type: String, default: "" },
+	showStockLookup: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -247,6 +265,7 @@ const emit = defineEmits([
 	"open-new-item",
 	"toggle-settings",
 	"reload-items",
+	"open-stock-lookup",
 ]);
 
 const debounce_search = ref(null);

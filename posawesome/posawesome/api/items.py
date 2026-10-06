@@ -45,6 +45,7 @@ from posawesome.posawesome.api.item_processing.search import (
     normalize_brand,
 )
 from posawesome.posawesome.api.item_processing.alternates import get_alternate_items
+from posawesome.posawesome.api.item_processing.stock_lookup import lookup_item_stock
 from posawesome.posawesome.api.item_sale_controls import installed_item_search_fields
 from posawesome.posawesome.api.pos_access import (
     assert_doctype_read_permission,

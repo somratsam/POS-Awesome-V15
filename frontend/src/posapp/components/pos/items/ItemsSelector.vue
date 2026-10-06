@@ -73,6 +73,8 @@
 						@open-new-item="openNewItemDialog"
 						@toggle-settings="toggleItemSettings"
 						@reload-items="forceReloadItems"
+						:show-stock-lookup="showStockLookupButton"
+						@open-stock-lookup="openStockLookup"
 						ref="itemHeader"
 					/>
 					<div
@@ -345,6 +347,7 @@ import PharmacyItemSearchTable from "./PharmacyItemSearchTable.vue";
 import NewItemDialog from "./NewItemDialog.vue";
 import ScanErrorDialog from "./ScanErrorDialog.vue";
 import ScanVariantHint from "./ScanVariantHint.vue";
+import { isOffline } from "../../../../offline/index";
 
 import { useResponsive } from "../../../composables/core/useResponsive";
 import { useRtl } from "../../../composables/core/useRtl";
@@ -1843,6 +1846,25 @@ const viewScanVariantHint = async () => {
 		items: Array.isArray(variants) ? variants : [],
 		profile: pos_profile.value,
 		attrsMeta: message.attributes_meta || {},
+	});
+};
+// Check Stock: selling screen only -- not Purchase Orders, Barcode Printing
+// or the counter search dialog (which would stack one modal on another).
+const showStockLookupButton = computed(
+	() => props.context === "pos" && props.presentation !== "counter-grid-dialog",
+);
+const openStockLookup = () => {
+	if (isOffline()) {
+		toastStore.show({
+			title: __("Check Stock needs a connection to the server."),
+			color: "warning",
+			key: "stock-lookup-offline",
+		});
+		return;
+	}
+	uiStore.openStockLookup({
+		priceList: active_price_list.value,
+		customer: selectedCustomer.value,
 	});
 };
 const startCameraScanning = () => {
