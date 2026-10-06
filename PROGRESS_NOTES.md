@@ -5756,3 +5756,109 @@ scratch dir, run with `LD_LIBRARY_PATH` pointing at it; session via
 
 **Production.** Pull + `bench build --app posawesome` + restart; no
 migrate needed.
+
+## 57. Discount reasons on cart lines, required before payment per store (2026-10-06, `02f4d9d`)
+
+**Request.** Staff give line discounts (Disc % only; Disc Amt and the
+invoice-level discount stay locked) and must record why -- e.g. a bank
+card offer. Pick-only, per store, and nothing changes for stores that
+don't opt in.
+
+**Found first (live, staging).**
+- `get_invoice_items` (`document.ts`) is an explicit allowlist of line
+  fields, so a new line field never leaves the browser unless added there.
+- Frappe validates Link fields *before* `validate` hooks
+  (`document.py` `_validate_links` then `run_before_save_methods`), so a
+  queued offline sale naming a since-deleted reason would fail to sync --
+  hence sanitising the raw payload in `update_invoice`/`submit_invoice`.
+- Offline invoices sync through the same `submit_invoice`/`validate`, so a
+  strict server rule would reject sales already paid for offline.
+- **Z Report gap:** "Discounts Granted" summed only the invoice-level
+  `discount_amount`, so Disc % line discounts never reached it (staging
+  shifts showed 0 against 860.69 / 26.73 of real line discounts).
+
+**Built.**
+- POS Profile `posa_require_discount_reason` ("Ask for a discount reason",
+  default off, in "Pricing and Discount Controls"). Off = cart exactly as
+  before; the server also does nothing for that store.
+- Doctype **POS Discount Reason** (`reason_name`, `enabled`,
+  `display_order`, read-only `is_system`; renamable; names containing the
+  word "Discount" refused on save/rename; "Not recorded" can't be renamed
+  or deleted). Line field `posa_discount_reason` (Link) on Sales Invoice
+  Item and POS Invoice Item, after `discount_amount` ("Discount and
+  Margin"). Pick-only: an earlier note field/"Other (note)" reason was
+  removed before release.
+- Patch `seed_pos_discount_reasons`: NBO Sadara, NBO Infinite / Platinum,
+  OAB Elite / Infinite, OAB Credit Card, Bank Dhofar Al Riadah, Bank Muscat
+  Private Banking, Bank Muscat Asalah, Bank Muscat Al Jawhar, Bank Muscat
+  Oman Air Platinum, WGO, VIP, H.H Family, Sale, Staff, Damaged item,
+  Manager approval, Other / General (orders 1-17), plus hidden
+  "Not recorded" (99). Idempotent: existing reasons never edited; an
+  earlier "– xx%" name is renamed via `frappe.model.rename_doc.rename_doc`
+  (the `frappe.rename_doc` wrapper has no `ignore_permissions` -- caught
+  only by running the patch on real data); old "Mastercard" deleted only if
+  unused. Staging already ran it, so it never re-runs there; staging's ten
+  bank/WGO reasons were renamed by hand with Frappe rename and the four
+  general ones set to 14-17.
+- Till: `DiscountReasonDialog.vue` (one tap picks; Enter takes the
+  preselected/latest reason; persistent, no "Later"; long names wrap in the
+  button; one column at <=480px; scrollable). Opened from both Enter paths
+  -- the row editor's `*-edit-submitted` and the keyboard grid's
+  capture-phase Enter (`commitActiveGridEditorAndStay`, which commits by
+  blur so the row event never fires: the section-41 trap again; the row is
+  taken from the event, not the stale active row). Red "Reason?" chip on
+  lines still missing one. `ensureDiscountReasons` in `show_payment`
+  blocks payment until every discounted line has a reason. Scanner guard:
+  printable keys swallowed, Enter within 300ms ignored -- attached to
+  Vuetify's overlay wrapper via `content-props`, because focus can sit
+  there, outside the card. Preselected button found by name, not a CSS
+  selector (escaping silently failed on these names).
+- Server (`api/discount_reasons.py`, from the invoice `validate` hook):
+  undiscounted/offer/free lines cleared; on submit a missing reason becomes
+  "Not recorded" (safety net only, never a rejection); returns copy the
+  original line's reason via `sales_invoice_item`/`pos_invoice_item`. Boot
+  data (`update_opening_shift_data`) carries the reason list, so it works
+  offline.
+- Z Report: `get_shift_line_discount_totals` adds discount_amount x qty of
+  positive line discounts, in company currency.
+
+**Receipt -- DB-only, not in git.** The "Swan Sales Invoice" print format
+is a hand-made DB record (`standard: No`; migrate never touches it; no app
+ships a file of that name). Change: `Discount <reason> 45.0% on 44.600 is
+-20.070` -- reason inserted after "Discount", numbers unchanged; no reason
+or "Not recorded" prints exactly as before (all 114 staging receipts
+byte-identical, normal and reprint); long names wrap (never trimmed); the
+Desk-PDF page-height estimate counts wrapped lines (3+ long reasons used to
+spill onto a second page). The record uses CRLF line endings -- read and
+write the files with `newline=""`. Files, outside git, in
+`/home/aziz/frappe-bench/print_format_backups/`:
+- `swan_sales_invoice_staging_2026-10-06_before_discount_reason.html` /
+  `.json` -- rollback copy (sha256 `d949a2569fc30dca...`)
+- `swan_sales_invoice_2026-10-06_after_discount_reason.html` -- content to
+  paste (`1d72ec39a6819a89...`)
+- `swan_sales_invoice_2026-10-06_discount_reason.diff` -- the three changes
+Not covered: the offline receipt (`offline_print_template.ts`).
+
+**Verified.** Frontend 248/248 files, 1328/1328 tests; guards mutation-
+checked (Pay gate, both Enter paths, scanner guard on the overlay,
+preselected focus, persistence, payload allowlist). Backend in isolation:
+`test_discount_reasons` 27/27, `test_z_report_line_discounts` 2/2, plus
+the invoice, offline-sync, return, closing-shift and print-assets modules;
+`test_creation`, `test_invoice_cancel_hooks`, `test_invoices`,
+`test_submitted_invoice_shift_security` fail identically at HEAD
+(pre-existing). Migrate run repeatedly: idempotent. Live on staging
+(headless Chromium): picker with all 17 reasons at 1440-360px, Enter and
+scanner guard on both prompts, Pay blocked/unblocked, switch off = unchanged
+till; Desk print preview, QZ path, reprint and PDF of a real till draft
+with a long reason and an Arabic line.
+
+**Open -- pre-existing security gap, for a later fix.**
+`shifts.check_opening_shift(user)` is whitelisted and trusts the
+client-supplied `user`: any authenticated session can fetch another
+user's open shift, full POS Profile and Company doc. Not introduced or
+changed here (this feature only adds non-sensitive reason names to that
+payload).
+
+**Production.** Pull, `bench --site <site> migrate` (doctype, fields,
+seed), `bench build --app posawesome`, restart; then paste the receipt
+HTML by hand (see above) and turn the switch on per store.
