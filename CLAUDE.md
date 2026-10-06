@@ -816,6 +816,11 @@ never fired in normal continued use, only on a session's very first edit.
 Fixed with one shared `isStayPutGridColumnKey()` check used by both
 interception sites. See `PROGRESS_NOTES.md` section 41.
 
+## Two Facts That Look Wrong From the Code Alone
+
+- `onscan.js` in `posawesome/posawesome/page/posapp/` is never loaded (Frappe loads only the page's own `posapp.js`), so `useScannerInput.ts`'s `onScan`/`triggerOnScan` path is dead code -- hardware scanners arrive as plain keystrokes into whatever element has focus (see `PROGRESS_NOTES.md` section 56).
+- `wrapper.emitted()` records nothing for component emits in this repo's Vitest specs, because `vite.config.js` defines `process.env.NODE_ENV` as `"production"` (which disables the Vue devtools hook it relies on) -- assert emits by passing a listener prop (`onFooBar: vi.fn()`) instead.
+
 ## Build Commands
 
 ### Main Build Commands

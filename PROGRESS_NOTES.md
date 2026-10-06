@@ -5678,3 +5678,81 @@ Unknown whether any of these is actually broken until the tests run.
 as `test_invoice_reporting_fields.py` does), add `sys.modules` cleanup to
 the cancel-hooks test, then run the assertions; treat any assertion
 failure as a potential real bug.
+
+## 56. Check Stock: scan a tag to look up sizes/colours/stock without adding to the cart (2026-10-06, `a0adb64`)
+
+**Request.** Staff scan tags just to check other sizes/colours and
+availability; every scan landed in the cart and had to be removed. They
+liked the VIEW toast's Select Item dialog, minus the cart step. Normal
+scan-to-sell had to stay exactly as it was.
+
+**Options weighed.** A Lookup Mode toggle (rejected: the highest risk of a
+cashier forgetting the mode -- left on, scans silently stop selling), an
+"undo" on the VIEW toast (rejected: the item still enters the cart, and
+undo is fragile when the scan only raised an existing line's qty), and a
+dedicated dialog (chosen: the "mode" is a visible modal that ends when it
+closes).
+
+**Found first.**
+- `onscan.js` (in the page folder) is never loaded -- Frappe only loads
+  the page's own `posapp.js` -- so `useScannerInput.ts`'s `onScan` path is
+  dead code. Hardware scanners are keystrokes into whatever has focus.
+- Two `ItemsSelector` instances can coexist (main + counter search
+  dialog), so swapping one instance's scan handler would be fragile.
+- `useScanProcessor`'s find step is tied to the panel's in-memory catalog
+  and writes to the offline cache; reusing it from a dialog meant editing
+  the selling path.
+- All page-wide key listeners (type-to-search, Tab redirect) already stand
+  down while a dialog is visible.
+
+**Built.**
+- `ItemHeader.vue`: Check Stock icon button (`mdi-tag-search-outline`)
+  just left of the tune icon; `ItemsSelector.vue` shows it only for
+  `context="pos"` outside the counter search dialog (hidden on Purchase
+  Orders and Barcode Printing), and shows a "needs a connection" toast
+  instead of opening while offline.
+- `StockLookupDialog.vue` (mounted in `Pos.vue` next to `Variants`):
+  own code field (Enter, or idle auto-lookup for scanners without an Enter
+  suffix), attribute filter chips, cards with barcode/price/qty and a
+  full-width Add button; scanned variant first; card labels follow the
+  filter-row order. Keystrokes landing on a chip/button are pulled back
+  into the code field so a scanner's Enter can't press it. Add repeats
+  `Variants.vue`'s add steps (rate fetch + `add_item`) and closes;
+  `Variants.vue` itself untouched. Add hidden on return invoices.
+- `stockLookupScanRoute.ts` + one check each in `useScannerInput.ts`'s
+  `triggerOnScan`/`onBarcodeScanned`: scans go to the dialog only while it
+  has registered a handler. No mode flag -- registration is dropped on
+  every close path (v-model/Esc/outside click, Close, Add, unmount) with
+  `flush: "sync"`; a handler error drops the route and closes the dialog;
+  module state only, so a reload starts in selling. On close, focus goes
+  back to the item search.
+- `item_processing/stock_lookup.py` -> `items.lookup_item_stock`
+  (read-only): `get_authorized_pos_profile` first, then resolves the code
+  (Item Barcode, scale barcode if the item exists, item code, batch/serial
+  if the profile enables them), returns the family via
+  `get_item_variants` or a single item via `get_items_details`, at the
+  profile's own warehouse. Codes over 140 chars return not-found without a
+  query.
+
+**Verified.** Frontend 245/245 files, 1288/1288 tests. New
+`stockLookupDialog.spec.ts` runs the real `useScannerInput` +
+`useScanProcessor` pipeline: for each close path a scan afterwards adds to
+the cart; confirmed real guards by mutation (no unregister -> 7 fail; no
+scan interception -> 11 fail; no prop forwarding in `ItemsSelector` -> 4
+fail). Backend in isolation: `test_stock_lookup` 9/9, `test_barcode` 3/3,
+`test_details` 7/7, `test_items_numeric_code` 4/4, `test_items_delta` 4/4,
+`test_offline_sync_items` 4/4, `test_pos_access` 12/12. `bench build`
+exit 0; no migrate needed (no doctype/fixture/print format). Live on
+staging in headless Chromium (13-variant family, scanner-speed
+keystrokes): lookup leaves the cart untouched, and a scan after Esc,
+outside click, Close, Add and a reload each added to the cart; VIEW toast
+and its dialog still work; no overflow at 390px. Staging has no
+out-of-stock variants, so that card state is covered by unit tests only.
+
+**Headless browser now works here** (earlier sections said it couldn't):
+`apt-get download libnss3 libnspr4 libasound2t64`, `dpkg-deb -x` into a
+scratch dir, run with `LD_LIBRARY_PATH` pointing at it; session via
+`bench --site staging.local browse --user Administrator`.
+
+**Production.** Pull + `bench build --app posawesome` + restart; no
+migrate needed.
