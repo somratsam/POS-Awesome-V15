@@ -5,6 +5,7 @@ from frappe.utils import flt
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
     get_shift_invoice_rows,
+    get_shift_line_discount_totals,
     get_payment_mode_counts,
 )
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
@@ -66,6 +67,7 @@ def get_z_report_data(pos_closing_shift):
         frappe.throw(_("Z Report can only be generated for a submitted POS Closing Shift."))
 
     invoice_rows = get_shift_invoice_rows(doc)
+    line_discounts = get_shift_line_discount_totals(doc)
 
     total_sales = 0.0
     total_returns = 0.0
@@ -89,9 +91,12 @@ def get_z_report_data(pos_closing_shift):
             sale_count += 1
             sale_names.append(row.get("name"))
             total_qty += flt(row.get("total_qty"))
+            # Invoice-level discount plus the discounts on its item lines
+            # (Disc %), which the parent discount_amount doesn't include.
             total_discount += get_base_value(
                 row, "discount_amount", "base_discount_amount", conversion_rate
             )
+            total_discount += flt(line_discounts.get(row.get("name"))) * flt(conversion_rate or 1)
             total_vat += get_base_value(
                 row, "total_taxes_and_charges", "base_total_taxes_and_charges", conversion_rate
             )

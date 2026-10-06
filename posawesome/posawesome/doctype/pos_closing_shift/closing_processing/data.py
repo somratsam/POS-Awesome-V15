@@ -50,6 +50,37 @@ def get_pos_invoices(pos_opening_shift, doctype=None, submit_printed=1):
     return data
 
 
+def _shift_invoice_names_by_doctype(closing_shift_doc):
+    names_by_doctype = {"Sales Invoice": [], "POS Invoice": []}
+    for row in closing_shift_doc.get("pos_transactions") or []:
+        if row.get("sales_invoice"):
+            names_by_doctype["Sales Invoice"].append(row.get("sales_invoice"))
+        elif row.get("pos_invoice"):
+            names_by_doctype["POS Invoice"].append(row.get("pos_invoice"))
+    return names_by_doctype
+
+
+def get_shift_line_discount_totals(closing_shift_doc):
+    """{invoice name: sum of its item-line discounts} in invoice currency.
+
+    A line's discount_amount is per unit, so each line contributes
+    discount_amount x qty. Only positive discounts count (a rate set above
+    the price list leaves a negative discount_amount, which isn't a
+    discount granted).
+    """
+    totals = {}
+    for doctype, names in _shift_invoice_names_by_doctype(closing_shift_doc).items():
+        if not names:
+            continue
+        for line in frappe.get_all(
+            f"{doctype} Item",
+            filters={"parent": ["in", names], "discount_amount": [">", 0]},
+            fields=["parent", "qty", "discount_amount"],
+        ):
+            totals[line.parent] = totals.get(line.parent, 0.0) + flt(line.discount_amount) * abs(flt(line.qty))
+    return totals
+
+
 def get_shift_invoice_rows(closing_shift_doc):
     """Return invoice rows (is_return, grand_total, customer credit redeemed)
     for every invoice already linked to a closing shift's pos_transactions
@@ -62,12 +93,7 @@ def get_shift_invoice_rows(closing_shift_doc):
     on every invoice in the shift, and get_pos_invoices()'s own filter
     excludes consolidated POS Invoices.
     """
-    names_by_doctype = {"Sales Invoice": [], "POS Invoice": []}
-    for row in closing_shift_doc.get("pos_transactions") or []:
-        if row.get("sales_invoice"):
-            names_by_doctype["Sales Invoice"].append(row.get("sales_invoice"))
-        elif row.get("pos_invoice"):
-            names_by_doctype["POS Invoice"].append(row.get("pos_invoice"))
+    names_by_doctype = _shift_invoice_names_by_doctype(closing_shift_doc)
 
     fields = [
         "name",

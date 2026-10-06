@@ -214,6 +214,10 @@ def _install_dependency_stubs():
     sale_controls_module.validate_invoice_item_sale_controls = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.item_sale_controls"] = sale_controls_module
 
+    discount_reasons_module = types.ModuleType("posawesome.posawesome.api.discount_reasons")
+    discount_reasons_module.sanitize_discount_reason_payload = lambda *_args, **_kwargs: None
+    sys.modules["posawesome.posawesome.api.discount_reasons"] = discount_reasons_module
+
     terminal_state_module = types.ModuleType("posawesome.posawesome.api.terminal_state")
     terminal_state_module.get_active_terminal_cashier = (
         lambda *_args, **_kwargs: "cashier@example.com"

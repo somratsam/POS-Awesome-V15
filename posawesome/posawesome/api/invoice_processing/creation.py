@@ -27,6 +27,7 @@ from posawesome.posawesome.api.invoice_processing.stock import (
     _auto_set_return_batches,
     _collect_stock_errors,
 )
+from posawesome.posawesome.api.discount_reasons import sanitize_discount_reason_payload
 from posawesome.posawesome.api.tax_contracts import apply_pos_tax_inclusion_contract
 from posawesome.posawesome.api.payment_processing.utils import get_bank_cash_account as get_bank_account
 from posawesome.posawesome.api.utilities import ensure_child_doctype, set_batch_nos_for_bundels
@@ -1725,6 +1726,7 @@ def update_invoice(data):
     if not doctype_supports_client_request_id(data.get("doctype") or "Sales Invoice"):
         strip_invoice_client_request_id(data)
     _sanitize_delivery_dates(data)
+    sanitize_discount_reason_payload(data)
     _apply_manual_posting_controls(data)
     _strip_client_freebies_from_payload(data)
     # Determine doctype based on POS Profile setting. Submitted-invoice
@@ -1982,6 +1984,7 @@ def submit_invoice(invoice, data, submit_in_background=False):
     _strip_client_cashier_identity(invoice, data)
     client_request_id = normalize_invoice_request_identity(invoice, data)
     _sanitize_delivery_dates(invoice)
+    sanitize_discount_reason_payload(invoice)
     _apply_manual_posting_controls(invoice)
     submit_in_background = cint(submit_in_background)
     _strip_client_freebies_from_payload(invoice)

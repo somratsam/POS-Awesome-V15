@@ -68,6 +68,29 @@
 							<v-icon end size="x-small">mdi-pencil</v-icon>
 						</v-chip>
 					</div>
+					<div v-if="showDiscountReasonChip" class="posa-cart-item-row__tracking-stack">
+						<v-chip
+							:color="discountReasonMissing ? 'error' : 'secondary'"
+							size="x-small"
+							variant="tonal"
+							class="posa-cart-item-row__tracking-chip"
+							prepend-icon="mdi-sale-outline"
+							role="button"
+							tabindex="0"
+							data-testid="cart-discount-reason-chip"
+							:aria-label="
+								discountReasonMissing
+									? __('Choose a discount reason')
+									: __('Change discount reason')
+							"
+							@click.stop="$emit('edit-discount-reason', item)"
+							@keydown.enter.stop.prevent="$emit('edit-discount-reason', item)"
+							@keydown.space.stop.prevent="$emit('edit-discount-reason', item)"
+						>
+							{{ discountReasonMissing ? __("Reason?") : item.posa_discount_reason }}
+							<v-icon end size="x-small">mdi-pencil</v-icon>
+						</v-chip>
+					</div>
 					<v-chip
 						v-if="item.posa_is_offer || item.is_free_item"
 						color="success"
@@ -445,6 +468,11 @@ import {
 	getItemLossRisk,
 	resolveSaleFloorPolicy,
 } from "../../../utils/lossPrevention";
+import {
+	hasDiscountReason,
+	hasManualLineDiscount,
+	isDiscountReasonRequired,
+} from "../../../utils/discountReasons";
 
 defineOptions({
 	name: "CartItemRow",
@@ -507,6 +535,7 @@ const emit = defineEmits([
 	"toggle-expand",
 	"open-batch-serial",
 	"remove-item",
+	"edit-discount-reason",
 ]);
 
 const __ = window.__ || ((text) => text);
@@ -561,6 +590,9 @@ const memoDeps = computed(() => {
 		props.item.posa_offer_applied,
 		props.item.is_free_item,
 		props.item.price_list_rate,
+		props.item.posa_discount_reason,
+		props.posProfile?.posa_require_discount_reason,
+		props.isReturnInvoice,
 		props.isExpanded,
 		props.rowIndex,
 		props.keyboardMode,
@@ -661,6 +693,16 @@ const disableDiscountPercentEdit = computed(
 		!!props.item.posa_is_replace ||
 		!!props.item.posa_offer_applied ||
 		!!props.item.retailmind_non_discountable,
+);
+
+// Reason chip: only on lines a cashier discounted, and only where the
+// store's POS Profile asks for reasons (switch off = cart exactly as before).
+const discountReasonMissing = computed(() => !hasDiscountReason(props.item));
+const showDiscountReasonChip = computed(
+	() =>
+		!props.isReturnInvoice &&
+		isDiscountReasonRequired(props.posProfile) &&
+		hasManualLineDiscount(props.item),
 );
 
 const disableDiscountAmountEdit = computed(
