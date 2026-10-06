@@ -17,6 +17,7 @@ import {
 	scheduleFrame,
 } from "../../../utils/perf.js";
 import { classifyClipboardScanText } from "./scannerInput/clipboardScan";
+import { dispatchStockLookupScan } from "./stockLookupScanRoute";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -266,6 +267,9 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			playScanTone("error");
 			return;
 		}
+		// Check Stock dialog open: the scan is a lookup, not a sale -- and it
+		// must not be written into the main search bar behind the dialog.
+		if (dispatchStockLookupScan(String(sCode || "").trim())) return;
 		searchFromScanner.value = true;
 		if (setSearchInputHandler.value) setSearchInputHandler.value(sCode);
 		pendingScanCode.value = sCode;
@@ -344,6 +348,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			}
 			return;
 		}
+
+		// Check Stock dialog open: hand the scan to it instead of selling.
+		// See stockLookupScanRoute.ts -- with the dialog closed this is a
+		// no-op and the scan continues exactly as before.
+		if (dispatchStockLookupScan(normalizedCode)) return;
 
 		const runScanPipeline = async (code: string) => {
 			const mark = perfMarkStart("pos:scan-handler");

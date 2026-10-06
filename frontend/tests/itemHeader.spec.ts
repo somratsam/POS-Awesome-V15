@@ -2,7 +2,7 @@
 
 import { defineComponent, h } from "vue";
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import ItemHeader from "../src/posapp/components/pos/items/ItemHeader.vue";
 
@@ -162,5 +162,57 @@ describe("ItemHeader", () => {
 			"aria-activedescendant": "pharmacy-item-result-41-33-31-30-36",
 		});
 		expect(wrapper.findAll('[role="combobox"]')).toHaveLength(1);
+	});
+
+	const mountForStockLookup = (props: Record<string, unknown> = {}) =>
+		mount(ItemHeader, {
+			props: {
+				searchInput: "",
+				qtyInput: 1,
+				posProfile: {
+					posa_input_qty: false,
+					posa_enable_camera_scanning: true,
+				},
+				...props,
+			},
+			global: {
+				mocks: {
+					frappe: { _: (value: string) => value },
+					__: (value: string) => value,
+				},
+				components: {
+					VRow: VRowStub,
+					VCol: VColStub,
+					VBtn: VBtnStub,
+					VExpandTransition: VExpandTransitionStub,
+					VProgressLinear: VProgressLinearStub,
+					VTextField: VTextFieldStub,
+				},
+			},
+		});
+
+	it("hides the Check Stock button unless the selector asks for it", () => {
+		const wrapper = mountForStockLookup();
+		expect(wrapper.find('[data-testid="pos-check-stock"]').exists()).toBe(false);
+	});
+
+	it("places Check Stock just left of the tools button and emits on click", async () => {
+		const onOpenStockLookup = vi.fn();
+		const wrapper = mountForStockLookup({ showStockLookup: true, onOpenStockLookup });
+		const buttons = wrapper.findAll(".v-text-field-stub button");
+		const labels = buttons.map((b) => b.attributes("aria-label"));
+		expect(labels).toEqual(["Scan with camera", "Check stock", "Show search tools"]);
+
+		// vite.config.js defines NODE_ENV=production, which disables the Vue
+		// devtools hook wrapper.emitted() relies on -- assert via a listener.
+		await wrapper.get('[data-testid="pos-check-stock"]').trigger("click");
+		expect(onOpenStockLookup).toHaveBeenCalledTimes(1);
+	});
+
+	it("disables Check Stock while the scanner is locked by a scan error", () => {
+		const wrapper = mountForStockLookup({ showStockLookup: true, scannerLocked: true });
+		expect(
+			(wrapper.get('[data-testid="pos-check-stock"]').element as HTMLButtonElement).disabled,
+		).toBe(true);
 	});
 });
