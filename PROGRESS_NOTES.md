@@ -5862,3 +5862,107 @@ payload).
 **Production.** Pull, `bench --site <site> migrate` (doctype, fields,
 seed), `bench build --app posawesome`, restart; then paste the receipt
 HTML by hand (see above) and turn the switch on per store.
+
+## 58. Parent Style, Season, Collection, Item VAT and Item Group as Report View columns per invoice line (2026-10-08, `3eedc90`)
+
+**Request.** One Report View row per Sales Invoice line with Parent style,
+Item Group, Description, Season, Collection, Disc %, discounted price
+without VAT, and the exact 5% VAT of that line.
+
+**Found first (live, staging; ERPNext 16.26).**
+- Already pickable: Description (plain text), Disc % (`discount_percentage`),
+  Net Rate (unit price ex-VAT after discount) / Net Amount (line total
+  ex-VAT -- use this for totals; Net Rate x Qty misses it by a cent on some
+  lines). Item Group exists on the line but is hidden.
+- Per-line VAT exists only in ERPNext 16's hidden child table **Item Wise
+  Tax Detail**; Report View joins child tables with no relation between
+  them (a 2-line invoice -> 4 rows, each item paired with every VAT
+  amount), so it can't be shown as-is. `amount - net_amount` is off by
+  +-0.01 on some lines (ERPNext puts the rounding cent on one line's VAT).
+  The UAE regional `tax_rate`/`tax_amount` fields on staging are ERPNext
+  test-suite leftovers (company is in Oman) and always 0.
+- Season and Collection exist **only on production**, as hand-made Item
+  custom fields `custom_season` / `custom_collection` (Data), e.g.
+  "SS26 1ST DEL" (the delivery is part of the value; no separate Delivery
+  column). About 1,768 of 8,591 production variants have no Season and 579
+  no Collection -- intended.
+- POS delivery charges are added as an "Actual" taxes row, which ERPNext
+  also spreads over the per-line breakdown -- excluded from Item VAT.
+
+**Built.**
+- Sales Invoice Item fields (read-only, after `posa_item_color`, Description
+  section): `posa_item_variant_of` (Link Item, "Parent Style"),
+  `posa_item_season`, `posa_item_collection` (Data), `posa_item_vat`
+  (Currency, company currency, "Item VAT"). Property Setter
+  `Sales Invoice Item-item_group-hidden` = 0. Hand-added to the fixtures;
+  **no Item custom field is shipped** (a test fails if `Item-custom_season`
+  / `Item-custom_collection` ever appear in a fixture or `hooks.py`).
+- `invoice_reporting_fields.set_invoice_reporting_fields` (Sales Invoice
+  validate hook, last step): one batched Item query (brand, variant_of,
+  plus custom_season/custom_collection only if `frappe.get_meta("Item")`
+  has them -- otherwise those line fields are left untouched and saving
+  carries on). Values from the line's own (variant) Item; a blank is copied
+  as blank -- no parent fallback, no placeholder. Snapshot at save time:
+  old sales keep the values from when they were saved. Item VAT from
+  ERPNext's in-memory per-line breakdown (`doc._item_wise_tax_details`,
+  rounding cent included; non-"Actual" taxes only), else the stored Item
+  Wise Tax Detail rows, else `amount - net_amount` (logged); untaxed
+  invoices get 0. Returns are negative.
+- Patch `backfill_invoice_line_reporting_fields`: creates the four fields
+  from the fixture first (patches run before fixture sync), then batched
+  SQL: Parent Style from `Item.variant_of`; Season/Collection from each
+  Item's **current** value, blanks skipped quietly, skipped entirely (one
+  note) unless the Item field is defined *and* its column exists (a deleted
+  Custom Field leaves its column behind); Item VAT exactly from stored
+  breakdown rows, approximate `amount - net_amount` only for taxed invoices
+  with no breakdown. Reports (migrate output + Error Log "Invoice line
+  reporting backfill: lines to review") only lines whose Item no longer
+  exists and approximate-VAT invoices. Idempotent.
+
+**Verified.** Staging backfill: Season/Collection match each Item on all
+136 lines, blanks blank, no placeholders; Item VAT equals the stored
+breakdown on all 104 taxed lines, 0 on the 21 untaxed; line VATs sum to
+Total Taxes and Charges on all 117 submitted invoices. Hook run on
+ERPNext's real recalculation of all 117: copies the per-line breakdown
+exactly (125/125). Real till draft (Pay): all columns correct, VAT
+2.05 + 4.32 + 5.31 = 11.68 = total taxes. With the Item fields deleted:
+till save still works; backfill skips Season/Collection with a note.
+Report View's own query: one row per line with all columns. Tests:
+`test_invoice_reporting_fields` 25/25, new `test_invoice_line_backfill`
+6/6; five guards mutation-checked. Frontend 248/248, 1328/1328; migrate
+three times, idempotent; backfill re-run changes nothing.
+
+**Staging-only test setup (not in git).** `Item-custom_season` and
+`Item-custom_collection` (Data) were created by hand on staging only, and
+four items have test values:
+- `30410232030043`: Season "SS26 1ST DEL", Collection "SS26 1ST DEL"
+- `35210232030015`: Season "SS26 2ND DEL", Collection "SS26 2ND DEL"
+- `35210232030014`: Season blank, Collection "SS26 2ND DEL"
+- `30440222030023`: Season "FW25 1ST DEL", Collection blank
+
+**Noted, unrelated.** Staging's System Settings currency precision is 2,
+while OMR has 3 decimals: newer invoices round to 0.01, older ones used
+0.001 (recalculating an old invoice today re-rounds its totals). Not
+changed.
+
+**Production deploy.**
+1. `bench --site <prod-site> backup --with-files`
+2. Collision check -- must return no rows:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE fieldname IN ('posa_item_variant_of','posa_item_season','posa_item_collection','posa_item_vat'); SELECT name FROM \`tabProperty Setter\` WHERE name LIKE 'Sales Invoice Item-item_group%';"
+   ```
+3. Item fields this relies on -- should return 2 rows, both Data:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT name, fieldtype FROM \`tabCustom Field\` WHERE dt='Item' AND fieldname IN ('custom_season','custom_collection');"
+   ```
+4. Optional -- taxed invoices that would get the approximate VAT:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT COUNT(DISTINCT si.name) FROM \`tabSales Invoice\` si JOIN \`tabSales Taxes and Charges\` t ON t.parent = si.name AND t.charge_type != 'Actual' WHERE NOT EXISTS (SELECT 1 FROM \`tabItem Wise Tax Detail\` w WHERE w.parent = si.name);"
+   ```
+5. `cd apps/posawesome && git pull upstream stable`
+6. `bench --site <prod-site> migrate` -- read the backfill's output (and
+   Error Log "Invoice line reporting backfill: lines to review").
+7. `bench restart` (no `bench build`: no frontend change).
+8. Report View -> Pick Columns -> Sales Invoice Item: Parent Style, Item
+   Group, Season, Collection, Item VAT; spot-check that one invoice's Item
+   VAT sums to its Total Taxes and Charges.
