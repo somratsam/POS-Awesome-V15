@@ -5966,3 +5966,109 @@ changed.
 8. Report View -> Pick Columns -> Sales Invoice Item: Parent Style, Item
    Group, Season, Collection, Item VAT; spot-check that one invoice's Item
    VAT sums to its Total Taxes and Charges.
+
+## 59. Light-mode contrast: unreadable active cart row, Frappe's Bootstrap recolouring buttons, theme-aware greys and a darker light palette (2026-10-08)
+
+**Reported.** Light mode, cart row selected: Disc %, Disc Amt and Rate showed
+no visible text; Qty was fine. Audited the whole POS live on staging in both
+themes (screenshots plus a script that measures every visible text element's
+contrast against its composited background) before fixing anything.
+
+**Root cause of the report.** The keyboard-active row is hard-coded navy
+`#174a70` with `color: #fff !important` on its `td` in both themes
+(`CartItemRow.vue`). Disc %/Disc Amt/Rate/UOM are display boxes
+(`.posa-cart-table__editor-display`) with `background:
+var(--pos-primary-container)` (`#e0f7fa` light, `#003344` dark) and `color:
+var(--pos-primary-text)` -- a variable defined nowhere, so the text inherited
+the row's white: 1.1:1 in light, fine in dark only by accident. Qty is a real
+`<input>`, which theme.css's global `.posapp .v-text-field input { color:
+var(--pos-text-primary) !important }` forced to dark grey.
+
+**Step 1 -- `41517fb` (stable `e331cbf`).**
+- Every active row now gets what counter-grid rows already had: transparent
+  editors, white text, cyan outline (`items-table-styles.css`). The selectors
+  include `td` so they outrank theme.css's global `!important` input/overlay
+  rules.
+- `--pos-primary-text` defined (light `#00363a`, dark `#e0f7fa`), and the
+  `--pos-button-warning-*` / `--pos-button-success-*` variables the Purchase
+  and Barcode Printing +/- buttons referenced but nobody defined.
+- **Frappe's desk CSS leaks Bootstrap 4's bg-variant rules onto Vuetify
+  buttons**: `button.bg-primary:hover, button.bg-primary:focus {
+  background-color: black !important }` (plus success/warning/info/secondary
+  shades). Vuetify colours buttons with the same `bg-*` classes, so any
+  hovered or tapped primary button turned black -- and in dark mode its
+  on-primary text is also black, so it vanished (seen on the LIST/CARD
+  toggle after a tap). A theme.css rule restores each colour on hover/focus.
+
+**The theme rules that never applied: `data-route`, not `data-page-route`.**
+Frappe sets `data-route="posapp/pos"` on `<body>` (`frappe/views/
+container.js`); `data-page-route` exists only on the inner
+`.page-container` div. So every existing theme.css rule written as
+`body[data-page-route="posapp"] ...` has never matched anything -- the
+dialog card background/text overrides, the tooltip styling, the scrim, the
+"hide Frappe desk elements" block. Confirmed live (`body.matches(
+'[data-page-route="posapp"]')` is false). Also: Vuetify dialogs render in a
+`.v-overlay-container` under `<body>`, outside `.posapp`, so `.posapp ...`
+rules don't reach dialogs either. The new rules in this section use
+`body[data-route^="posapp"]`. **The old rules were deliberately left as
+they are**: switching them on now would restyle every dialog at once and
+needs its own review.
+
+**Step 3 -- `b00fa5d` (stable `476c516`).**
+- **Item-history dialog, dark mode: hint text and "Page 1" dark-on-dark.**
+  The real cause was a prop default, not CSS. `ItemSalesHistoryModal.vue`
+  declared `isDarkTheme?: boolean` with no default and used `props.isDarkTheme
+  ?? theme.isDark.value`. Vue casts an absent Boolean prop to `false`, never
+  `undefined`, so the `??` fallback never ran and the dialog was always
+  `v-theme--light`; Vuetify's `.text-medium-emphasis` then used the light
+  theme's dark on-background colour on the dark card. Found by reading the
+  live element's matched rules (CDP `CSS.getMatchedStylesForNode`). No caller
+  passes the prop. Fix: explicit `isDarkTheme: undefined` default. The
+  existing `newFeaturesDarkMode.spec.ts` asserted the `??` line as a source
+  string and could not see this; the new `itemSalesHistoryModalTheme.spec.ts`
+  reads the compiled prop and fails without the fix (checked).
+- `text-grey-darken-*` / `text-grey` replaced with Vuetify 3's
+  `text-high-emphasis` / `text-medium-emphasis` (Close Shift overview and
+  reconciliation, Offline Invoices, cash movement). The old classes were
+  fixed greys: 2.7:1 in dark (headings) and 2.7:1 in light (subtitles).
+- Light mode field labels: full opacity on `--pos-text-secondary` (were
+  2.4:1 at Vuetify's medium-emphasis opacity on the grey field fill);
+  focused/error/disabled fields untouched.
+- Drafts button: no longer `theme="dark"` + a white-text class (white on
+  `#ffc107`, 1.6:1). The class's `var(--pos-text-primary)` only resolved to
+  white because theme.css redefines the `--pos-*` tokens under
+  `.v-theme--dark`.
+
+**Step 2 -- `31fd81a` (stable `e87aee4`).** Light theme in `vuetify.ts`:
+warning `#ff9800` -> `#b35900`, secondary `#00bcd4` -> `#007c8a`, success
+`#66bb6a` -> `#2e7d32`, `on-warning` `#212121` -> `#ffffff`. Each is >= 4.5:1
+on white and on `--pos-surface-muted`, and carries white text as a fill.
+Dark theme unchanged. Visible effect: Drafts becomes burnt orange with white
+text; "0 Offers", Sales Return "Clear"/"Return without Invoice", Invoice
+Management "Paid" chips and Close Shift tile icons become readable.
+
+**Verification.** Contrast sweep before/after each step in both themes: every
+targeted finding gone, nothing new, dark unchanged or better. Frontend
+249/249 files, 1329/1329 tests on both `develop-swan` and `stable`; `bench
+build` exit 0 on both. No backend, doctype, fixture or print-format change.
+
+**Still below 3:1, not addressed:** Save & Clear and PAY (white on hard-coded
+orange/green, large bold text), the green "Online" indicator, Close Shift's
+close button, Invoice Management's Close button/tile subtitles/History tab,
+the drafts count chip, the dark-mode item-history "Sales History" tab, and
+(found later, existing) the dark-mode Barcode Printing header (white on
+`#00d4ff`, 1.8:1). Disabled controls stay faint by design.
+
+**Staging side effect, cleaned up.** Opening Pay in the audit script saves
+the cart as a draft invoice; the sweeps created `ACC-SINV-2026-00163`
+(Anonymous, test item) more than once, deleted each time. The throwaway
+cashier was deleted; Administrator's desk theme is back on Dark (the POS
+theme toggle also saves it to the user's desk theme).
+
+**Production deploy.**
+1. `cd apps/posawesome && git pull upstream stable`
+2. `bench build --app posawesome`
+3. `bench restart`
+No migrate for this change. If production has not yet deployed section 58
+(`54267b1`), that commit comes with the pull and needs its own steps
+(backup, checks, `migrate`) from section 58 first.
