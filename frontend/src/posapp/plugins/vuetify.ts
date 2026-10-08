@@ -82,6 +82,8 @@ bootstrapThemeAttributes();
 const lightTheme = {
 	dark: false,
 	colors: {
+		// warning / secondary / success are dark enough (>= 4.5:1 on white and on
+		// --pos-surface-muted) to be used as text-* colours and to carry white text.
 		background: "#FFFFFF",
 		surface: "#FFFFFF",
 		"surface-variant": "#f5f5f5",
@@ -89,12 +91,12 @@ const lightTheme = {
 		"surface-light": "#fafafa",
 		primary: "#0097a7",
 		"primary-variant": "#00838f",
-		secondary: "#00bcd4",
+		secondary: "#007c8a",
 		"secondary-variant": "#0097a7",
 		accent: "#ff6b35",
 		"accent-variant": "#e55a2b",
-		success: "#66bb6a",
-		warning: "#ff9800",
+		success: "#2e7d32",
+		warning: "#b35900",
 		error: "#e86674",
 		info: "#2196f3",
 		outline: "rgba(0, 0, 0, 0.2)",
@@ -104,7 +106,7 @@ const lightTheme = {
 		"on-surface": "#212121",
 		"on-surface-variant": "#212121",
 		"on-error": "#ffffff",
-		"on-warning": "#212121",
+		"on-warning": "#ffffff",
 		"on-info": "#ffffff",
 		"on-success": "#ffffff",
 	},
