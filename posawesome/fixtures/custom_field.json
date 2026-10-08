@@ -9516,5 +9516,51 @@
 		"translatable": 0,
 		"unique": 0,
 		"width": null
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "Sales Invoice Item",
+		"fieldname": "posa_item_variant_of",
+		"fieldtype": "Link",
+		"options": "Item",
+		"label": "Parent Style",
+		"description": "The variant's parent item (style code) when sold (for Report View filtering/grouping).",
+		"read_only": 1,
+		"insert_after": "posa_item_color",
+		"name": "Sales Invoice Item-posa_item_variant_of"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "Sales Invoice Item",
+		"fieldname": "posa_item_season",
+		"fieldtype": "Data",
+		"label": "Season",
+		"description": "Item's Season (custom_season) when sold; blank when the item has none.",
+		"read_only": 1,
+		"insert_after": "posa_item_variant_of",
+		"name": "Sales Invoice Item-posa_item_season"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "Sales Invoice Item",
+		"fieldname": "posa_item_collection",
+		"fieldtype": "Data",
+		"label": "Collection",
+		"description": "Item's Collection (custom_collection) when sold; blank when the item has none.",
+		"read_only": 1,
+		"insert_after": "posa_item_season",
+		"name": "Sales Invoice Item-posa_item_collection"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "Sales Invoice Item",
+		"fieldname": "posa_item_vat",
+		"fieldtype": "Currency",
+		"options": "Company:company:default_currency",
+		"label": "Item VAT",
+		"description": "This line's VAT, from ERPNext's per-line tax breakdown (fixed charges such as delivery excluded).",
+		"read_only": 1,
+		"insert_after": "posa_item_collection",
+		"name": "Sales Invoice Item-posa_item_vat"
 	}
 ]
