@@ -126,23 +126,29 @@
 	transition: none !important;
 }
 
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active > td *,
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active input,
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active button {
+/* Keyboard-active row, every layout: the row is navy (#174a70) in both themes, so its
+   editors drop their theme fill and take the row's white text. The `td` in the input,
+   field and overlay selectors outranks theme.css's global `.posapp .v-text-field input`
+   and `.posapp .v-field__overlay` !important rules. */
+.posa-cart-table .posa-cart-item-row--keyboard-active > td *,
+.posa-cart-table .posa-cart-item-row--keyboard-active td input,
+.posa-cart-table .posa-cart-item-row--keyboard-active td button {
 	color: #ffffff !important;
 }
 
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active .v-field,
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active .v-field__overlay,
-.posa-items-table-container--counter-grid
-	.posa-cart-item-row--keyboard-active
-	.posa-cart-table__editor-display,
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active button {
+.posa-cart-table .posa-cart-item-row--keyboard-active td .v-field,
+.posa-cart-table .posa-cart-item-row--keyboard-active td .v-field__overlay,
+.posa-cart-table .posa-cart-item-row--keyboard-active td .posa-cart-table__editor-display,
+.posa-cart-table .posa-cart-item-row--keyboard-active td button {
 	background: transparent !important;
 }
 
-.posa-items-table-container--counter-grid .posa-cart-item-row--keyboard-active .v-field__outline {
-	color: var(--counter-rugged-cyan) !important;
+.posa-cart-table .posa-cart-item-row--keyboard-active td .posa-cart-table__editor-display {
+	border-color: #38bdf8;
+}
+
+.posa-cart-table .posa-cart-item-row--keyboard-active td .v-field__outline {
+	color: #38bdf8 !important;
 	--v-field-border-opacity: 1;
 }
 
