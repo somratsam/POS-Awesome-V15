@@ -25,6 +25,7 @@
 	--pos-primary: #0097a7;
 	--pos-primary-variant: #00838f;
 	--pos-primary-container: #e0f7fa;
+	--pos-primary-text: #00363a;
 	--pos-on-primary: #ffffff;
 
 	/* Secondary Colors - Original Light Mode */
@@ -63,6 +64,18 @@
 	--pos-pressed-bg: rgba(25, 118, 210, 0.08);
 	--pos-selected-bg: rgba(25, 118, 210, 0.12);
 	--pos-focus-bg: rgba(25, 118, 210, 0.06);
+
+	/* Tinted +/- quantity buttons (Purchase, Barcode Printing) */
+	--pos-button-warning-bg: #fff3e0;
+	--pos-button-warning-text: #9a4d00;
+	--pos-button-warning-border: #ffb74d;
+	--pos-button-warning-hover-bg: #ffe0b2;
+	--pos-button-warning-hover-text: #7a3d00;
+	--pos-button-success-bg: #e8f5e9;
+	--pos-button-success-text: #1b5e20;
+	--pos-button-success-border: #81c784;
+	--pos-button-success-hover-bg: #c8e6c9;
+	--pos-button-success-hover-text: #134a17;
 
 	/* Card and Component Backgrounds */
 	--pos-card-bg: #ffffff;
@@ -132,6 +145,7 @@
 	--pos-primary: #00d4ff;
 	--pos-primary-variant: #00a0cc;
 	--pos-primary-container: #003344;
+	--pos-primary-text: #e0f7fa;
 	--pos-on-primary: #000000;
 
 	/* Secondary Colors - High Contrast Cyan-Green */
@@ -170,6 +184,18 @@
 	--pos-pressed-bg: rgba(255, 255, 255, 0.16);
 	--pos-selected-bg: rgba(255, 255, 255, 0.2);
 	--pos-focus-bg: rgba(255, 255, 255, 0.14);
+
+	/* Tinted +/- quantity buttons (Purchase, Barcode Printing) */
+	--pos-button-warning-bg: #3d2a00;
+	--pos-button-warning-text: #ffcc80;
+	--pos-button-warning-border: #b26a00;
+	--pos-button-warning-hover-bg: #5a3d00;
+	--pos-button-warning-hover-text: #ffe0b2;
+	--pos-button-success-bg: #10331a;
+	--pos-button-success-text: #a5d6a7;
+	--pos-button-success-border: #2e7d32;
+	--pos-button-success-hover-bg: #1b4d2a;
+	--pos-button-success-hover-text: #c8e6c9;
 
 	/* Card and Component Backgrounds */
 	--pos-card-bg: #1e1e1e;
@@ -210,6 +236,7 @@
 		--pos-primary: #00d4ff;
 		--pos-primary-variant: #00a0cc;
 		--pos-primary-container: #003344;
+		--pos-primary-text: #e0f7fa;
 		--pos-on-primary: #000000;
 		--pos-secondary: #00e5b8;
 		--pos-secondary-variant: #00b894;
@@ -236,6 +263,16 @@
 		--pos-pressed-bg: rgba(255, 255, 255, 0.12);
 		--pos-selected-bg: rgba(255, 255, 255, 0.16);
 		--pos-focus-bg: rgba(255, 255, 255, 0.1);
+		--pos-button-warning-bg: #3d2a00;
+		--pos-button-warning-text: #ffcc80;
+		--pos-button-warning-border: #b26a00;
+		--pos-button-warning-hover-bg: #5a3d00;
+		--pos-button-warning-hover-text: #ffe0b2;
+		--pos-button-success-bg: #10331a;
+		--pos-button-success-text: #a5d6a7;
+		--pos-button-success-border: #2e7d32;
+		--pos-button-success-hover-bg: #1b4d2a;
+		--pos-button-success-hover-text: #c8e6c9;
 		--pos-card-bg: #1e1e1e;
 		--pos-input-bg: #2d2d2d;
 		--pos-button-bg: #2d2d2d;
@@ -448,6 +485,34 @@ body[data-page-route="posapp"] {
 .posapp button:focus-visible {
 	outline: 2px solid var(--pos-primary);
 	outline-offset: 2px;
+}
+
+/* Frappe's desk CSS ships Bootstrap 4's bg-variant rules, e.g.
+   `button.bg-primary:hover, button.bg-primary:focus { background-color: black !important }`.
+   Vuetify colours its buttons with the same `bg-*` class names, so without this a tapped
+   or hovered primary button turns black (and its dark-theme on-primary text vanishes).
+   Put each colour back; Vuetify's own .v-btn__overlay still gives hover/focus feedback.
+   Scoped by <body data-route="posapp/..."> (Frappe sets data-route on body; data-page-route
+   is only on the inner .page-container), which also covers dialogs teleported outside .posapp. */
+body[data-route^="posapp"] .v-btn.bg-primary:hover,
+body[data-route^="posapp"] .v-btn.bg-primary:focus {
+	background-color: rgb(var(--v-theme-primary)) !important;
+}
+body[data-route^="posapp"] .v-btn.bg-secondary:hover,
+body[data-route^="posapp"] .v-btn.bg-secondary:focus {
+	background-color: rgb(var(--v-theme-secondary)) !important;
+}
+body[data-route^="posapp"] .v-btn.bg-success:hover,
+body[data-route^="posapp"] .v-btn.bg-success:focus {
+	background-color: rgb(var(--v-theme-success)) !important;
+}
+body[data-route^="posapp"] .v-btn.bg-info:hover,
+body[data-route^="posapp"] .v-btn.bg-info:focus {
+	background-color: rgb(var(--v-theme-info)) !important;
+}
+body[data-route^="posapp"] .v-btn.bg-warning:hover,
+body[data-route^="posapp"] .v-btn.bg-warning:focus {
+	background-color: rgb(var(--v-theme-warning)) !important;
 }
 
 body[data-page-route="posapp"] .v-overlay__content > .v-card,
