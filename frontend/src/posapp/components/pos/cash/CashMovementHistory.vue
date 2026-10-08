@@ -3,7 +3,7 @@
 		<div class="d-flex align-center justify-space-between mb-3">
 			<div>
 				<div class="text-h6">{{ __("Cash Movements") }}</div>
-				<div class="text-body-2 text-grey">{{ __("Latest entries for current shift") }}</div>
+				<div class="text-body-2 text-medium-emphasis">{{ __("Latest entries for current shift") }}</div>
 			</div>
 			<div class="d-flex align-center ga-2">
 				<v-chip v-if="pendingOfflineCount > 0" color="warning" size="small" variant="tonal">

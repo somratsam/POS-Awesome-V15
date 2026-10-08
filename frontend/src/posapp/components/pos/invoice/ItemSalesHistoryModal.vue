@@ -445,6 +445,9 @@ const props = withDefaults(defineProps<Props>(), {
 	hideQtyDecimals: false,
 	expandedContentClasses: "",
 	displayCurrency: "",
+	// Explicit undefined: Vue casts an absent Boolean prop to false, which would pin
+	// resolvedTheme to "light" instead of falling back to the global theme.
+	isDarkTheme: undefined,
 });
 
 const emit = defineEmits(["update:modelValue", "qty-change", "edit-item", "after-leave"]);

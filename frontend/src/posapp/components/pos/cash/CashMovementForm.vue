@@ -14,7 +14,7 @@
 				/>
 			</div>
 		</div>
-		<div class="text-body-2 text-grey mb-4">
+		<div class="text-body-2 text-medium-emphasis mb-4">
 			{{ __("Book expense or deposit from active shift.") }}
 		</div>
 
