@@ -153,10 +153,9 @@
 			<v-btn
 				block
 				color="warning"
-				theme="dark"
 				prepend-icon="mdi-tray-full"
 				@click="$emit('load-drafts')"
-				class="white-text-btn summary-btn"
+				class="summary-btn"
 				data-pos-keyboard-target="invoice-action"
 				data-testid="invoice-action-drafts"
 				:loading="loadDraftsLoading"
@@ -381,14 +380,6 @@ const showMoreActions = computed(
 
 .counter-grid-action--pay:hover {
 	background: #07884b !important;
-}
-
-.white-text-btn {
-	color: var(--pos-text-primary) !important;
-}
-
-.white-text-btn :deep(.v-btn__content) {
-	color: var(--pos-text-primary) !important;
 }
 
 /* Enhanced button styling with better performance */

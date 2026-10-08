@@ -1,10 +1,10 @@
 <template>
 	<div class="reconciliation-section">
 		<div class="table-header mb-4">
-			<h4 class="text-h6 text-grey-darken-2 mb-1">
+			<h4 class="text-h6 text-high-emphasis mb-1">
 				{{ __("Payment Reconciliation") }}
 			</h4>
-			<p class="text-body-2 text-grey">
+			<p class="text-body-2 text-medium-emphasis">
 				{{ __("Verify closing amounts for each payment method") }}
 			</p>
 		</div>

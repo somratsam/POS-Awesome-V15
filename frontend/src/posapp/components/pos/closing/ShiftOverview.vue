@@ -1,10 +1,10 @@
 <template>
 	<div class="overview-section">
 		<div class="table-header mb-4">
-			<h4 class="text-h6 text-grey-darken-2 mb-1">
+			<h4 class="text-h6 text-high-emphasis mb-1">
 				{{ __("Shift Overview") }}
 			</h4>
-			<p class="text-body-2 text-grey">
+			<p class="text-body-2 text-medium-emphasis">
 				{{ __("Review shift totals before submitting the closing entry") }}
 			</p>
 		</div>
@@ -61,10 +61,10 @@
 
 			<div class="table-section mt-6">
 				<div class="table-header mb-2">
-					<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 						{{ __("Totals by Invoice Currency") }}
 					</h5>
-					<p class="text-body-2 text-grey">
+					<p class="text-body-2 text-medium-emphasis">
 						{{ __("Shows the distribution of invoices per currency") }}
 					</p>
 				</div>
@@ -136,10 +136,10 @@
 				<v-col cols="12" md="6">
 					<div class="table-section">
 						<div class="table-header mb-2">
-							<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 								{{ __("Outstanding Credit by Currency") }}
 							</h5>
-							<p class="text-body-2 text-grey">
+							<p class="text-body-2 text-medium-emphasis">
 								{{ __("Credit sales remaining to be collected") }}
 							</p>
 						</div>
@@ -214,10 +214,10 @@
 				<v-col cols="12" md="6">
 					<div class="table-section">
 						<div class="table-header mb-2">
-							<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 								{{ __("Returns by Currency") }}
 							</h5>
-							<p class="text-body-2 text-grey">
+							<p class="text-body-2 text-medium-emphasis">
 								{{ __("Processed returns impacting the shift totals") }}
 							</p>
 						</div>
@@ -292,10 +292,10 @@
 				<v-col cols="12" md="6">
 					<div class="table-section">
 						<div class="table-header mb-2">
-							<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 								{{ __("Change Returned") }}
 							</h5>
-							<p class="text-body-2 text-grey">
+							<p class="text-body-2 text-medium-emphasis">
 								{{ __("Track how much cash was handed back to customers") }}
 							</p>
 						</div>
@@ -468,10 +468,10 @@
 					<!-- End: Change Returned -->
 					<div class="table-section">
 						<div class="table-header mb-2">
-							<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 								{{ __("Cash Drawer Snapshot") }}
 							</h5>
-							<p class="text-body-2 text-grey">
+							<p class="text-body-2 text-medium-emphasis">
 								{{ __("Expected cash on hand grouped by currency") }}
 							</p>
 						</div>
@@ -551,10 +551,10 @@
 					</div>
 					<div class="table-section mt-4">
 						<div class="table-header mb-2">
-							<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 								{{ __("Submitted Cash Movements") }}
 							</h5>
-							<p class="text-body-2 text-grey">
+							<p class="text-body-2 text-medium-emphasis">
 								{{ __("Expenses and deposits posted during this shift") }}
 							</p>
 						</div>
@@ -611,10 +611,10 @@
 				class="table-section mt-4"
 			>
 				<div class="table-header mb-2">
-					<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 						{{ __("Loyalty Redemption") }}
 					</h5>
-					<p class="text-body-2 text-grey">
+					<p class="text-body-2 text-medium-emphasis">
 						{{ __("Invoice value settled by loyalty points, not cash collection") }}
 					</p>
 				</div>
@@ -717,10 +717,10 @@
 				class="table-section mt-4"
 			>
 				<div class="table-header mb-2">
-					<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 						{{ __("Customer Credit Redeemed") }}
 					</h5>
-					<p class="text-body-2 text-grey">
+					<p class="text-body-2 text-medium-emphasis">
 						{{ __("Invoice value settled from customer credit, not cash collection") }}
 					</p>
 				</div>
@@ -816,10 +816,10 @@
 				class="table-section mt-4"
 			>
 				<div class="table-header mb-2">
-					<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 						{{ __("Customer Credit Issued") }}
 					</h5>
-					<p class="text-body-2 text-grey">
+					<p class="text-body-2 text-medium-emphasis">
 						{{ __("Store credit issued today via return invoices") }}
 					</p>
 				</div>
@@ -907,10 +907,10 @@
 
 			<div class="table-section mt-4">
 				<div class="table-header mb-2">
-					<h5 class="text-subtitle-1 text-grey-darken-2 mb-1">
+					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 						{{ __("Payments by Mode of Payment") }}
 					</h5>
-					<p class="text-body-2 text-grey">
+					<p class="text-body-2 text-medium-emphasis">
 						{{ __("Grouped totals for each payment method and currency") }}
 					</p>
 				</div>

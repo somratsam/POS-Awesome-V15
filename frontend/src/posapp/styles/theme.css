@@ -480,6 +480,18 @@ body[data-page-route="posapp"] {
 	color: var(--pos-text-secondary) !important;
 }
 
+/* Light mode: Vuetify draws field labels at --v-medium-emphasis-opacity on a grey field
+   fill, leaving them ~2.4:1 (e.g. "Search items or barcode"). Full opacity on the
+   secondary text token fixes that. Focused/error/disabled fields keep Vuetify's own
+   treatment; body[data-route] covers dialogs, which render outside .posapp. */
+html[data-theme="light"]
+	body[data-route^="posapp"]
+	.v-field:not(.v-field--focused):not(.v-field--error):not(.v-field--disabled)
+	.v-field-label {
+	color: var(--pos-text-secondary);
+	opacity: 1;
+}
+
 .posapp .v-btn:focus-visible,
 .posapp [role="button"]:focus-visible,
 .posapp button:focus-visible {

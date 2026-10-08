@@ -74,10 +74,10 @@
 									>mdi-check-circle-outline</v-icon
 								>
 							</div>
-							<h3 class="text-h5 mb-3 text-grey-darken-2 font-weight-medium">
+							<h3 class="text-h5 mb-3 text-high-emphasis font-weight-medium">
 								{{ __("All Caught Up!") }}
 							</h3>
-							<p class="text-body-1 text-grey-darken-1 mb-0">
+							<p class="text-body-1 text-medium-emphasis mb-0">
 								{{ __("No offline invoices pending synchronization") }}
 							</p>
 						</div>
@@ -85,8 +85,8 @@
 						<!-- Enhanced Invoices Table -->
 						<div v-else class="table-container">
 							<div class="table-header mb-4">
-								<h4 class="text-h6 text-grey-darken-2 mb-1">{{ __("Pending Invoices") }}</h4>
-								<p class="text-body-2 text-grey">
+								<h4 class="text-h6 text-high-emphasis mb-1">{{ __("Pending Invoices") }}</h4>
+								<p class="text-body-2 text-medium-emphasis">
 									{{ __("These invoices will be synced when connection is restored") }}
 								</p>
 							</div>
@@ -104,10 +104,10 @@
 											<v-icon size="18" color="white">mdi-account</v-icon>
 										</v-avatar>
 										<div>
-											<div class="font-weight-medium text-grey-darken-2">
+											<div class="font-weight-medium text-high-emphasis">
 												{{ item.invoice.customer_name || item.invoice.customer }}
 											</div>
-											<div class="text-caption text-grey">{{ __("Customer") }}</div>
+											<div class="text-caption text-medium-emphasis">{{ __("Customer") }}</div>
 										</div>
 									</div>
 								</template>
@@ -129,7 +129,7 @@
 												)
 											}}
 										</div>
-										<div class="text-caption text-grey">{{ __("Total Amount") }}</div>
+										<div class="text-caption text-medium-emphasis">{{ __("Total Amount") }}</div>
 									</div>
 								</template>
 
