@@ -38,3 +38,4 @@ posawesome.patches.add_below_cost_sale_policy
 posawesome.patches.insert_receipt_logo_field_in_print_chain
 posawesome.patches.backfill_invoice_reporting_fields
 posawesome.patches.seed_pos_discount_reasons
+posawesome.patches.backfill_invoice_line_reporting_fields

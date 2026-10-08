@@ -416,6 +416,10 @@ fixtures = [
                     "Sales Invoice-posa_cashier_name",
                     "Sales Invoice Item-posa_item_size",
                     "Sales Invoice Item-posa_item_color",
+                    "Sales Invoice Item-posa_item_variant_of",
+                    "Sales Invoice Item-posa_item_season",
+                    "Sales Invoice Item-posa_item_collection",
+                    "Sales Invoice Item-posa_item_vat",
                     "Sales Invoice Item-posa_discount_reason",
                     "POS Invoice Item-posa_discount_reason",
                     "POS Profile-posa_require_discount_reason",
@@ -449,6 +453,7 @@ fixtures = [
                     "Sales Invoice-update_outstanding_for_self-default",
                     "Sales Invoice Item-brand-hidden",
                     "Sales Invoice Item-brand-read_only",
+                    "Sales Invoice Item-item_group-hidden",
                 ),
             ]
         ],
