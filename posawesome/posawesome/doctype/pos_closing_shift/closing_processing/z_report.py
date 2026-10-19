@@ -45,9 +45,12 @@ def get_z_report_data(pos_closing_shift):
     Combines fields already stored on the submitted doc (net/grand total,
     per-mode cash reconciliation, customer credit issued/redeemed) with
     fresh invoice-derived totals that have no stored equivalent anywhere:
-    sales-only quantity (doc.total_quantity nets in returns, confirmed wrong
-    for this purpose), discount totals, VAT, and per-payment-mode transaction
-    counts.
+    items sold and items returned (pieces), discount totals, VAT, and
+    per-payment-mode transaction counts.
+
+    Total Quantity / Number of Items is the net, items sold minus items
+    returned -- the same figure as the Closing Shift's own total_quantity.
+    Items/Receipt and Sales Figure/Item stay based on items sold.
 
     VAT is summed row-wise from each sale invoice's actual
     total_taxes_and_charges (not back-calculated from total_sales via a
@@ -73,7 +76,8 @@ def get_z_report_data(pos_closing_shift):
     total_returns = 0.0
     sale_count = 0
     return_count = 0
-    total_qty = 0.0
+    items_sold = 0.0
+    items_returned = 0.0
     total_discount = 0.0
     total_vat = 0.0
     sale_names = []
@@ -86,11 +90,12 @@ def get_z_report_data(pos_closing_shift):
             total_returns += abs(base_grand_total)
             return_count += 1
             return_names.append(row.get("name"))
+            items_returned += abs(flt(row.get("total_qty")))
         else:
             total_sales += base_grand_total
             sale_count += 1
             sale_names.append(row.get("name"))
-            total_qty += flt(row.get("total_qty"))
+            items_sold += flt(row.get("total_qty"))
             # Invoice-level discount plus the discounts on its item lines
             # (Disc %), which the parent discount_amount doesn't include.
             total_discount += get_base_value(
@@ -102,9 +107,11 @@ def get_z_report_data(pos_closing_shift):
             )
 
     net_excl_vat = total_sales - total_vat
-    items_per_receipt = flt(total_qty / sale_count, 2) if sale_count else 0.0
+    # flt() also turns a rounded -0.0 into 0.0, so the net never prints as "-0".
+    total_qty = flt(items_sold - items_returned, 3)
+    items_per_receipt = flt(items_sold / sale_count, 2) if sale_count else 0.0
     sales_per_receipt = flt(total_sales / sale_count, CURRENCY_PRECISION) if sale_count else 0.0
-    sales_per_item = flt(total_sales / total_qty, CURRENCY_PRECISION) if total_qty else 0.0
+    sales_per_item = flt(total_sales / items_sold, CURRENCY_PRECISION) if items_sold else 0.0
     total_register_count = sale_count + return_count
 
     pos_profile_doc = frappe.db.get_value(
@@ -153,7 +160,9 @@ def get_z_report_data(pos_closing_shift):
         "net_sales": flt(total_sales - total_returns, CURRENCY_PRECISION),
         "sale_count": sale_count,
         "return_count": return_count,
-        "total_qty": flt(total_qty),
+        "items_sold": flt(items_sold, 3),
+        "items_returned": flt(items_returned, 3),
+        "total_qty": total_qty,
         "total_discount": flt(total_discount, CURRENCY_PRECISION),
         "total_vat": flt(total_vat, CURRENCY_PRECISION),
         "net_excl_vat": flt(net_excl_vat, CURRENCY_PRECISION),
