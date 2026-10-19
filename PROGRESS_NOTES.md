@@ -6072,3 +6072,69 @@ theme toggle also saves it to the user's desk theme).
 No migrate for this change. If production has not yet deployed section 58
 (`54267b1`), that commit comes with the pull and needs its own steps
 (backup, checks, `migrate`) from section 58 first.
+
+## 60. Z Report: Items Sold / Items Returned, and Number of Items + Total Quantity become the net (2026-10-19)
+
+**Report.** A one-shift exchange (sale 1 piece 77.200, return 1 piece
+-64.200, 13.000 Visa using the 64.200 return credit) showed Total Quantity 0
+on the Closing Shift form but Number of Items 1 and Total Quantity 1 on the
+Z Report. Staff expect 0.
+
+**Cause.** `get_z_report_data()` summed `total_qty` in the sale branch only,
+and both print-format lines printed that one figure. Sales-only had been a
+deliberate choice when the Z Report was built (section 1); the user has now
+defined the figures differently. The Closing Shift's own `total_quantity`
+(`creation.py`) sums every invoice, returns included (negative quantities).
+Reproduced on staging: `POSA-CS-26-0000011` stored 14, Z Report printed 16.
+
+**Definitions (user's).** Items Sold = pieces on sale receipts (a qty-2 line
+counts 2); Items Returned = pieces on return receipts; Number of Items =
+Total Quantity = Sold - Returned (same as the Closing Shift). Sales Count /
+Returns Count stay receipt counts; Items/Receipt and Sales Figure/Item stay
+on Items Sold, 0 when nothing was sold.
+
+**Built.**
+- `z_report.py`: `items_sold`, `items_returned` (abs of the return's
+  negative `total_qty`), `total_qty` = their difference rounded to 3.
+  Frappe's `flt(x, 3)` already returns 0.0 for a rounded -0.0, so no
+  separate guard was needed (checked directly; a test covers it).
+- `z_report.json`: "Items Sold" and "Items Returned" above both net lines
+  (Today's Operations and Additional Information). A `qty()` Jinja macro
+  prints quantities as whole numbers (0, 2, -1), 2 decimals only if
+  fractional. Items/Receipt stays a 2-decimal ratio.
+- New `test_z_report_item_counts` (7): the user's six cases, receipt counts,
+  per-item basis, nothing-sold, no "-0", whole-number printing, both
+  sections' lines. Fails against the old code (8 failures) and the old print
+  format (2).
+
+**Checked first, nothing wrong.** The exchange's monthly-report rows (no
+production access here, checked by arithmetic + staging storage): qty 0,
+13.000, VAT 3.676 - 3.057 = 0.619 (both exactly 5% inclusive), net ex-VAT
+12.381 = Closing Shift Net Total; a credit return has no payment rows and
+redeemed credit is not a payment row, so Visa 13.000 = the final total.
+Report View's Totals Row (`report_view.js` `get_columns_totals`) is a plain
+sum of the *loaded* rows: it covers only what's loaded (20 by default), adds
+invoice-level columns once per line on multi-line invoices, and payment
+columns differ from Final Price by net customer credit and by cash change
+(the Cash row is the tendered amount, e.g. `ACC-SINV-2026-00121`: 200.000
+with 43.200 change).
+
+**Verified on staging.** Live "Z Report" record identical to git before
+migrate; migrate twice, exit 0, identical after each (the JSON has no
+`modified`, so every migrate recreates it from the file -- pre-existing).
+All 13 submitted shifts: new net = stored `total_quantity`. Real HTTP render
+of `POSA-CS-26-0000011` via `get_html_and_style` (the reprint/QZ path):
+Items Sold 16 / Returned 2 / Total Quantity 14 / Number of Items 14, counts
+11 and 1 unchanged. Frontend 249/249, 1329/1329. Backend (isolated):
+`test_z_report_item_counts` 7/7, `test_z_report` 3/3 (its trailing
+`AttributeError: module 'frappe' has no attribute 'model'` also occurs on
+unchanged HEAD -- the module stubs `frappe` in `sys.modules`),
+`test_z_report_line_discounts` 2/2, `test_same_shift_exchange` 5/5,
+`test_pos_closing_shift` 9/9.
+
+**Note.** Reprints are computed live, so a past shift's reprint now shows the
+net figures and won't match its original paper copy.
+
+**Production deploy.** Compare the live "Z Report" Print Format with git
+first (migrate recreates it), then pull, `bench --site <prod-site> migrate`,
+`bench restart`. No build.
