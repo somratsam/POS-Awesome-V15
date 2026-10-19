@@ -6196,3 +6196,97 @@ has no attribute 'model'` after OK on unchanged HEAD too (both stub
 Format with git first (migrate recreates it), then pull, `bench --site
 <prod-site> migrate`, `bench restart`. No build. Reprints of past shifts
 recompute live and will show the new figures.
+
+## 62. Closing a shift shows a "Shift closed" screen instead of the opening dialog; opening-dialog Submit guards (2026-10-19)
+
+**Problem.** After Close Shift -> Submit, the "Create POS Opening Shift"
+dialog appeared by itself. Staff took it for the close still asking for
+confirmation, pressed its Submit and opened a shift nobody wanted.
+
+**Cause.** `usePosShift.ts` `submit_closing_pos()` ends by calling
+`check_opening_entry()` -- the page-load check -- which finds no open shift
+and calls `openDialog()`. Upstream behaviour (`cd5eba17`, 15.33.0). The
+closing dialog hides itself on Submit before the server answers
+(`useClosingShift.ts`), and 1-2 s later a dialog with a Submit button in the
+same corner appears, prefilled (company, profile, zero amounts), so one press
+opens a shift.
+
+**Built (option A of four; B log out, C go to Desk, D relabel the dialog
+were rejected).**
+- `usePosShift(openDialog, onShiftClosed)`; `check_opening_entry({
+  onNoOpening })` defaults to `openDialog`, so login/refresh still show the
+  dialog. After a close it passes `onShiftClosed` (also when the post-close
+  check fails with nothing cached). Another open shift for the same user
+  (other POS Profile) still loads as before.
+- New `ShiftClosedPanel.vue`: "Shift closed / The Z Report is printing."
+  with **Close** (same red as the dialog's Close; goes to Desk), **Log Out**
+  and **Open New Shift**. `Pos.vue` `shiftClosed` flag hides the POS area and
+  mobile dock; Open New Shift opens the dialog; registering a shift clears it.
+- Shared helpers: `authService.logoutToPosLogin()` (the dialog's logout,
+  moved) and `services/deskNavigation.ts` `goToDesk()` (`set_route("/")` +
+  reload), used by the dialog's Close and the new Close. No role check, as the
+  dialog's Close has none.
+- `OpeningDialog.vue` `submit_dialog()`: returns early while `is_loading`
+  (two clicks in one tick reach the handler before the button re-renders
+  disabled); `async` + `try/catch/finally` so Submit re-enables after a
+  failure and a failure doesn't also raise the global "An unexpected error
+  occurred" toast (frappe.call already shows the server's message).
+- **No server lock** (user's choice): `validate_unique_open_shift()` stays the
+  only server guard; its docstring notes it isn't race-proof.
+
+**Bug found in staging review, fixed before commit.** A first version used
+`frappe.call(...).then(...).finally(...)`. `frappe.call` returns jQuery's
+`$.ajax()` result (Frappe ships jQuery 3.7.0): `then`/`catch`/`always`, **no
+`finally`** (checked against Frappe's own jQuery). Opening a shift showed
+"An unexpected error occurred: frappe.call(...).then(...).finally is not a
+function" (the shift still opened). The specs mocked `frappe.call` with
+native Promises, which have `finally`, so they passed. New
+`tests/helpers/frappeCallPromise.ts` returns jQuery-shaped promises (no
+`finally`); the opening-dialog and `usePosShift` specs use it, and the
+dialog spec fails on anything reaching Vue's `errorHandler`. Against the
+broken code: native mock -> both success-path tests pass; jQuery-shaped mock
+-> all 3 fail with the exact error. `authService.logout().finally()` is fine:
+`api.callEnvelope()` returns a native Promise (pre-existing code, moved).
+
+**Tests.** `usePosShift.spec.ts` +5 (Shift Closed after a close / after a
+failed post-close check; other open shift still loads; dialog on page load /
+on failed load check). `openingDialogSubmitGuard.spec.ts` 3 (opens without
+an error and re-enables Submit; two clicks in one tick -> one request; failure
+re-enables Submit without the toast). `shiftClosedPanel.spec.ts` 6 (text;
+Close, Log Out, Open New Shift in that order; each button only its own
+action; `goToDesk`). `posShiftClosedWiring.spec.ts` 5 (source checks:
+`Pos.vue` can't be mounted under Vitest's bundled Vite -- `.js`-suffixed
+store imports). Each fails against the old code where it guards new
+behaviour.
+
+**Verified on staging** (headless Chromium, Administrator + throwaway PIN
+cashier, deleted afterwards), final build: load with no shift -> dialog;
+shift opened behind the dialog then Submit -> server's "already has an open
+POS shift", Submit re-enabled, no toast; double-click Submit -> exactly one
+shift; unlock, Menu -> Close Shift -> Submit -> Shift Closed screen (light
+and dark checked), no new shift; Close -> `/desk`; Open New Shift -> dialog;
+refresh -> dialog. No "Global Error" in the console. Frontend 252/252,
+1348/1348; `bench build` exit 0; `test_pos_closing_shift` 9/9; no migrate
+(nothing doctype-shaped). Test shifts left on staging (no invoices):
+`POSA-OS-26-0000017`, `-21`, `-23` (closed by `POSA-CS-26-0000015`, `-18`,
+`-19`); `-20` and `-22` cancelled.
+
+**Note.** `pos_opening_shift/test_pos_opening_shift.py` is an empty
+placeholder (`class TestPOSOpeningShift(unittest.TestCase): pass`), so
+"running" it tests nothing; `validate_unique_open_shift()` has no backend
+test.
+
+**Production deploy.** Frontend change: `bench build --app posawesome`,
+restart, staff hard-refresh. No migrate needed for this change.
+
+## 63. TRACKED, NOT YET FIXED -- create_opening_voucher doesn't check the user is assigned to the POS Profile (2026-10-19)
+
+`shifts.py` `create_opening_voucher(pos_profile, company, balance_details)`
+is whitelisted and inserts with `ignore_permissions=True`.
+`POSOpeningShift.validate_pos_profile_and_cashier()` only checks that the
+profile belongs to the company and that the user is enabled -- not that the
+user is in the profile's `applicable_for_users`. Any logged-in user can open
+a shift on any POS Profile by calling the method directly. Suggested fix:
+resolve the profile through `pos_access.get_authorized_pos_profile()` (as
+`get_z_report_data` does) before inserting. Found during section 62; the
+user chose to track it separately.
