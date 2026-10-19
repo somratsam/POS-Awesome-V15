@@ -64,7 +64,7 @@
 				</v-btn>
 				<v-btn
 					theme="dark"
-					@click="submitDialog"
+					@click="requestSubmit"
 					class="pos-action-btn submit-action-btn"
 					size="large"
 					elevation="2"
@@ -75,6 +75,11 @@
 			</v-card-actions>
 		</v-card>
 	</v-dialog>
+	<CloseShiftConfirmDialog
+		:model-value="confirmCloseDialog"
+		@go-back="cancelConfirm"
+		@confirm="confirmSubmit"
+	/>
 </template>
 
 <script>
@@ -87,6 +92,7 @@ import { useFormat } from "../../../format";
 import ClosingHeader from "../closing/ClosingHeader.vue";
 import ShiftOverview from "../closing/ShiftOverview.vue";
 import PaymentReconciliation from "../closing/PaymentReconciliation.vue";
+import CloseShiftConfirmDialog from "../closing/CloseShiftConfirmDialog.vue";
 
 export default {
 	name: "ClosingDialog",
@@ -94,6 +100,7 @@ export default {
 		ClosingHeader,
 		ShiftOverview,
 		PaymentReconciliation,
+		CloseShiftConfirmDialog,
 	},
 	setup() {
 		const uiStore = useUIStore();
@@ -109,7 +116,10 @@ export default {
 			pos_profile,
 			closeDialog,
 			fetchOverview,
-			submitDialog,
+			confirmCloseDialog,
+			requestSubmit,
+			cancelConfirm,
+			confirmSubmit,
 		} = useClosingShift(eventBus);
 
 		const { formatCurrency, formatFloat, currencySymbol } = useFormat();
@@ -175,9 +185,16 @@ export default {
 		];
 
 		const handleKeydown = (event) => {
-			if (event.key === "Escape" && closingDialog.value) {
-				closeDialog();
+			if (event.key !== "Escape" || !closingDialog.value) {
+				return;
 			}
+			// With "Close your shift?" open, Esc only goes back to the closing
+			// dialog, keeping the figures entered in it.
+			if (confirmCloseDialog.value) {
+				cancelConfirm();
+				return;
+			}
+			closeDialog();
 		};
 
 		onMounted(() => {
@@ -227,7 +244,10 @@ export default {
 			pos_profile,
 			closeDialog,
 			fetchOverview,
-			submitDialog,
+			confirmCloseDialog,
+			requestSubmit,
+			cancelConfirm,
+			confirmSubmit,
 			...summary,
 			// Expose formatters used in template
 			formatCurrency,
