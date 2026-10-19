@@ -52,10 +52,15 @@ def get_z_report_data(pos_closing_shift):
     returned -- the same figure as the Closing Shift's own total_quantity.
     Items/Receipt and Sales Figure/Item stay based on items sold.
 
-    VAT is summed row-wise from each sale invoice's actual
+    VAT is summed row-wise from each invoice's actual
     total_taxes_and_charges (not back-calculated from total_sales via a
     hardcoded rate), so it stays correct regardless of tax rate changes or
-    future per-item/per-customer tax exceptions.
+    future per-item/per-customer tax exceptions. VAT on sales and VAT on
+    returns are kept apart; VAT Amount, Net Sales incl. VAT and Net Excl. VAT
+    are the nets, matching the Closing Shift. Net Excl. VAT is the sum of each
+    invoice's own net total, like the Closing Shift's net_total -- not Net
+    Sales minus VAT, which can be off by a rounding cent when an invoice's
+    net + VAT differs from its grand total.
 
     This is a directly-callable whitelisted endpoint (the print format's own
     permission check on the POS Closing Shift doc does not protect it), so
@@ -79,18 +84,25 @@ def get_z_report_data(pos_closing_shift):
     items_sold = 0.0
     items_returned = 0.0
     total_discount = 0.0
-    total_vat = 0.0
+    vat_on_sales = 0.0
+    vat_on_returns = 0.0
+    net_excl_vat = 0.0
     sale_names = []
     return_names = []
 
     for row in invoice_rows:
         conversion_rate = row.get("conversion_rate")
         base_grand_total = get_base_value(row, "grand_total", "base_grand_total", conversion_rate)
+        # Returns carry a negative net total.
+        net_excl_vat += get_base_value(row, "net_total", "base_net_total", conversion_rate)
         if row.get("is_return"):
             total_returns += abs(base_grand_total)
             return_count += 1
             return_names.append(row.get("name"))
             items_returned += abs(flt(row.get("total_qty")))
+            vat_on_returns += abs(
+                get_base_value(row, "total_taxes_and_charges", "base_total_taxes_and_charges", conversion_rate)
+            )
         else:
             total_sales += base_grand_total
             sale_count += 1
@@ -102,11 +114,12 @@ def get_z_report_data(pos_closing_shift):
                 row, "discount_amount", "base_discount_amount", conversion_rate
             )
             total_discount += flt(line_discounts.get(row.get("name"))) * flt(conversion_rate or 1)
-            total_vat += get_base_value(
+            vat_on_sales += get_base_value(
                 row, "total_taxes_and_charges", "base_total_taxes_and_charges", conversion_rate
             )
 
-    net_excl_vat = total_sales - total_vat
+    net_sales = total_sales - total_returns
+    total_vat = vat_on_sales - vat_on_returns
     # flt() also turns a rounded -0.0 into 0.0, so the net never prints as "-0".
     total_qty = flt(items_sold - items_returned, 3)
     items_per_receipt = flt(items_sold / sale_count, 2) if sale_count else 0.0
@@ -157,13 +170,15 @@ def get_z_report_data(pos_closing_shift):
         "same_shift_exchange_total": flt(doc.same_shift_exchange_total, CURRENCY_PRECISION),
         "total_sales": flt(total_sales, CURRENCY_PRECISION),
         "total_returns": flt(total_returns, CURRENCY_PRECISION),
-        "net_sales": flt(total_sales - total_returns, CURRENCY_PRECISION),
+        "net_sales": flt(net_sales, CURRENCY_PRECISION),
         "sale_count": sale_count,
         "return_count": return_count,
         "items_sold": flt(items_sold, 3),
         "items_returned": flt(items_returned, 3),
         "total_qty": total_qty,
         "total_discount": flt(total_discount, CURRENCY_PRECISION),
+        "vat_on_sales": flt(vat_on_sales, CURRENCY_PRECISION),
+        "vat_on_returns": flt(vat_on_returns, CURRENCY_PRECISION),
         "total_vat": flt(total_vat, CURRENCY_PRECISION),
         "net_excl_vat": flt(net_excl_vat, CURRENCY_PRECISION),
         "items_per_receipt": items_per_receipt,

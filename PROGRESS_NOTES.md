@@ -6138,3 +6138,61 @@ net figures and won't match its original paper copy.
 **Production deploy.** Compare the live "Z Report" Print Format with git
 first (migrate recreates it), then pull, `bench --site <prod-site> migrate`,
 `bench restart`. No build.
+
+## 61. Z Report VAT nets returns: Net Sales incl. VAT, VAT on Sales / on Returns, Net Excl. VAT from invoice net totals (2026-10-19)
+
+**Problem.** The Z Report's VAT block covered sales only. For the section 60
+exchange (77.200 sale, 64.200 return) it printed Tax Incl. Sales Figure
+77.200, VAT 3.676, Net Excl. VAT 73.524; the Closing Shift shows 13.000,
+0.619, 12.381.
+
+**Built (user-approved design).**
+- `z_report.py`: `vat_on_sales` and `vat_on_returns` (abs of each return's
+  base `total_taxes_and_charges`, row-wise via `get_base_value()` like
+  sales VAT); `total_vat` = their difference.
+- "Tax Incl. Sales Figure" renamed **"Net Sales incl. VAT"** and now prints
+  `net_sales` (sales - returns). New lines "VAT on Sales" and "VAT on
+  Returns" (both positive, like Total Returns) above "VAT Amount" (net).
+- **Net Excl. VAT = the sum of each invoice's own base net total** (returns
+  negative), the same source as the Closing Shift's `net_total`
+  (`creation.py`). The first version used Net Sales - VAT; on staging that
+  was 0.010 off on `POSA-CS-26-0000013`, because `ACC-SINV-2026-00083` is
+  internally inconsistent (net 178.96 + VAT 8.95 = 187.91, grand total
+  187.90 -- ERPNext rounding a VAT-inclusive price at staging's 2-decimal
+  currency precision, see section 58). The user chose the Closing Shift
+  match over the printed lines always adding up: on such a shift Net Sales
+  incl. VAT - VAT Amount differs from Net Excl. VAT by the rounding.
+- `data.py` `get_shift_invoice_rows()` also fetches `net_total` /
+  `base_net_total` (its other callers in `pos_closing_shift.py` read
+  specific keys and are unaffected).
+- Unchanged, still gross sales: Total Sales, Sales Figure/Receipt, Sales
+  Figure/Item, Total Sales Receipts. Total Register unchanged.
+- New `test_z_report_vat` (8): the exchange, gross figures kept, returns-only
+  shift (negative), return VAT in company currency, the 00083 rounding case,
+  the row query fetching net totals, the print-format lines (and no "Tax
+  Incl. Sales Figure"), Total Sales Receipts still gross. Mutation-checked:
+  old code + old print format fail 5; reverting Net Excl. VAT to Net Sales -
+  VAT fails the rounding test; dropping the `data.py` fields fails the query
+  test.
+
+**Verified on staging.** All 13 submitted shifts, four figures each against
+the Closing Shift: Total Quantity = `total_quantity`, VAT Amount = sum of
+the `taxes` table, Net Sales incl. VAT = `grand_total`, Net Excl. VAT =
+`net_total` -- 52/52 equal. Real HTTP render via `get_html_and_style`:
+`POSA-CS-26-0000011` Net Sales incl. VAT 899.170, VAT on Sales 47.649, on
+Returns 4.860, VAT Amount 42.789, Net Excl. VAT 856.381;
+`POSA-CS-26-0000013` 3861.930 / 243.036 / 59.220 / 183.816 / 3678.124.
+Live "Z Report" record identical to git before and after; migrate twice,
+exit 0, no drift. Frontend 249/249, 1329/1329. Backend (isolated):
+`test_z_report_vat` 8/8, `test_z_report_item_counts` 7/7, `test_z_report`
+3/3, `test_z_report_line_discounts` 2/2, `test_same_shift_exchange` 5/5,
+`test_pos_closing_shift` 9/9, `test_overview_loyalty` 4/4,
+`test_cash_movement_integration` 2/2. `test_z_report` and
+`test_overview_loyalty` print a trailing `AttributeError: module 'frappe'
+has no attribute 'model'` after OK on unchanged HEAD too (both stub
+`frappe` in `sys.modules`).
+
+**Production deploy (with section 60).** Compare the live "Z Report" Print
+Format with git first (migrate recreates it), then pull, `bench --site
+<prod-site> migrate`, `bench restart`. No build. Reprints of past shifts
+recompute live and will show the new figures.
