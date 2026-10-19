@@ -145,6 +145,7 @@ import {
 } from "../../../../offline/index";
 import { createBootstrapSnapshotFromRegisterData } from "../../../../offline/bootstrapSnapshot";
 import authService from "../../../services/authService";
+import { goToDesk } from "../../../services/deskNavigation";
 
 defineOptions({
 	name: "OpeningDialog",
@@ -261,53 +262,56 @@ async function get_opening_dialog_data() {
 	});
 }
 
-function submit_dialog() {
+async function submit_dialog() {
+	// The disabled button already stops a double click; this also stops any
+	// second call while the first is still in flight.
+	if (is_loading.value) {
+		return;
+	}
 	if (!payments_methods.value.length || !company.value || !pos_profile.value) {
 		return;
 	}
 
 	is_loading.value = true;
-
-	return frappe
-		.call("posawesome.posawesome.api.shifts.create_opening_voucher", {
+	try {
+		// frappe.call returns a jQuery promise (no .finally), so await it.
+		const r = await frappe.call("posawesome.posawesome.api.shifts.create_opening_voucher", {
 			pos_profile: pos_profile.value,
 			company: company.value,
 			balance_details: payments_methods.value,
-		})
-		.then((r) => {
-			if (r.message) {
-				emit("register", r.message);
-				try {
-					setOpeningStorage(r.message);
-					setBootstrapSnapshot(
-						createBootstrapSnapshotFromRegisterData(r.message, getBootstrapSnapshot(), {
-							buildVersion: BUILD_VERSION,
-						}),
-					);
-				} catch (e) {
-					console.error("Failed to cache opening data", e);
-				}
-				// Close handles hiding the dialog, parent handles logic
-				emit("close");
-				is_loading.value = false;
-			}
 		});
+		if (r?.message) {
+			emit("register", r.message);
+			try {
+				setOpeningStorage(r.message);
+				setBootstrapSnapshot(
+					createBootstrapSnapshotFromRegisterData(r.message, getBootstrapSnapshot(), {
+						buildVersion: BUILD_VERSION,
+					}),
+				);
+			} catch (e) {
+				console.error("Failed to cache opening data", e);
+			}
+			// Close handles hiding the dialog, parent handles logic
+			emit("close");
+		}
+	} catch (error) {
+		// frappe.call has already shown the server's message (e.g. "already
+		// has an open POS shift"); don't raise it again as an unexpected error.
+		console.error("Failed to open POS shift", error);
+	} finally {
+		// Re-enable Submit after a failure too, instead of leaving it stuck
+		// until the page is reloaded.
+		is_loading.value = false;
+	}
 }
 
 function go_desk() {
-	frappe.set_route("/");
-	location.reload();
+	goToDesk();
 }
 
 function logout() {
-	const redirectTarget = "/app/posapp";
-	const loginPath = `/login?redirect-to=${encodeURIComponent(redirectTarget)}`;
-	authService.logout().finally(() => {
-		const loginUrl =
-			frappe?.utils?.get_url?.(loginPath) ??
-			(frappe?.urllib?.get_base_url?.() ? `${frappe.urllib.get_base_url()}${loginPath}` : loginPath);
-		window.location.href = loginUrl;
-	});
+	authService.logoutToPosLogin();
 }
 
 onMounted(() => {

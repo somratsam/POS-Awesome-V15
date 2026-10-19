@@ -83,7 +83,13 @@ function normalizeClosingShiftPreparationResponse(
 	};
 }
 
-export function usePosShift(openDialog?: () => void) {
+// openDialog runs when no shift is open on page load; onShiftClosed runs
+// instead right after a close, so staff aren't shown the opening dialog
+// they didn't ask for (they'd press its Submit and open an unwanted shift).
+export function usePosShift(
+	openDialog?: () => void,
+	onShiftClosed?: () => void,
+) {
 	const instance = getCurrentInstance();
 	const proxy: any = instance?.proxy;
 	const eventBus: any = proxy?.eventBus || inject("eventBus");
@@ -117,7 +123,10 @@ export function usePosShift(openDialog?: () => void) {
 		}
 	}
 
-	async function check_opening_entry() {
+	async function check_opening_entry(
+		options: { onNoOpening?: () => void } = {},
+	) {
+		const onNoOpening = options.onNoOpening || openDialog;
 		const phase = startStartupPhase("pos_profile_and_settings_loading");
 		await startupInitPromise;
 		await checkDbHealth();
@@ -164,9 +173,9 @@ export function usePosShift(openDialog?: () => void) {
 						console.error("Failed to cache opening data", e);
 					}
 				} else {
-					console.info("No opening shift found, opening dialog");
+					console.info("No opening shift found");
 					clearOpeningStorage();
-					openDialog && openDialog();
+					onNoOpening && onNoOpening();
 					finishStartupPhase(phase, "ok", {
 						profile: null,
 						source: "server_no_opening",
@@ -193,7 +202,7 @@ export function usePosShift(openDialog?: () => void) {
 				if (!isOffline()) {
 					clearOpeningStorage();
 				}
-				openDialog && openDialog();
+				onNoOpening && onNoOpening();
 				finishStartupPhase(phase, "error", { error: err });
 			});
 	}
@@ -267,7 +276,11 @@ export function usePosShift(openDialog?: () => void) {
 						title: "POS Shift Closed",
 						color: "success",
 					});
-					check_opening_entry();
+					// Another shift still open for this user (e.g. on a
+					// different POS Profile) loads as before.
+					check_opening_entry({
+						onNoOpening: onShiftClosed || openDialog,
+					});
 				}
 			})
 			.catch((err: unknown) => {

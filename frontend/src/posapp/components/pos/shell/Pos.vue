@@ -20,6 +20,12 @@
 			@close="closeOpeningDialog"
 			@register="handleRegisterPosData"
 		></OpeningDialog>
+		<ShiftClosedPanel
+			v-if="shiftClosed && !dialog"
+			@close="goToDeskAfterClose"
+			@open-new-shift="openNewShiftAfterClose"
+			@logout="logoutAfterClose"
+		/>
 		<v-dialog
 			v-if="usePaymentDialog"
 			v-model="paymentDialogOpen"
@@ -96,7 +102,7 @@
 		</v-dialog>
 		<v-row
 			v-if="!counterGridActive"
-			v-show="!dialog"
+			v-show="!dialog && !shiftClosed"
 			dense
 			class="ma-0 dynamic-main-row"
 			:class="{ 'dynamic-main-row--phone': isPhone }"
@@ -167,7 +173,7 @@
 				<Invoice ref="invoicePanel"></Invoice>
 			</v-col>
 		</v-row>
-		<section v-else v-show="!dialog" class="counter-grid-pos" data-testid="counter-grid-pos">
+		<section v-else v-show="!dialog && !shiftClosed" class="counter-grid-pos" data-testid="counter-grid-pos">
 			<Invoice ref="invoicePanel" presentation="counter-grid" />
 			<CounterGridHealthStrip
 				:warehouse="posProfile?.warehouse"
@@ -295,6 +301,9 @@ import ItemsSelector from "../items/ItemsSelector.vue";
 import Invoice from "../Invoice.vue";
 import CounterGridHealthStrip from "./CounterGridHealthStrip.vue";
 import OpeningDialog from "../shift/OpeningDialog.vue";
+import ShiftClosedPanel from "../shift/ShiftClosedPanel.vue";
+import authService from "../../../services/authService";
+import { goToDesk } from "../../../services/deskNavigation";
 import Payments from "../Payments.vue";
 import PosOffers from "../offers/PosOffers.vue";
 import PosCoupons from "../offers/PosCoupons.vue";
@@ -329,14 +338,22 @@ export default {
 	setup() {
 		const eventBus = inject("eventBus");
 		const dialog = ref(false);
+		// Set after a shift is closed: show the Shift Closed screen rather than
+		// opening the opening-shift dialog nobody asked for.
+		const shiftClosed = ref(false);
 		const invoicePanel = ref(null);
 		const additionalDiscountField = ref(null);
 		const mobileDock = ref(null);
 		const responsive = useResponsive();
 		const rtl = useRtl();
-		const shift = usePosShift(() => {
-			dialog.value = true;
-		});
+		const shift = usePosShift(
+			() => {
+				dialog.value = true;
+			},
+			() => {
+				shiftClosed.value = true;
+			},
+		);
 		const offers = useOffers();
 		const uiStore = useUIStore();
 		const invoiceStore = useInvoiceStore();
@@ -386,7 +403,11 @@ export default {
 		const compactPanel = ref("selector");
 		const isPhone = computed(() => responsive.isPhone.value);
 		const showBottomDock = computed(
-			() => !counterGridActive.value && !dialog.value && responsive.windowWidth.value < 1100,
+			() =>
+				!counterGridActive.value &&
+				!dialog.value &&
+				!shiftClosed.value &&
+				responsive.windowWidth.value < 1100,
 		);
 		const counterItemSearchOpen = ref(false);
 		const counterDirectEntryPending = ref(false);
@@ -932,6 +953,7 @@ export default {
 			counterItemsSelector,
 			eventBus,
 			dialog,
+			shiftClosed,
 		};
 	},
 	data: function () {
@@ -943,6 +965,7 @@ export default {
 		Invoice,
 		CounterGridHealthStrip,
 		OpeningDialog,
+		ShiftClosedPanel,
 		Payments,
 		Drafts,
 		InvoiceManagement,
@@ -963,6 +986,16 @@ export default {
 		create_opening_voucher() {
 			this.dialog = true;
 		},
+		openNewShiftAfterClose() {
+			this.shiftClosed = false;
+			this.dialog = true;
+		},
+		logoutAfterClose() {
+			authService.logoutToPosLogin();
+		},
+		goToDeskAfterClose() {
+			goToDesk();
+		},
 		get_pos_setting() {
 			frappe.db.get_doc("POS Settings", undefined).then((_doc) => {
 				// Update store directly instead of emitting event
@@ -978,6 +1011,7 @@ export default {
 		},
 		// handleAddItem removed as ItemsSelector handles pos addition internally
 		handleRegisterPosData(data) {
+			this.shiftClosed = false;
 			this.pos_profile = data.pos_profile;
 			this.get_offers(this.pos_profile.name, this.pos_profile);
 			this.pos_opening_shift = data.pos_opening_shift;
