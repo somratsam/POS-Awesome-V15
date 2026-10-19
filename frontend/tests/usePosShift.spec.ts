@@ -164,7 +164,8 @@ describe("usePosShift after closing vs on page load", () => {
 	beforeEach(() => {
 		setActivePinia(createPinia());
 		offlineState.openingStorage = null;
-		printZReport.mockClear();
+		printZReport.mockReset();
+		printZReport.mockResolvedValue({ ok: true });
 		vi.stubGlobal("frappe", {
 			session: { user: "test@example.com" },
 			datetime: { nowdate: () => "2026-10-19" },
@@ -192,6 +193,25 @@ describe("usePosShift after closing vs on page load", () => {
 		expect(printZReport).toHaveBeenCalledWith("POS-CLOSE-0009");
 		expect(onShiftClosed).toHaveBeenCalledTimes(1);
 		expect(openDialog).not.toHaveBeenCalled();
+	});
+
+	it("tells the Shift Closed screen which shift closed and how its Z Report print went", async () => {
+		stubServer(null);
+		printZReport.mockResolvedValue({ ok: false, error: "QZ Tray is not available." });
+		const onShiftClosed = vi.fn();
+		const shift = usePosShift(vi.fn(), onShiftClosed);
+
+		shift.submit_closing_pos({ name: "POS-CLOSE-0009" });
+		await settle();
+
+		const closed = onShiftClosed.mock.calls[0][0];
+		expect(closed.closingShift).toBe("POS-CLOSE-0009");
+		await expect(closed.zReportPrint).resolves.toEqual({
+			ok: false,
+			error: "QZ Tray is not available.",
+		});
+		// The Z Report is printed once, by the close itself.
+		expect(printZReport).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the Shift Closed screen when the post-close check fails with nothing cached", async () => {

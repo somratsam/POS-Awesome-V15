@@ -15,7 +15,10 @@ import {
 } from "../../../../offline/index";
 import { getValidCachedOpeningForCurrentUser } from "../../../utils/openingCache";
 import { createBootstrapSnapshotFromRegisterData } from "../../../../offline/bootstrapSnapshot";
-import { printZReport } from "../../../services/documentPrint";
+import {
+	printZReport,
+	type ZReportPrintResult,
+} from "../../../services/documentPrint";
 import {
 	finishStartupPhase,
 	startStartupPhase,
@@ -83,12 +86,18 @@ function normalizeClosingShiftPreparationResponse(
 	};
 }
 
+export interface ClosedShiftInfo {
+	closingShift: string;
+	// The automatic Z Report print started when the shift closed.
+	zReportPrint: Promise<ZReportPrintResult>;
+}
+
 // openDialog runs when no shift is open on page load; onShiftClosed runs
 // instead right after a close, so staff aren't shown the opening dialog
 // they didn't ask for (they'd press its Submit and open an unwanted shift).
 export function usePosShift(
 	openDialog?: () => void,
-	onShiftClosed?: () => void,
+	onShiftClosed?: (closed: ClosedShiftInfo) => void,
 ) {
 	const instance = getCurrentInstance();
 	const proxy: any = instance?.proxy;
@@ -266,7 +275,7 @@ export function usePosShift(
 			.then((r: any) => {
 				console.log("Submit result", r);
 				if (r.message) {
-					printZReport(r.message);
+					const zReportPrint = printZReport(r.message);
 					pos_profile.value = null;
 					pos_opening_shift.value = null;
 					uiStore.posOpeningShift = null;
@@ -279,7 +288,13 @@ export function usePosShift(
 					// Another shift still open for this user (e.g. on a
 					// different POS Profile) loads as before.
 					check_opening_entry({
-						onNoOpening: onShiftClosed || openDialog,
+						onNoOpening: onShiftClosed
+							? () =>
+									onShiftClosed({
+										closingShift: r.message,
+										zReportPrint,
+									})
+							: openDialog,
 					});
 				}
 			})
