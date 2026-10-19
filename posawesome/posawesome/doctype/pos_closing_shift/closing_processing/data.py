@@ -101,6 +101,8 @@ def get_shift_invoice_rows(closing_shift_doc):
         "is_return",
         "grand_total",
         "base_grand_total",
+        "net_total",
+        "base_net_total",
         "conversion_rate",
         "total_qty",
         "discount_amount",
