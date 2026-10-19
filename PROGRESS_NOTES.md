@@ -6354,3 +6354,85 @@ unit-tested -- needs a real till with QZ. Frontend 254/254, 1360/1360;
 
 **Production deploy.** Frontend: `bench build --app posawesome`, restart,
 staff hard-refresh.
+
+## 65. "Close your shift?" confirmation before a shift is closed (2026-10-19)
+
+**Problem.** Submit in the Close Shift dialog closed the shift at once, with
+no warning; staff could close it by mistake.
+
+**Where Submit closes the shift.** `ClosingDialog.vue` Submit ->
+`useClosingShift.ts` `submitDialog()` (checks every closing amount is a
+number, emits `submit_closing_pos`, hides the dialog) -> `Pos.vue` listener
+-> `usePosShift.submit_closing_pos()` -> `creation.py`
+`submit_closing_shift` (save + submit), then Z Report print and the Shift
+Closed screen.
+
+**Recovering from an accidental close (checked on staging in a rolled-back
+transaction).** On submit, POS Closing Shift links and closes the opening
+shift, deletes the shift's unprinted draft invoices **only if the profile
+has `posa_allow_delete`**, links the invoices, and -- on profiles with
+`create_pos_invoice_instead_of_sales_invoice` only -- merges POS Invoices
+into Sales Invoices. Recovery: a System Manager / Sales Manager /
+Administrator opens Desk -> POS Closing Shift -> **Cancel**; `on_cancel`
+unlinks the opening shift (status back to Open) and clears the invoice
+links; the till is refreshed and the shift loads again (cancelling
+`POSA-CS-26-0000024` turned `POSA-OS-26-0000028` Closed -> Open and
+`check_opening_shift` loaded it; rolled back). Not undone: deleted drafts,
+the POS Invoice merge (POS Invoice profiles), and the printed Z Report
+(throw it away; the cancelled shift drops out of Z Report History, which
+lists submitted shifts only). The real close later prints a new Z Report.
+
+**Built.**
+- New `components/pos/closing/CloseShiftConfirmDialog.vue`: "Close your
+  shift?" / "This will end your shift and print the Z Report. You won't be
+  able to sell until you open a new shift." / **Go Back** (default focus, so
+  a stray Enter doesn't close) and **Close Shift** (Submit's green). Esc or
+  an outside click = Go Back. Theme tokens; buttons wrap on phones.
+- `useClosingShift.ts`: `submitDialog()` split into `requestSubmit()` (same
+  amount check, then opens the confirmation; sends nothing),
+  `cancelConfirm()` (closes only the confirmation; the closing dialog and its
+  `dialog_data` stay as entered) and `confirmSubmit()` (emits
+  `submit_closing_pos` once, then closes both). A `closeSent` guard ignores a
+  second press; reset by a `flush: "sync"` watcher whenever the closing
+  dialog opens (a default pre-flush watcher missed a close+reopen in one
+  tick -- caught by a test).
+- `ClosingDialog.vue`: Submit -> `requestSubmit`; confirmation wired. Its
+  window-level Esc handler used to close the closing dialog; with the
+  confirmation open, Esc would have closed **both** and lost the figures --
+  now Esc only closes the confirmation while it's open.
+
+**Tests.** New `useClosingShiftConfirm.spec.ts` (5),
+`closeShiftConfirmDialog.spec.ts` (5), `closingDialogConfirmWiring.spec.ts`
+(3, source checks: `ClosingDialog.vue` can't be mounted). Fail without the
+change: 5 (old composable), 1 (guard removed), 1 (focus removed), 3 (old
+`ClosingDialog.vue`).
+
+**Verified on staging** (Administrator + throwaway PIN cashier, deleted),
+desktop light, desktop dark, phone 390x844 dark and light (Administrator's
+desk theme set to Dark for the dark runs and restored to Light): typed
+12.345, Submit -> confirmation, Go Back focused, 0 close requests; Esc and
+Go Back -> confirmation gone, closing dialog open, 12.345 kept; double-click
+Close Shift -> exactly 1 `submit_closing_shift`; 1 Z Report print, Shift
+Closed screen with print status; Reprint -> 1 print. On phones the Menu is
+the navbar's ⋮ button. Frontend 257/257, 1373/1373; `bench build` exit 0;
+`test_pos_closing_shift` 9/9; no migrate. Test shifts left:
+`POSA-OS-26-0000030`..`-33` (closed by `POSA-CS-26-0000026`..`-29`), no
+invoices.
+
+**Production deploy.** Frontend: `bench build --app posawesome`, restart,
+staff hard-refresh.
+
+## 66. TRACKED, NOT YET FIXED -- submit_closing_shift builds the closing shift from client JSON with ignore_permissions (2026-10-19)
+
+`closing_processing/creation.py` `submit_closing_shift(closing_shift)` is
+whitelisted, does `frappe.get_doc(json.loads(closing_shift))`, sets
+`flags.ignore_permissions = True`, then saves and submits. Every field comes
+from the client, and nothing checks that the caller owns the opening shift
+or is assigned to its POS Profile. `validate()` only rejects a second close
+of the same opening shift and a non-Open opening shift. Any logged-in user
+could submit a closing shift (with their own figures) for another user's
+open shift by calling the method directly. Suggested fix: rebuild the doc
+server-side from the opening shift (as `make_closing_shift_from_opening`
+does), accept only the closing amounts from the client, and check the
+caller (shift owner, or `get_authorized_pos_profile()` / a supervisor
+role). Found during section 65; tracked next to section 63.

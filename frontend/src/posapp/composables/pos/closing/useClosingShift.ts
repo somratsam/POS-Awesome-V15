@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
 declare const frappe: any;
 
@@ -8,6 +8,23 @@ export function useClosingShift(eventBus: any) {
 	const overview = ref<any>(null);
 	const overviewLoading = ref(false);
 	const pos_profile = ref("");
+	// "Close your shift?" step between Submit and the actual close.
+	const confirmCloseDialog = ref(false);
+	// Set once the close has been sent, so a second "Close Shift" press
+	// can't send it again; cleared each time the closing dialog opens.
+	let closeSent = false;
+
+	watch(
+		closingDialog,
+		(open) => {
+			if (open) {
+				closeSent = false;
+				confirmCloseDialog.value = false;
+			}
+		},
+		// Sync, so even a close and reopen in the same tick resets it.
+		{ flush: "sync" },
+	);
 
 	const closeDialog = () => {
 		closingDialog.value = false;
@@ -267,17 +284,37 @@ export function useClosingShift(eventBus: any) {
 		}
 	};
 
-	const submitDialog = () => {
+	const hasValidClosingAmounts = () => {
 		const payments =
 			dialog_data.value.payment_reconciliation ||
 			dialog_data.value.payments ||
 			[];
-		const invalid = payments.some((p: any) =>
-			isNaN(parseFloat(p.closing_amount)),
-		);
-		if (invalid) {
+		return !payments.some((p: any) => isNaN(parseFloat(p.closing_amount)));
+	};
+
+	// Submit: check the figures, then ask "Close your shift?". Nothing is sent
+	// to the server yet.
+	const requestSubmit = () => {
+		if (!hasValidClosingAmounts()) {
 			return false;
 		}
+		confirmCloseDialog.value = true;
+		return true;
+	};
+
+	// Go Back: only the confirmation closes; the closing dialog and the
+	// figures entered in it stay as they were.
+	const cancelConfirm = () => {
+		confirmCloseDialog.value = false;
+	};
+
+	// Close Shift: send the close once, then close both dialogs.
+	const confirmSubmit = () => {
+		if (closeSent || !hasValidClosingAmounts()) {
+			return false;
+		}
+		closeSent = true;
+		confirmCloseDialog.value = false;
 		if (eventBus) {
 			eventBus.emit("submit_closing_pos", dialog_data.value);
 		}
@@ -293,6 +330,9 @@ export function useClosingShift(eventBus: any) {
 		pos_profile,
 		closeDialog,
 		fetchOverview,
-		submitDialog,
+		confirmCloseDialog,
+		requestSubmit,
+		cancelConfirm,
+		confirmSubmit,
 	};
 }
