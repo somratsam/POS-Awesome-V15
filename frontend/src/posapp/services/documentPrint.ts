@@ -36,7 +36,15 @@ export function shouldUseConfiguredQzDocumentPrinting(profile?: Record<string, a
 	return shouldUseRawDocumentPrinting(profile) || parseBooleanSetting(profile?.posa_silent_print);
 }
 
-export async function printZReport(closingShiftName: string) {
+export interface ZReportPrintResult {
+	ok: boolean;
+	// Why it failed, for staff (e.g. "QZ Tray is not available.").
+	error?: string;
+}
+
+// ok means QZ Tray accepted the job. QZ can't tell us about an out-of-paper
+// or switched-off printer, so ok is not proof it came out of the printer.
+export async function printZReport(closingShiftName: string): Promise<ZReportPrintResult> {
 	try {
 		await printDocumentViaQz({
 			doctype: "POS Closing Shift",
@@ -44,12 +52,14 @@ export async function printZReport(closingShiftName: string) {
 			printFormat: "Z Report",
 			noLetterhead: 1,
 		});
-	} catch (err) {
+		return { ok: true };
+	} catch (err: any) {
 		console.warn("Failed to print Z Report", err);
 		useToastStore().show({
 			title: translate("Z Report print failed"),
 			color: "warning",
 		});
+		return { ok: false, error: String(err?.message || err || "") };
 	}
 }
 

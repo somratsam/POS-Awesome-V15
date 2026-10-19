@@ -6290,3 +6290,67 @@ a shift on any POS Profile by calling the method directly. Suggested fix:
 resolve the profile through `pos_access.get_authorized_pos_profile()` (as
 `get_z_report_data` does) before inserting. Found during section 62; the
 user chose to track it separately.
+
+## 64. Shift Closed screen: Z Report print status and a Reprint Z Report button (2026-10-19)
+
+**Problem.** The Z Report prints automatically on close. If it doesn't print,
+the shift is already closed and staff may not know what to do.
+
+**Found.**
+- **Z Report History works from the Shift Closed screen** (checked live): the
+  navbar Menu stays usable, the item has no shift condition, the dialog lists
+  by `uiStore.posProfile` (not cleared by a close) and `list_closing_shifts`
+  re-authorizes via `get_authorized_pos_profile()`; the just-closed shift is
+  first. After Close (to Desk) or a refresh, the persistent opening dialog
+  covers the Menu, so History needs a new shift (or Desk + browser print).
+- **QZ Tray: paper-out and switched-off printers look like success.**
+  `qz.print()` resolves once QZ hands the job to the OS print queue. Printer
+  states (paper out, offline, cover open) only reach a page through
+  `qz.printers.startListening` / `setPrinterCallbacks` (qz-tray 2.2.5), which
+  this app doesn't use -- so the app treats such a print as done and nobody
+  is warned; the job may print by itself later (a reprint can then give a
+  second copy). Only QZ not running/disconnected/paused, no printer selected,
+  or a missing printer/driver error are reported. Based on the QZ API, not
+  tested against a physical printer.
+- Before this change a failure showed only a 3 s toast "Z Report print
+  failed" (no reason; the reason went to the console), and the Shift Closed
+  screen always said "The Z Report is printing."
+
+**Built (option B; A = button only, C = QZ status listener, D = guidance
+text, not chosen).**
+- `documentPrint.ts` `printZReport()` returns `{ ok, error }`; keeps its
+  toast, so Z Report History is unchanged. `ok` means QZ accepted the job.
+- `usePosShift` passes `{ closingShift, zReportPrint }` to the Shift Closed
+  callback; the close still prints once.
+- New `composables/pos/closing/useShiftClosedPrint.ts`: print state
+  (printing / sent / failed) and reason; `reprint()` prints the just-closed
+  shift, ignored while a print runs or before any close. Extracted from
+  `Pos.vue` so its behaviour is unit-tested (`Pos.vue` can't be mounted).
+- `ShiftClosedPanel.vue`: "Printing the Z Report…" (Reprint disabled +
+  loading); "Z Report sent to the printer. If it didn't print, check the
+  printer and press Reprint." (honest about paper-out); failure as a Vuetify
+  warning alert: "The Z Report didn't print." / reason (bold, plain text) /
+  "Check QZ Tray and the printer, then press Reprint." Buttons: Close, Log
+  Out, Reprint Z Report, Open New Shift; after a failure Reprint is white on
+  `#bf360c` (~5.6:1; the first try, Vuetify `warning` flat, left the label
+  almost invisible in light mode). Card widened to 880px for one row.
+
+**Tests.** New `printZReportResult.spec.ts` (2), `useShiftClosedPrint.spec.ts`
+(5); `usePosShift.spec.ts` +1; `shiftClosedPanel.spec.ts` 9;
+`posShiftClosedWiring.spec.ts` 6. Each fails without the change it covers
+(2, 1 with the reprint guard removed, 1, 5, 2).
+
+**Verified on staging** (headless Chromium has no QZ Tray, so prints fail):
+after close "Printing…" with Reprint disabled, then the warning with "QZ Tray
+is not available."; double-click Reprint -> one print request for the
+just-closed shift; Z Report History from the screen lists it first and
+prints it. Light theme checked after the contrast fix; dark not (theme
+follows the user's saved setting, left alone). The "sent" message is only
+unit-tested -- needs a real till with QZ. Frontend 254/254, 1360/1360;
+`bench build` exit 0; backend (isolated) `test_pos_closing_shift` 9/9,
+`test_z_report` 3/3, `test_z_report_vat` 8/8, `test_z_report_item_counts`
+7/7; no migrate. Test shifts left: `POSA-OS-26-0000027`, `-28` (closed by
+`POSA-CS-26-0000023`, `-24`), no invoices.
+
+**Production deploy.** Frontend: `bench build --app posawesome`, restart,
+staff hard-refresh.

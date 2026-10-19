@@ -22,6 +22,9 @@
 		></OpeningDialog>
 		<ShiftClosedPanel
 			v-if="shiftClosed && !dialog"
+			:print-state="zReportPrintState"
+			:print-error="zReportPrintError"
+			@reprint="reprintZReport"
 			@close="goToDeskAfterClose"
 			@open-new-shift="openNewShiftAfterClose"
 			@logout="logoutAfterClose"
@@ -304,6 +307,7 @@ import OpeningDialog from "../shift/OpeningDialog.vue";
 import ShiftClosedPanel from "../shift/ShiftClosedPanel.vue";
 import authService from "../../../services/authService";
 import { goToDesk } from "../../../services/deskNavigation";
+import { useShiftClosedPrint } from "../../../composables/pos/closing/useShiftClosedPrint";
 import Payments from "../Payments.vue";
 import PosOffers from "../offers/PosOffers.vue";
 import PosCoupons from "../offers/PosCoupons.vue";
@@ -341,6 +345,12 @@ export default {
 		// Set after a shift is closed: show the Shift Closed screen rather than
 		// opening the opening-shift dialog nobody asked for.
 		const shiftClosed = ref(false);
+		const {
+			printState: zReportPrintState,
+			printError: zReportPrintError,
+			shiftClosed: trackClosedShiftPrint,
+			reprint: reprintZReport,
+		} = useShiftClosedPrint();
 		const invoicePanel = ref(null);
 		const additionalDiscountField = ref(null);
 		const mobileDock = ref(null);
@@ -350,8 +360,9 @@ export default {
 			() => {
 				dialog.value = true;
 			},
-			() => {
+			(closed) => {
 				shiftClosed.value = true;
+				trackClosedShiftPrint(closed.closingShift, closed.zReportPrint);
 			},
 		);
 		const offers = useOffers();
@@ -954,6 +965,9 @@ export default {
 			eventBus,
 			dialog,
 			shiftClosed,
+			zReportPrintState,
+			zReportPrintError,
+			reprintZReport,
 		};
 	},
 	data: function () {

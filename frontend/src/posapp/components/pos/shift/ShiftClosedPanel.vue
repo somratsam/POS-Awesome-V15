@@ -3,9 +3,32 @@
 		<div class="shift-closed-panel__card">
 			<v-icon icon="mdi-check-circle-outline" size="56" color="success" />
 			<h2 class="shift-closed-panel__title">{{ __("Shift closed") }}</h2>
-			<p class="shift-closed-panel__text">
-				{{ __("The Z Report is printing.") }}
+			<p
+				v-if="printState === 'printing'"
+				class="shift-closed-panel__text"
+				data-testid="shift-closed-print-status"
+			>
+				{{ __("Printing the Z Report…") }}
 			</p>
+			<p
+				v-else-if="printState === 'sent'"
+				class="shift-closed-panel__text"
+				data-testid="shift-closed-print-status"
+			>
+				{{ __("Z Report sent to the printer. If it didn't print, check the printer and press Reprint.") }}
+			</p>
+			<v-alert
+				v-else
+				type="warning"
+				variant="tonal"
+				density="compact"
+				class="shift-closed-panel__alert"
+				data-testid="shift-closed-print-status"
+			>
+				<div>{{ __("The Z Report didn't print.") }}</div>
+				<div v-if="printError" class="shift-closed-panel__reason">{{ printError }}</div>
+				<div>{{ __("Check QZ Tray and the printer, then press Reprint.") }}</div>
+			</v-alert>
 			<div class="shift-closed-panel__actions">
 				<v-btn
 					theme="dark"
@@ -28,6 +51,18 @@
 					{{ __("Log Out") }}
 				</v-btn>
 				<v-btn
+					variant="tonal"
+					:class="{ 'shift-closed-panel__reprint--failed': printState === 'failed' }"
+					size="large"
+					prepend-icon="mdi-printer"
+					:loading="printState === 'printing'"
+					:disabled="printState === 'printing'"
+					data-testid="shift-closed-reprint"
+					@click="emit('reprint')"
+				>
+					{{ __("Reprint Z Report") }}
+				</v-btn>
+				<v-btn
 					color="primary"
 					variant="flat"
 					size="large"
@@ -45,7 +80,13 @@
 <script setup>
 // Shown after a shift is closed, instead of opening the opening-shift dialog
 // straight away. A new shift only starts when someone asks for one.
-const emit = defineEmits(["close", "open-new-shift", "logout"]);
+defineProps({
+	// "printing" | "sent" | "failed": the latest Z Report print for the shift
+	// that was just closed.
+	printState: { type: String, default: "printing" },
+	printError: { type: String, default: "" },
+});
+const emit = defineEmits(["close", "open-new-shift", "logout", "reprint"]);
 const __ = window.__ || ((text) => text);
 </script>
 
@@ -64,7 +105,7 @@ const __ = window.__ || ((text) => text);
 	align-items: center;
 	gap: 12px;
 	width: 100%;
-	max-width: 600px;
+	max-width: 880px;
 	padding: 32px 24px;
 	text-align: center;
 	background: var(--pos-card-bg);
@@ -87,6 +128,22 @@ const __ = window.__ || ((text) => text);
 /* Same red as the opening dialog's Close button. */
 .shift-closed-panel__close {
 	background: linear-gradient(135deg, #d32f2f 0%, #c62828 100%) !important;
+	color: white !important;
+}
+
+.shift-closed-panel__alert {
+	width: 100%;
+	text-align: start;
+}
+
+.shift-closed-panel__reason {
+	font-weight: 600;
+}
+
+/* After a failed print, make Reprint stand out: white on dark orange
+   (about 5.6:1), set explicitly like Close so no theme recolours it. */
+.shift-closed-panel__reprint--failed {
+	background: #bf360c !important;
 	color: white !important;
 }
 

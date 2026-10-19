@@ -10,10 +10,17 @@ describe("Pos.vue wiring for the Shift Closed screen", () => {
 		"utf8",
 	);
 
-	it("passes a Shift Closed callback to usePosShift that sets shiftClosed", () => {
+	it("passes a Shift Closed callback that records the shift and tracks its print", () => {
 		expect(source).toMatch(
-			/usePosShift\(\s*\(\) => \{\s*dialog\.value = true;\s*\},\s*\(\) => \{\s*shiftClosed\.value = true;\s*\},?\s*\)/,
+			/usePosShift\(\s*\(\) => \{\s*dialog\.value = true;\s*\},\s*\(closed\) => \{\s*shiftClosed\.value = true;\s*trackClosedShiftPrint\(closed\.closingShift, closed\.zReportPrint\);\s*\},?\s*\)/,
 		);
+		expect(source).toMatch(/shiftClosed: trackClosedShiftPrint,\s*reprint: reprintZReport,\s*\} = useShiftClosedPrint\(\);/);
+	});
+
+	it("passes the print state to the panel and handles Reprint", () => {
+		expect(source).toContain(':print-state="zReportPrintState"');
+		expect(source).toContain(':print-error="zReportPrintError"');
+		expect(source).toContain('@reprint="reprintZReport"');
 	});
 
 	it("renders the panel and hides the POS while a shift is closed", () => {
