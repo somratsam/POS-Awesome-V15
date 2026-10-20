@@ -6522,3 +6522,55 @@ is picked: Frappe's standard required-filter behaviour.
 --app posawesome`, restart. Store users need one of the four roles (or add
 theirs via Role Permission for Page and Report). Users with no Warehouse
 User Permission see all warehouses.
+
+## 69. Upload Stock Check: Warehouse filter (2026-10-20)
+
+**Request.** A Warehouse filter for convenience: store users get their
+permitted warehouse pre-selected and only that one; admins and Stock/System
+Managers get all warehouses, blank = all. The section 68 server-side
+warehouse check stays as it is.
+
+**Rule chosen: User Permission, not role.** Options come from the same
+`get_permitted_warehouses()` the server check uses, so the filter never lists
+a warehouse that would return no rows. A user with Warehouse User
+Permissions gets only those (group permissions expanded, non-group only); a
+user with none (Administrator, managers in the current setup) gets every
+enabled, non-group warehouse. One permitted warehouse = the only option,
+pre-selected; several = those plus blank ("all of mine"). A manager later
+given a Warehouse User Permission gets the store-user behaviour.
+
+**Built.**
+- `get_warehouses()` (whitelisted, report access check first, no input).
+- `narrow_to_chosen(permitted, warehouse)`: the choice only narrows; a
+  warehouse outside the permitted set gives an empty set (no rows, empty
+  picker, header-only Excel), never more. Used by `execute()` and
+  `get_uploads(warehouse=None)`.
+- JS: Warehouse first (`col-md-4`), Upload (`col-md-8`). Changing Warehouse
+  reloads the Upload list and counts, keeps the upload if still listed,
+  then one refresh; options are filled with `set_input` so loading them
+  doesn't start a run. Warehouse labels are HTML-escaped (Frappe's Select
+  renders labels as HTML). The helper lives on the report object, not as a
+  top-level `const`, since report scripts run as global script code.
+
+**Tests.** 6 new (16 total): store user gets only theirs; two-warehouse user
+gets both; unrestricted gets every enabled non-group (group and disabled
+excluded); a chosen warehouse narrows rows and upload counts; a
+non-permitted choice returns nothing (rows, picker, Excel); no report role
+-> refused. Mutations: choice widening access -> 1 failure; choice ignored
+-> 2 failures.
+
+**Verified on staging** (throwaway store user on `Test - S` and a
+System/Stock Manager, deleted): store -> only `Test - S`, selected, 1414
+rows, Excel 1414 x 12; admin -> blank + 100 warehouses, blank 1414 rows,
+`Stores - S` empties the Upload list and clears the grid, `Test - S` 1414
+rows and Excel 1414 x 12, back to blank keeps the upload; the Stock
+Reconciliation button opens with Warehouse blank, 1414 rows. One row at
+1400/1100px, stacked on a phone. Frappe doesn't show filter descriptions,
+so "No uploads found" is not visible (already true before).
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_upload_stock_check` 16/16, `test_api_imports` 4/4. `bench build` exit
+0. Migrate N/A (report JSON unchanged).
+
+**Production deploy.** Pull, `bench build --app posawesome`, restart, staff
+hard-refresh. No migrate needed (running it is harmless).

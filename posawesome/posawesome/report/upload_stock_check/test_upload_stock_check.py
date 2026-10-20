@@ -10,6 +10,7 @@ from frappe.utils import add_days, today
 from posawesome.posawesome.report.upload_stock_check.upload_stock_check import (
     REPORT_NAME,
     get_uploads,
+    get_warehouses,
 )
 
 PREFIX = "USC-TEST"
@@ -17,6 +18,7 @@ STORE_A_USER = "usc-store-a@test.invalid"
 STORE_B_USER = "usc-store-b@test.invalid"
 SALES_ONLY_USER = "usc-sales-only@test.invalid"
 OTHER_DOCTYPE_USER = "usc-other-doctype@test.invalid"
+TWO_STORES_USER = "usc-two-stores@test.invalid"
 
 
 class TestUploadStockCheck(IntegrationTestCase):
@@ -27,6 +29,9 @@ class TestUploadStockCheck(IntegrationTestCase):
         cls.company = frappe.db.get_value("Company", {}, "name")
         cls.wh_a = cls._warehouse("Store A")
         cls.wh_b = cls._warehouse("Store B")
+        cls.wh_group = cls._warehouse("Group", is_group=1)
+        cls.wh_disabled = cls._warehouse("Closed Store")
+        frappe.db.set_value("Warehouse", cls.wh_disabled, "disabled", 1)
 
         cls._item(f"{PREFIX}-STYLE", None, has_variants=1)
         cls._item(f"{PREFIX}-A1", f"{PREFIX}-STYLE", description="<p>Wool <b>jacket</b></p>", season="SS26 1ST DEL", collection="SS26 MAIN")
@@ -59,6 +64,8 @@ class TestUploadStockCheck(IntegrationTestCase):
         cls._user(STORE_B_USER, "Stock User", warehouse=cls.wh_b)
         cls._user(SALES_ONLY_USER, "Sales User", warehouse=cls.wh_a)
         cls._user(OTHER_DOCTYPE_USER, "Stock User", warehouse=cls.wh_b, applicable_for="Sales Invoice")
+        cls._user(TWO_STORES_USER, "Stock User", warehouse=cls.wh_a)
+        cls._user_permission(TWO_STORES_USER, cls.wh_b)
 
     def tearDown(self):
         frappe.set_user("Administrator")
@@ -66,10 +73,15 @@ class TestUploadStockCheck(IntegrationTestCase):
     # -- fixtures -------------------------------------------------------------
 
     @classmethod
-    def _warehouse(cls, label):
+    def _warehouse(cls, label, is_group=0):
         return (
             frappe.get_doc(
-                {"doctype": "Warehouse", "warehouse_name": f"{PREFIX} {label}", "company": cls.company}
+                {
+                    "doctype": "Warehouse",
+                    "warehouse_name": f"{PREFIX} {label}",
+                    "company": cls.company,
+                    "is_group": is_group,
+                }
             )
             .insert(ignore_permissions=True)
             .name
@@ -169,31 +181,38 @@ class TestUploadStockCheck(IntegrationTestCase):
             }
         ).insert(ignore_permissions=True)
         if warehouse:
-            frappe.get_doc(
-                {
-                    "doctype": "User Permission",
-                    "user": email,
-                    "allow": "Warehouse",
-                    "for_value": warehouse,
-                    "apply_to_all_doctypes": 0 if applicable_for else 1,
-                    "applicable_for": applicable_for,
-                }
-            ).insert(ignore_permissions=True)
+            cls._user_permission(email, warehouse, applicable_for)
+
+    @classmethod
+    def _user_permission(cls, email, warehouse, applicable_for=None):
+        frappe.get_doc(
+            {
+                "doctype": "User Permission",
+                "user": email,
+                "allow": "Warehouse",
+                "for_value": warehouse,
+                "apply_to_all_doctypes": 0 if applicable_for else 1,
+                "applicable_for": applicable_for,
+            }
+        ).insert(ignore_permissions=True)
 
     # -- helpers --------------------------------------------------------------
 
-    def _run(self, upload):
-        return run(REPORT_NAME, {"upload": upload})["result"]
+    def _filters(self, upload, warehouse=None):
+        return {"upload": upload, **({"warehouse": warehouse} if warehouse else {})}
 
-    def _codes(self, upload):
-        return [row["item_code"] for row in self._run(upload)]
+    def _run(self, upload, warehouse=None):
+        return run(REPORT_NAME, self._filters(upload, warehouse))["result"]
 
-    def _export(self, upload):
+    def _codes(self, upload, warehouse=None):
+        return [row["item_code"] for row in self._run(upload, warehouse)]
+
+    def _export(self, upload, warehouse=None):
         frappe.local.form_dict = frappe._dict(
             {
                 "report_name": REPORT_NAME,
                 "file_format_type": "Excel",
-                "filters": json.dumps({"upload": upload}),
+                "filters": json.dumps(self._filters(upload, warehouse)),
                 "visible_idx": "[]",
             }
         )
@@ -287,3 +306,49 @@ class TestUploadStockCheck(IntegrationTestCase):
         # doctypes, or to Stock Reconciliation, restrict what is read.
         frappe.set_user(OTHER_DOCTYPE_USER)
         self.assertEqual(self._codes(self.upload_mixed), [f"{PREFIX}-A1", f"{PREFIX}-A2", f"{PREFIX}-B1"])
+
+    # -- Warehouse filter -----------------------------------------------------
+
+    def test_store_user_gets_only_their_warehouse_as_filter_option(self):
+        frappe.set_user(STORE_A_USER)
+        self.assertEqual(get_warehouses(), {"warehouses": [self.wh_a], "restricted": True})
+
+    def test_user_with_two_warehouses_gets_both_options(self):
+        frappe.set_user(TWO_STORES_USER)
+        self.assertEqual(get_warehouses(), {"warehouses": sorted([self.wh_a, self.wh_b]), "restricted": True})
+
+    def test_unrestricted_user_gets_every_enabled_non_group_warehouse(self):
+        options = get_warehouses()
+        self.assertFalse(options["restricted"])
+        self.assertIn(self.wh_a, options["warehouses"])
+        self.assertIn(self.wh_b, options["warehouses"])
+        self.assertNotIn(self.wh_group, options["warehouses"])
+        self.assertNotIn(self.wh_disabled, options["warehouses"])
+        self.assertEqual(
+            options["warehouses"],
+            frappe.get_all(
+                "Warehouse", filters={"is_group": 0, "disabled": 0}, pluck="name", order_by="name asc"
+            ),
+        )
+
+    def test_chosen_warehouse_narrows_rows_and_upload_list(self):
+        self.assertEqual(self._codes(self.upload_mixed, self.wh_b), [f"{PREFIX}-B1"])
+        uploads = {u["value"]: u["label"] for u in get_uploads(warehouse=self.wh_b)}
+        self.assertIn("· 1 item", uploads[self.upload_mixed])
+        self.assertNotIn(self.upload_old, uploads)
+
+        frappe.set_user(TWO_STORES_USER)
+        self.assertEqual(self._codes(self.upload_mixed, self.wh_a), [f"{PREFIX}-A1", f"{PREFIX}-A2"])
+        self.assertEqual(self._codes(self.upload_mixed), [f"{PREFIX}-A1", f"{PREFIX}-A2", f"{PREFIX}-B1"])
+
+    def test_choosing_a_warehouse_outside_permission_returns_nothing(self):
+        frappe.set_user(STORE_A_USER)
+        self.assertEqual(self._codes(self.upload_mixed, self.wh_b), [])
+        self.assertEqual(get_uploads(warehouse=self.wh_b), [])
+        rows = self._export(self.upload_mixed, self.wh_b)
+        flat = [str(v) for row in rows for v in row if v is not None]
+        self.assertFalse(any(v.startswith(PREFIX) for v in flat))
+
+    def test_warehouse_options_refused_without_a_report_role(self):
+        frappe.set_user(SALES_ONLY_USER)
+        self.assertRaises(frappe.PermissionError, get_warehouses)

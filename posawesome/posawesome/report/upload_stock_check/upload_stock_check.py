@@ -30,9 +30,10 @@ UPLOAD_LIST_LIMIT = 200
 def execute(filters=None):
     filters = frappe._dict(filters or {})
     upload = cstr(filters.get("upload")).strip()
-    if not upload:
+    warehouses = narrow_to_chosen(get_permitted_warehouses(), filters.get("warehouse"))
+    if not upload or warehouses == set():
         return get_columns(), []
-    return get_columns(), get_data(upload, get_permitted_warehouses())
+    return get_columns(), get_data(upload, warehouses)
 
 
 def get_columns():
@@ -66,6 +67,20 @@ def get_permitted_warehouses(user=None):
         if p.get("doc") and (not p.get("applicable_for") or p.get("applicable_for") == UPLOAD_DOCTYPE)
     }
     return allowed or None
+
+
+def narrow_to_chosen(permitted, warehouse):
+    """Narrow the permitted warehouses to the one chosen in the Warehouse filter.
+
+    The filter is a convenience: a choice outside the permitted set gives an empty
+    set (no rows), never more than the user is allowed.
+    """
+    warehouse = cstr(warehouse).strip()
+    if not warehouse:
+        return permitted
+    if permitted is not None and warehouse not in permitted:
+        return set()
+    return {warehouse}
 
 
 def _upload_rows_query(warehouses):
@@ -190,20 +205,48 @@ def _get_prices(item_codes, stock_uoms):
     return {code: rate for code, (_key, rate) in best.items()}
 
 
-@frappe.whitelist()
-def get_uploads():
-    """Uploads for the report's picker: number, date and item count, newest first.
-
-    Only uploads with rows in the user's permitted warehouses are listed, and the
-    count is of those rows only. Reads Stock Reconciliation directly, so store
-    users without access to that form can still pick an upload.
-    """
+def _check_report_access():
     from frappe.desk.query_report import get_report_doc
 
     # The same role / report-permission check Frappe runs before the report itself.
     get_report_doc(REPORT_NAME)
 
-    query, sr, sri = _upload_rows_query(get_permitted_warehouses())
+
+@frappe.whitelist()
+def get_warehouses():
+    """Options for the Warehouse filter.
+
+    A user with Warehouse User Permissions gets only their permitted warehouses
+    (group permissions expanded to the warehouses under them); an unrestricted
+    user gets every enabled, non-group warehouse. execute() re-checks either way.
+    """
+    _check_report_access()
+
+    permitted = get_permitted_warehouses()
+    filters = {"is_group": 0, "disabled": 0}
+    if permitted is not None:
+        filters["name"] = ["in", sorted(permitted)]
+    return {
+        "warehouses": frappe.get_all("Warehouse", filters=filters, pluck="name", order_by="name asc"),
+        "restricted": permitted is not None,
+    }
+
+
+@frappe.whitelist()
+def get_uploads(warehouse=None):
+    """Uploads for the report's picker: number, date and item count, newest first.
+
+    Only uploads with rows in the user's permitted warehouses (narrowed to the
+    chosen warehouse, if any) are listed, and the count is of those rows only.
+    Reads Stock Reconciliation directly, so store users without access to that
+    form can still pick an upload.
+    """
+    _check_report_access()
+
+    warehouses = narrow_to_chosen(get_permitted_warehouses(), warehouse)
+    if warehouses == set():
+        return []
+    query, sr, sri = _upload_rows_query(warehouses)
     uploads = (
         query.select(sr.name, sr.posting_date, sr.posting_time, Count(sri.name).as_("item_count"))
         .groupby(sr.name, sr.posting_date, sr.posting_time)
