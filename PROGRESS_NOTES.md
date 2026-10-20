@@ -6436,3 +6436,89 @@ server-side from the opening shift (as `make_closing_shift_from_opening`
 does), accept only the closing amounts from the client, and check the
 caller (shift owner, or `get_authorized_pos_profile()` / a supervisor
 role). Found during section 65; tracked next to section 63.
+
+## 67. TRACKED, NOT YET FIXED -- two test_workspace_gift_card tests are out of date (2026-10-20)
+
+`test_migration_chain_runs_gift_card_workspace_patch` and
+`test_migration_chain_runs_submission_ledger_workspace_patch` read
+`hooks.py` as text and expect `add_gift_card_to_workspace.execute` /
+`add_submission_ledger_to_workspace.execute` in it. Release `cd5eba17`
+(15.33.0) moved those patches out of `after_migrate` into `patches.txt` on
+purpose (running them on every migrate rewrote the workspace and wiped user
+customisations; see the comment above `after_migrate = []`). The tests were
+never updated, so they fail 2/4. The `patches.txt` half of each test passes.
+Not a code fault: on staging both patches are in Patch Log (2026-08-05) and
+the workspace has both links. Fails the same with section 68's change
+stashed. Fix later: drop the `hooks.py` assertion (or assert the path is
+*not* in `after_migrate`).
+
+## 68. Upload Stock Check report: export one catalog upload, limited to the user's warehouses (2026-10-20)
+
+**Request.** After each catalog upload, staff need an Excel export of that
+upload only, to compare with their own sheet, showing only the warehouses
+their existing Warehouse User Permissions allow. No new permission rules.
+
+**Found first.** There is no upload script. Staging and production use four
+manual steps: Data Import of parent styles, then variants, then Item Prices
+(Standard Selling), then a Stock Reconciliation for quantities. Only the
+Stock Reconciliation carries warehouse and quantity, so **one upload = one
+submitted Stock Reconciliation**. Staging has no Warehouse User Permissions
+(production has them).
+
+**Built.**
+- New Script Report `Upload Stock Check`
+  (`posawesome/posawesome/report/upload_stock_check/`), module POSAwesome,
+  roles Stock User / Stock Manager / Item Manager / System Manager. Not
+  added to any workspace. Columns: Item Code (Barcode), Parent Style Code,
+  Item Name, Description (HTML stripped), Brand, Size, Colour (`Color`,
+  falling back to `Colour`), Season, Collection, Price, Quantity, Upload
+  Date and Time (posting date + time).
+- `ref_doctype` is **Item**, not Stock Reconciliation: Frappe requires
+  report permission on the ref_doctype to run and export permission to
+  export, and Stock Reconciliation is Stock Manager-only. The automatic
+  Desk User role has report + export on Item.
+- Upload picker is a **Select**, filled by whitelisted `get_uploads()`
+  (guarded by `get_report_doc()`, max 200, newest first), labelled
+  `MAT-RECO-2026-00001 · 05-08-2026 13:07 · 1414 items`. A Link filter
+  wouldn't work: `validate_filters_permissions` re-checks read on Stock
+  Reconciliation. The filter is widened to `col-md-8` in `onload` (the
+  default `col-md-2` cut the label to the number; measured at 1400/1100/390px).
+- Warehouses: `get_user_permissions()["Warehouse"]`, counting entries with
+  no Applicable For or Applicable For = Stock Reconciliation (Frappe's own
+  `db_query.py` rule). None counting = unrestricted (Frappe default).
+  Applied server-side to every run, export and the picker.
+- Price: today's Standard Selling price, picked like ERPNext's
+  `get_item_price` (stock UOM or blank, no customer/supplier/batch, valid
+  today, newest Valid From). Quantity is the upload's own row qty.
+- Season/Collection are guarded with `meta.has_field` (hand-made per site,
+  not in fixtures).
+- "Upload Stock Check" button on submitted Stock Reconciliations
+  (`api/stock_reconciliation.js`, `doctype_js`) for managers; opens the
+  report pre-filtered.
+
+**Tests.** `test_upload_stock_check.py`, 10 tests on `IntegrationTestCase`
+(real users, User Permissions and rows, rolled back). The old
+`FrappeTestCase` triggers the app-wide test-record preload that crashes on
+"Standard Buying" (section 53). With the warehouse filter disabled, 3
+tests fail (store user rows, export, picker).
+
+**Verified on staging** (throwaway users, deleted): Store A (`Test - S`)
+-> picker lists the upload, 1414 rows, Excel via the menu 1414 rows + 12
+columns; Store B (`Stores - S`) -> empty picker, 0 rows, header-only Excel
+even when the upload is sent directly; both get 403 on the Stock
+Reconciliation form/API; both find "Report Upload Stock Check" via Ctrl+K;
+the manager button opens the report filtered with 1414 rows. Frappe v16 also
+shows the report in its auto-generated module sidebar (in-memory, no
+workspace record). Opening the report logs `Filter missing` until an upload
+is picked: Frappe's standard required-filter behaviour.
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend:
+`test_upload_stock_check` 10/10, `test_pos_awesome_branding` 3/3,
+`test_api_imports` 4/4, `test_invoice_reporting_fields` 25/25,
+`test_workspace_gift_card` 2/4 (section 67). `bench build` exit 0;
+`migrate` twice, exit 0, no name collision before, report unchanged after.
+
+**Production deploy.** `bench migrate` (creates the report), `bench build
+--app posawesome`, restart. Store users need one of the four roles (or add
+theirs via Role Permission for Page and Report). Users with no Warehouse
+User Permission see all warehouses.
