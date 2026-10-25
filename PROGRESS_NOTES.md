@@ -6574,3 +6574,104 @@ so "No uploads found" is not visible (already true before).
 
 **Production deploy.** Pull, `bench build --app posawesome`, restart, staff
 hard-refresh. No migrate needed (running it is harmless).
+
+## 70. Style Name and MRP No VAT as Report View columns per invoice line; why picked Report View columns don't stay (2026-10-25)
+
+**Request.** Two more Sales Invoice line columns for Report View: Style Name
+(Item `custom_style_name`) and MRP No VAT (Price List Rate with VAT taken
+out, before discount). Also: why picked columns in Report View don't stay.
+
+**Found first (live, staging; ERPNext 16.26).**
+- No existing Sales Invoice Item field holds MRP without VAT (checked every
+  rate/price/tax field and all `posa_*`; `tax_rate`/`tax_amount` are the UAE
+  test leftovers, always 0). Price List Rate equals the Item Price on 126 of
+  127 submitted lines (one `Consulting` line has 0).
+- `Item-custom_style_name` exists only on production, made by hand: Data,
+  label "Style Name".
+- Offline invoices sync through `submit_invoice_outbox_entry` ->
+  `submit_invoice`, a real Sales Invoice save, so the validate hook covers
+  them.
+- **Picked columns not staying.** Report View saves picked columns per user,
+  per doctype, under the "Report" key of `__UserSettings` -- but the browser
+  only writes them to the Redis cache hash `_user_settings`; the hourly
+  `sync_user_settings` job copies that to the database. `frappe.clear_cache()`
+  deletes every non-persistent key (`_user_settings` isn't in
+  `persistent_cache_keys`), so `bench migrate` / `clear-cache`, a Redis
+  cache restart (`save ""`, `appendonly no`) or an `allkeys-lru` eviction
+  before the sync throws the change away and the older database copy comes
+  back. Also: settings are saved only after a render with rows, never inside
+  a saved report (needs Save), and a column for a field missing on the site
+  is dropped. Nothing in POS Awesome touches user settings; staging has no
+  Client Scripts, List View Settings or saved reports on Sales Invoice.
+  Fix chosen: a saved report (Report View -> Save As), made by hand on
+  production after deploy -- not shipped in git.
+
+**Built.**
+- Sales Invoice Item fields (read-only): `posa_item_style_name` (Data,
+  "Style Name", after `posa_item_vat`, Description section) and
+  `posa_item_mrp_excl_vat` (Currency, options `currency`, "MRP No VAT",
+  after `price_list_rate`, main pricing section). Hand-added to the
+  fixtures. **No Item custom field is shipped** (the guard test now covers
+  `custom_style_name` too).
+- `set_invoice_reporting_fields`: Style Name copied like Season/Collection
+  (optional Item field, trimmed, blank stays blank, untouched when absent).
+  New `set_line_mrp_excl_vat` / `mrp_excl_vat()`: `price_list_rate / (1 +
+  sum of the line's tax-inclusive VAT rates / 100)`, the line's Item Tax
+  Template rate overriding the tax row (`"N/A"` = not applicable), as
+  ERPNext's `determine_exclusive_rate` does. Exclusive-price, untaxed and
+  zero-rated lines keep the Price List Rate; "Actual" charges ignored.
+  Inclusive taxes other than "On Net Total" (not used) -> blank + logged.
+  Per unit, positive on returns, stored to 6 decimals.
+- Patch `backfill_invoice_style_name_and_mrp_excl_vat`: creates the two
+  fields from the fixture; Style Name by SQL from each Item's *current*
+  value (skipped with a note unless the Item field and its column exist);
+  MRP No VAT computed in Python with the same `mrp_excl_vat()` from stored
+  Price List Rate, `item_tax_rate` and tax rows, 500 invoices at a time,
+  one UPDATE per distinct value, lines already correct skipped. Reports
+  invoices with no Price List Rate and unsupported inclusive taxes.
+  Idempotent.
+
+**Verified on staging.** Backfill: all 138 lines equal an independent SQL
+from ERPNext's stored per-line VAT rate (117 with breakdown, 21 untaxed);
+Style Name on the 3 test items, trimmed, blank item blank; reported only
+ACC-SINV-2026-00064 (Price List Rate 0). Re-run: 0 updates. Hook on
+ERPNext's real recalculation of all 117 submitted invoices: 127/127 lines
+match. Real draft insert (rolled back): 139.30 -> 132.666667, 90.70 at 30%
+off -> 86.380952, 203.40 at 55% off -> 193.714286; line VAT still sums to
+total taxes (14.02). With `Item-custom_style_name` deleted: invoice still
+saves, Style Name untouched, backfill skips with a note (field restored).
+Report View's own query: one row per line with both columns.
+
+**Staging-only test setup (not in git).** `Item-custom_style_name` (Data,
+"Style Name", after `custom_collection`) created by hand on staging; values:
+`30410232030043` "PLEATED MIDI DRESS", `35210232030015` "  CROPPED BLAZER "
+(spaces deliberate), `35210232030014` blank, `30440222030023` "WOOL COAT".
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_invoice_reporting_fields` 35/35, `test_invoice_line_backfill` 11/11,
+`test_offline_sync_invoices` 4/4, `test_customer_credit_invoice_fields` 2/2.
+`test_invoices`, `test_submitted_invoice_shift_security`,
+`test_invoice_cancel_hooks` and `test_gift_card_invoice_fields` fail
+identically with these changes stashed (stale imports/assertion) --
+pre-existing. `bench build` N/A (no frontend files). Migrate twice, exit 0,
+field anchors unchanged.
+
+**Production deploy.**
+1. `bench --site <prod-site> backup --with-files`
+2. Collision check -- must return no rows:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE fieldname IN ('posa_item_style_name','posa_item_mrp_excl_vat');"
+   ```
+3. Inclusive taxes in use -- expect only "On Net Total" rows:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT charge_type, rate, COUNT(*) FROM \`tabSales Taxes and Charges\` WHERE parenttype='Sales Invoice' AND included_in_print_rate=1 GROUP BY 1,2;"
+   ```
+4. Optional, for timing: `SELECT COUNT(*) FROM \`tabSales Invoice Item\`;`
+5. `cd apps/posawesome && git pull upstream stable`
+6. `bench --site <prod-site> migrate` outside trading hours -- read the
+   backfill's output (and Error Log "Style Name / MRP No VAT backfill:
+   lines to review").
+7. `bench restart` (no `bench build`: no frontend change).
+8. Report View -> Pick Columns -> Sales Invoice Item: Style Name, MRP No
+   VAT; spot-check one line (MRP / 1.05). Then Menu -> Save As to make the
+   fixed-columns saved report.

@@ -1,19 +1,23 @@
 """Plain, reportable copies of per-line Size/Color/Brand, Parent Style,
-Season, Collection and VAT, and the POS cashier's name on Sales Invoice, so
-they work as ordinary Report View columns (Pick Columns, filters, Group By,
-export).
+Style Name, Season, Collection, VAT and MRP without VAT, and the POS
+cashier's name on Sales Invoice, so they work as ordinary Report View columns
+(Pick Columns, filters, Group By, export).
 
 Size and Color only exist in Item's "Item Variant Attribute" child table,
 which Report View can't reach from Sales Invoice; posa_cashier is a Link to
 User and displays the email. Item VAT comes from ERPNext's per-line tax
 breakdown (Item Wise Tax Detail), which Report View can only join as an
-unrelated child table (every item x every tax row). Values are a snapshot
+unrelated child table (every item x every tax row). MRP No VAT is the
+line's Price List Rate with its tax-inclusive VAT taken out, before any
+discount -- no standard field holds it. Values are a snapshot
 taken when the invoice is saved, so later edits to an Item or User don't
 rewrite past sales.
 """
 
+import json
+
 import frappe
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 SIZE_ATTRIBUTE = "Size"
 COLOR_ATTRIBUTE = "Color"
@@ -27,12 +31,16 @@ ITEM_SNAPSHOT_FIELDS = {
     "variant_of": "posa_item_variant_of",
     "custom_season": "posa_item_season",
     "custom_collection": "posa_item_collection",
+    "custom_style_name": "posa_item_style_name",
 }
 # Item custom fields this app never creates or ships: they exist on sites
 # where they were made by hand (production). Read only if present, so a site
 # without them still saves invoices.
-OPTIONAL_ITEM_FIELDS = ("custom_season", "custom_collection")
+OPTIONAL_ITEM_FIELDS = ("custom_season", "custom_collection", "custom_style_name")
 LINE_VAT_FIELD = "posa_item_vat"
+LINE_MRP_EXCL_VAT_FIELD = "posa_item_mrp_excl_vat"
+# ERPNext's Item Tax Template marker for "this tax doesn't apply to the item".
+NOT_APPLICABLE_TAX = "N/A"
 # "Actual" tax rows are fixed charges (e.g. POS delivery charges), not VAT;
 # ERPNext still spreads them over the items' breakdown, so leave them out.
 NON_VAT_CHARGE_TYPES = ("Actual",)
@@ -62,6 +70,7 @@ def set_invoice_reporting_fields(doc):
             row.set(ITEM_SNAPSHOT_FIELDS[item_field], _clean(item.get(item_field)))
 
     set_line_vat(doc)
+    set_line_mrp_excl_vat(doc)
     doc.posa_cashier_name = get_cashier_name(doc.get("posa_cashier"))
 
 
@@ -109,6 +118,50 @@ def set_line_vat(doc):
             f"Item VAT on {doc.get('name') or 'new invoice'} rows {fallback_rows}: no per-line tax "
             "breakdown, used amount - net_amount"
         )
+
+
+def set_line_mrp_excl_vat(doc):
+    """Each line's Price List Rate (MRP, per unit) without its VAT, before discount."""
+    taxes = doc.get("taxes") or []
+    unsupported = []
+    for row in doc.get("items") or []:
+        value = mrp_excl_vat(row.get("price_list_rate"), row.get("item_tax_rate"), taxes)
+        if value is None:
+            unsupported.append(row.get("idx"))
+        row.set(LINE_MRP_EXCL_VAT_FIELD, value)
+    if unsupported:
+        frappe.logger("posawesome").warning(
+            f"MRP No VAT on {doc.get('name') or 'new invoice'} rows {unsupported}: tax-inclusive charge "
+            "type other than On Net Total, left blank"
+        )
+
+
+def mrp_excl_vat(price_list_rate, item_tax_rate, taxes):
+    """price_list_rate / (1 + the line's tax-inclusive VAT rates), as ERPNext
+    takes VAT out of inclusive prices (determine_exclusive_rate). Prices that
+    exclude VAT, untaxed and zero-rated lines keep the Price List Rate. None
+    when an inclusive tax isn't "On Net Total" (not used by POS Awesome)."""
+    item_tax_map = _load_item_tax_map(item_tax_rate)
+    total_rate = 0.0
+    for tax in taxes:
+        if not cint(tax.get("included_in_print_rate")) or tax.get("charge_type") in NON_VAT_CHARGE_TYPES:
+            continue
+        rate = item_tax_map.get(tax.get("account_head"), tax.get("rate"))
+        if rate == NOT_APPLICABLE_TAX:
+            continue
+        if tax.get("charge_type") != "On Net Total":
+            return None
+        total_rate += flt(rate)
+    return flt(flt(price_list_rate) / (1 + total_rate / 100.0), 6)
+
+
+def _load_item_tax_map(item_tax_rate):
+    if isinstance(item_tax_rate, dict):
+        return item_tax_rate
+    try:
+        return json.loads(item_tax_rate) if item_tax_rate else {}
+    except ValueError:
+        return {}
 
 
 def _vat_from_breakdown(doc, vat_taxes):

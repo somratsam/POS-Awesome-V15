@@ -9562,5 +9562,28 @@
 		"read_only": 1,
 		"insert_after": "posa_item_collection",
 		"name": "Sales Invoice Item-posa_item_vat"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "Sales Invoice Item",
+		"fieldname": "posa_item_style_name",
+		"fieldtype": "Data",
+		"label": "Style Name",
+		"description": "Item's Style Name (custom_style_name) when sold; blank when the item has none.",
+		"read_only": 1,
+		"insert_after": "posa_item_vat",
+		"name": "Sales Invoice Item-posa_item_style_name"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "Sales Invoice Item",
+		"fieldname": "posa_item_mrp_excl_vat",
+		"fieldtype": "Currency",
+		"options": "currency",
+		"label": "MRP No VAT",
+		"description": "Price List Rate (MRP, per unit) with this line's VAT taken out, before any discount.",
+		"read_only": 1,
+		"insert_after": "price_list_rate",
+		"name": "Sales Invoice Item-posa_item_mrp_excl_vat"
 	}
 ]
