@@ -20,6 +20,7 @@ LINE_FIELDS = (
     "Sales Invoice Item-posa_item_season",
     "Sales Invoice Item-posa_item_collection",
     "Sales Invoice Item-posa_item_vat",
+    "Sales Invoice Item-posa_item_style_name",
 )
 PROPERTY_SETTERS = (
     "Sales Invoice Item-brand-hidden",
@@ -27,10 +28,16 @@ PROPERTY_SETTERS = (
     "Sales Invoice Item-item_group-hidden",
 )
 ITEM_ROWS = {
-    "VAR-1": dict(brand="MAX&CO.", variant_of="STYLE-1", custom_season="SS26 1ST DEL", custom_collection="SS26 1ST DEL"),
-    "VAR-2": dict(brand="GEOX", variant_of="STYLE-2", custom_season=None, custom_collection="  "),
-    "Consulting": dict(brand=None, variant_of=None, custom_season=None, custom_collection=None),
+    "VAR-1": dict(
+        brand="MAX&CO.", variant_of="STYLE-1", custom_season="SS26 1ST DEL", custom_collection="SS26 1ST DEL",
+        custom_style_name=" PLEATED MIDI DRESS ",
+    ),
+    "VAR-2": dict(brand="GEOX", variant_of="STYLE-2", custom_season=None, custom_collection="  ", custom_style_name=None),
+    "Consulting": dict(brand=None, variant_of=None, custom_season=None, custom_collection=None, custom_style_name=None),
 }
+
+# Item fields made by hand on production; this app must never ship them.
+HAND_MADE_ITEM_FIELDS = ("custom_season", "custom_collection", "custom_style_name")
 
 ATTRIBUTE_ROWS = [
     frappe._dict(parent="VAR-1", attribute="Size", attribute_value="38"),
@@ -74,7 +81,10 @@ def _fake_get_value(doctype, name, fieldname):
     return {"cashier@example.com": "Aisha Al Balushi", "nofullname@example.com": None}.get(name)
 
 
-@patch.object(reporting, "get_available_optional_item_fields", return_value=["custom_season", "custom_collection"])
+@patch.object(
+    reporting, "get_available_optional_item_fields",
+    return_value=["custom_season", "custom_collection", "custom_style_name"],
+)
 @patch.object(reporting.frappe.db, "get_value", side_effect=_fake_get_value)
 @patch.object(reporting.frappe, "get_all", side_effect=_fake_get_all)
 class TestSetInvoiceReportingFields(unittest.TestCase):
@@ -181,7 +191,7 @@ class TestReportingFixtures(unittest.TestCase):
 @patch.object(reporting.frappe.db, "get_value", side_effect=_fake_get_value)
 @patch.object(reporting.frappe, "get_all", side_effect=_fake_get_all)
 class TestLineSnapshotFields(unittest.TestCase):
-    def _run(self, rows, available=("custom_season", "custom_collection")):
+    def _run(self, rows, available=("custom_season", "custom_collection", "custom_style_name")):
         doc = _doc(rows)
         with patch.object(reporting, "get_available_optional_item_fields", return_value=list(available)):
             reporting.set_invoice_reporting_fields(doc)
@@ -200,6 +210,18 @@ class TestLineSnapshotFields(unittest.TestCase):
         self.assertIsNone(row.posa_item_season)
         self.assertIsNone(row.posa_item_collection)
         self.assertEqual(row.posa_item_variant_of, "STYLE-2")
+
+    def test_style_name_from_the_variant_trimmed_and_blank_stays_blank(self, *_):
+        doc = self._run([{"item_code": "VAR-1"}, {"item_code": "VAR-2", "posa_item_style_name": "STALE"}])
+        self.assertEqual(doc["items"][0].posa_item_style_name, "PLEATED MIDI DRESS")
+        self.assertIsNone(doc["items"][1].posa_item_style_name)
+
+    def test_site_without_style_name_leaves_it_untouched(self, get_all, *_):
+        doc = self._run([{"item_code": "VAR-1", "posa_item_style_name": "KEEP"}], available=("custom_season",))
+        self.assertEqual(doc["items"][0].posa_item_style_name, "KEEP")
+        self.assertEqual(doc["items"][0].posa_item_season, "SS26 1ST DEL")
+        item_query = [c for c in get_all.call_args_list if c.args[0] == "Item"][-1]
+        self.assertNotIn("custom_style_name", item_query.kwargs["fields"])
 
     def test_non_variant_has_no_parent_style(self, *_):
         doc = self._run([{"item_code": "Consulting"}])
@@ -226,6 +248,8 @@ class TestLineSnapshotFields(unittest.TestCase):
             self.assertEqual(reporting.get_available_optional_item_fields(), ["custom_season"])
         with patch.object(reporting.frappe, "get_meta", return_value=Meta(set())):
             self.assertEqual(reporting.get_available_optional_item_fields(), [])
+        with patch.object(reporting.frappe, "get_meta", return_value=Meta({"custom_style_name"})):
+            self.assertEqual(reporting.get_available_optional_item_fields(), ["custom_style_name"])
 
 
 class TestLineVat(unittest.TestCase):
@@ -287,6 +311,64 @@ class TestLineVat(unittest.TestCase):
         logger.return_value.warning.assert_called_once()
 
 
+INCLUSIVE_VAT = {"charge_type": "On Net Total", "account_head": "VAT 5% - S", "rate": 5, "included_in_print_rate": 1}
+
+
+class TestLineMrpExclVat(unittest.TestCase):
+    def _run(self, items, taxes):
+        doc = _doc(items, taxes=taxes)
+        reporting.set_line_mrp_excl_vat(doc)
+        return [row.posa_item_mrp_excl_vat for row in doc["items"]]
+
+    def test_vat_taken_out_of_the_mrp_before_discount(self):
+        # 90.70 MRP sold at 55% off: MRP No VAT ignores the discount.
+        values = self._run([{"price_list_rate": 90.7, "rate": 40.82, "discount_percentage": 55}], [INCLUSIVE_VAT])
+        self.assertAlmostEqual(values[0], 90.7 / 1.05, places=6)
+        self.assertAlmostEqual(values[0], 86.380952, places=6)
+
+    def test_zero_rated_item_tax_template_keeps_the_mrp(self):
+        values = self._run(
+            [{"price_list_rate": 10, "item_tax_rate": json.dumps({"VAT 5% - S": 0})},
+             {"price_list_rate": 10, "item_tax_rate": json.dumps({"VAT 5% - S": "N/A"})},
+             {"price_list_rate": 10, "item_tax_rate": json.dumps({"VAT 5% - S": 5})}],
+            [INCLUSIVE_VAT],
+        )
+        self.assertEqual(values[:2], [10, 10])
+        self.assertAlmostEqual(values[2], 9.52381, places=5)
+
+    def test_prices_without_vat_untaxed_and_delivery_keep_the_mrp(self):
+        exclusive = dict(INCLUSIVE_VAT, included_in_print_rate=0)
+        delivery = {"charge_type": "Actual", "account_head": "Delivery - S", "rate": 0, "included_in_print_rate": 1}
+        self.assertEqual(self._run([{"price_list_rate": 10}], [exclusive]), [10])
+        self.assertEqual(self._run([{"price_list_rate": 10}], []), [10])
+        self.assertAlmostEqual(self._run([{"price_list_rate": 10.5}], [INCLUSIVE_VAT, delivery])[0], 10)
+
+    def test_return_lines_stay_positive_per_unit(self):
+        values = self._run([{"price_list_rate": 21, "qty": -1, "amount": -21}], [INCLUSIVE_VAT])
+        self.assertAlmostEqual(values[0], 20)
+
+    def test_no_price_list_rate_gives_zero(self):
+        self.assertEqual(self._run([{"price_list_rate": 0, "rate": 5}], [INCLUSIVE_VAT]), [0])
+
+    def test_unsupported_inclusive_charge_type_is_blank_and_logged(self):
+        compound = dict(INCLUSIVE_VAT, charge_type="On Previous Row Total", row_id=1)
+        doc = _doc([{"idx": 1, "price_list_rate": 10, "posa_item_mrp_excl_vat": 9}], taxes=[INCLUSIVE_VAT, compound])
+        with patch.object(reporting.frappe, "logger") as logger:
+            reporting.set_line_mrp_excl_vat(doc)
+        self.assertIsNone(doc["items"][0].posa_item_mrp_excl_vat)
+        logger.return_value.warning.assert_called_once()
+
+    def test_set_on_every_save_by_the_reporting_hook(self):
+        doc = _doc([{"item_code": "Consulting", "price_list_rate": 21}], taxes=[INCLUSIVE_VAT])
+        with patch.object(reporting.frappe, "get_all", side_effect=_fake_get_all), patch.object(
+            reporting, "get_available_optional_item_fields", return_value=[]
+        ), patch.object(reporting.frappe.db, "get_value", side_effect=_fake_get_value), patch.object(
+            reporting, "set_line_vat"
+        ):
+            reporting.set_invoice_reporting_fields(doc)
+        self.assertAlmostEqual(doc["items"][0].posa_item_mrp_excl_vat, 20)
+
+
 class TestLineFieldFixtures(unittest.TestCase):
     def _hook_names(self, doctype):
         names = []
@@ -297,12 +379,22 @@ class TestLineFieldFixtures(unittest.TestCase):
 
     def test_line_fields_defined_and_exported_after_size_color(self):
         fields = {f["name"]: f for f in json.loads((FIXTURES / "custom_field.json").read_text())}
-        chain = ["posa_item_color", "posa_item_variant_of", "posa_item_season", "posa_item_collection", "posa_item_vat"]
+        chain = [
+            "posa_item_color", "posa_item_variant_of", "posa_item_season", "posa_item_collection", "posa_item_vat",
+            "posa_item_style_name",
+        ]
         for name, after in zip(LINE_FIELDS, chain):
             self.assertIn(name, fields)
             self.assertEqual(fields[name]["read_only"], 1)
             self.assertEqual(fields[name]["insert_after"], after)
             self.assertIn(name, self._hook_names("Custom Field"))
+
+    def test_mrp_excl_vat_field_sits_after_price_list_rate(self):
+        fields = {f["name"]: f for f in json.loads((FIXTURES / "custom_field.json").read_text())}
+        field = fields["Sales Invoice Item-posa_item_mrp_excl_vat"]
+        self.assertEqual((field["fieldtype"], field["options"], field["label"]), ("Currency", "currency", "MRP No VAT"))
+        self.assertEqual((field["read_only"], field["insert_after"]), (1, "price_list_rate"))
+        self.assertIn("Sales Invoice Item-posa_item_mrp_excl_vat", self._hook_names("Custom Field"))
 
     def test_item_season_and_collection_are_never_shipped(self):
         # They exist by hand on production: shipping a fixture with the same
@@ -312,13 +404,13 @@ class TestLineFieldFixtures(unittest.TestCase):
                 if not isinstance(row, dict):
                     continue
                 self.assertFalse(
-                    row.get("dt") == "Item" and row.get("fieldname") in ("custom_season", "custom_collection"),
+                    row.get("dt") == "Item" and row.get("fieldname") in HAND_MADE_ITEM_FIELDS,
                     f"{path.name} ships Item {row.get('fieldname')}",
                 )
-                self.assertNotIn(row.get("name"), ("Item-custom_season", "Item-custom_collection"))
+                self.assertNotIn(row.get("name"), [f"Item-{f}" for f in HAND_MADE_ITEM_FIELDS])
         for names in (self._hook_names("Custom Field"), self._hook_names("Property Setter")):
-            self.assertNotIn("Item-custom_season", names)
-            self.assertNotIn("Item-custom_collection", names)
+            for fieldname in HAND_MADE_ITEM_FIELDS:
+                self.assertNotIn(f"Item-{fieldname}", names)
 
     def test_item_group_is_unhidden_by_a_property_setter(self):
         setters = {p["name"]: p for p in json.loads((FIXTURES / "property_setter.json").read_text())}

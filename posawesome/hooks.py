@@ -421,6 +421,8 @@ fixtures = [
                     "Sales Invoice Item-posa_item_season",
                     "Sales Invoice Item-posa_item_collection",
                     "Sales Invoice Item-posa_item_vat",
+                    "Sales Invoice Item-posa_item_style_name",
+                    "Sales Invoice Item-posa_item_mrp_excl_vat",
                     "Sales Invoice Item-posa_discount_reason",
                     "POS Invoice Item-posa_discount_reason",
                     "POS Profile-posa_require_discount_reason",
