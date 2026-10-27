@@ -6675,3 +6675,74 @@ field anchors unchanged.
 8. Report View -> Pick Columns -> Sales Invoice Item: Style Name, MRP No
    VAT; spot-check one line (MRP / 1.05). Then Menu -> Save As to make the
    fixed-columns saved report.
+
+## 71. "Bulk Add Values" button on the Item Attribute form (2026-10-27)
+
+**Request.** New catalog uploads bring new Size / Color values. Data Import
+on Item Attribute isn't safe in v16 (can drop or overwrite rows) and the
+values were being added with a console script. The inventory manager needs
+to add them herself from the form, safely.
+
+**Found first (live, staging; ERPNext 16.26).**
+- Item Attribute permissions: standard DocPerm for **Item Manager only**
+  (read/write/create/delete). No Custom DocPerm, Client/Server Script,
+  Property Setter or Custom Field on Item Attribute / Item Attribute Value.
+  **System Manager has no permission**; only Administrator bypasses.
+  Decision (user): Item Manager only, no permission change.
+- `track_changes` = 1. Color 928 values, Size 82, all non-numeric; abbr ==
+  value on every Color/Size row. No variant uses a value missing from its
+  attribute (ERPNext's `on_update` would otherwise block every save).
+  Allow Rename Attribute Value = 0.
+
+**Built.**
+- `api/item_attribute.js` (via `doctype_js`): "Bulk Add Values" button for
+  saved, non-numeric attributes when `frm.perm[0].write`; asks to save
+  first if the form is dirty. Dialog: paste -> **Check** (preview) ->
+  **Add N Values** -> "N added, M already existed" -> reload. Editing the
+  text resets to Check; Add re-checks if the text differs from what was
+  previewed. All values escaped.
+- `api/item_attribute_bulk.py`: `preview_bulk_attribute_values` and
+  `add_bulk_attribute_values` (POST). Both: doctype + doc `write` check,
+  numeric refused, max 2,000 lines / 400,000 characters. Lines: NBSP ->
+  space, trimmed, inner space runs collapsed, case kept; rejected if empty,
+  > 140 characters or containing a tab (echoed cut to 160). Duplicates in
+  the paste collapse case-insensitively (first spelling wins). Skipped if
+  the value matches an existing value or abbr (case-insensitive); a new
+  value whose abbr (= value) matches an existing abbr is reported as an
+  abbr clash. Add reloads the doc `for_update`, recomputes everything,
+  appends only, and calls a normal `doc.save()` (permissions, ERPNext
+  validation, one Version row) inside a savepoint rolled back on any error.
+- Note: `doc.save()` rewrites every child row, so existing rows' `modified`
+  changes (content, name and idx don't) -- the same as the form's Save.
+  Frappe writes no Version rows while tests run (`ignore_version =
+  frappe.in_test`); the Version test patches that off.
+
+**Verified on staging** (real Item Manager user, rolled back): Size add
+0.34s, Color (928) 0.55s, Color +2,000 values 1.97s; re-runs added 0;
+existing rows unchanged. Form script: `getdoctype` returns ERPNext's own
+Item Attribute script plus ours; Stock Reconciliation's still loads. No
+headless browser run: libnss3 can't be fetched without root (`apt-get
+update`), and staging has developer mode off so `bench browse --user` is
+refused. **User's own staging test (2026-10-27):** Check, Add, second run
+adds 0, tab line rejected; button shows on Size / Color / Test Size for an
+Item Manager and not for a user without Item Manager. Test rows cleaned up.
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_item_attribute_bulk` 18/18, `test_upload_stock_check` 16/16. ERPNext's
+`test_item_attribute` fails test discovery (duplicate "Standard Buying"
+Price List test record) identically with these changes stashed --
+pre-existing. `bench build` exit 0. Migrate twice, exit 0, no fixture drift.
+
+**Production deploy.**
+1. Snapshot, then `bench --site site1.local backup --with-files`
+2. Orphan check -- must return no rows:
+   ```
+   bench --site site1.local mariadb -e "SET SQL_BIG_SELECTS=1; SELECT iva.attribute, COUNT(*) FROM \`tabItem Variant Attribute\` iva JOIN tabItem i ON i.name=iva.parent LEFT JOIN \`tabItem Attribute Value\` v ON v.parent=iva.attribute AND v.attribute_value=iva.attribute_value WHERE i.variant_of<>'' AND v.name IS NULL GROUP BY iva.attribute;"
+   ```
+3. Inventory manager has Item Manager:
+   `bench --site site1.local mariadb -e "SELECT parent FROM \`tabHas Role\` WHERE role='Item Manager' AND parenttype='User';"`
+4. `cd apps/posawesome && git remote -v` then `git pull <remote> stable`
+5. `bench build --app posawesome`, `bench --site site1.local migrate`
+6. `sudo supervisorctl restart all`
+7. As the inventory manager: Item Attribute "Size" -> Bulk Add Values ->
+   Check a short test list -> Add -> check the form's version history.

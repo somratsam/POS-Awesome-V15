@@ -41,6 +41,7 @@ doctype_js = {
     "Sales Invoice": "posawesome/api/invoice.js",
     "Company": "posawesome/api/company.js",
     "Stock Reconciliation": "posawesome/api/stock_reconciliation.js",
+    "Item Attribute": "posawesome/api/item_attribute.js",
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
