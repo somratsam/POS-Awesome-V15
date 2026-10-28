@@ -6926,15 +6926,40 @@ exit 0, identical.
 16. **"No permission for Stock Settings" popup** (every new Stock Entry): a
     role rule does NOT fix it -- store users already have Read through Sales
     User. Frappe refuses because Stock Settings' "Default Warehouse" points at
-    a warehouse the user has no Warehouse permission for. Fix: Customize Form >
-    `Stock Settings` > fields **Default Warehouse** and **Sample Retention
-    Warehouse** > tick **Ignore User Permissions** > Update. (Console
-    equivalent: `make_property_setter("Stock Settings", f, "ignore_user_permissions", 1, "Check")`
-    for both fields.) Exposes Stock Settings read-only to users who already
+    a warehouse the user has no Warehouse permission for. Fix: two Property
+    Setters that make Stock Settings' **Default Warehouse** and **Sample
+    Retention Warehouse** ignore User Permissions. Customize Form can't do it
+    ("Single DocTypes cannot be customized"), so create them in Desk >
+    Property Setter > New, one per field:
+    | Field | Record 1 | Record 2 |
+    |---|---|---|
+    | Doc Type | `Stock Settings` | `Stock Settings` |
+    | Applied On | `DocField` | `DocField` |
+    | Field Name | `default_warehouse` | `sample_retention_warehouse` |
+    | Property | `ignore_user_permissions` | `ignore_user_permissions` |
+    | Property Type | `Check` | `Check` |
+    | Value | `1` | `1` |
+    | Row Name, Module | empty | empty |
+    | Is System Generated | not ticked | not ticked |
+    | Record name (automatic) | `Stock Settings-default_warehouse-ignore_user_permissions` | `Stock Settings-sample_retention_warehouse-ignore_user_permissions` |
+    Console equivalent (`bench --site site1.local console`):
+    `from frappe.custom.doctype.property_setter.property_setter import make_property_setter`, then
+    `make_property_setter("Stock Settings", "default_warehouse", "ignore_user_permissions", 1, "Check")`,
+    the same for `sample_retention_warehouse`, then `frappe.db.commit()`.
+    No migrate needed: saving a Property Setter clears that doctype's cache
+    itself; users reload the page. It survives migrate (a database record;
+    POS Awesome's fixtures only sync Property Setters they list by name).
+    Saving a new one replaces an existing Property Setter for the same field
+    and property (see step 5a). Check:
+    ```
+    bench --site site1.local mariadb -e "SELECT name, doctype_or_field, field_name, property, property_type, value, is_system_generated FROM \`tabProperty Setter\` WHERE doc_type='Stock Settings' AND property='ignore_user_permissions';"
+    ```
+    Two rows, value 1. Exposes Stock Settings read-only to users who already
     have the Read role (valuation method, negative-stock flag, default
-    warehouse names, the configured roles); nothing writable. Undo: untick both
-    again (or delete the two Property Setters `Stock Settings-default_warehouse-ignore_user_permissions`
-    and `Stock Settings-sample_retention_warehouse-ignore_user_permissions`).
+    warehouse names, the configured roles); nothing writable. Undo: delete
+    the two records in Desk > Property Setter (or, in the console,
+    `frappe.delete_doc("Property Setter", "<record name>")` for each, then
+    `frappe.db.commit()`); the same query then returns no rows.
 
 *First-store test* -- see section 76.
 
