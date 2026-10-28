@@ -6853,6 +6853,25 @@ exit 0, identical.
    ```
    bench --site site1.local mariadb -e "SELECT b.warehouse, COUNT(*) items, SUM(b.actual_qty) qty FROM tabBin b JOIN tabWarehouse w ON w.name=b.warehouse WHERE w.warehouse_type='Transit' AND b.actual_qty<>0 GROUP BY b.warehouse;"
    ```
+5a. Existing Property Setters on Stock Settings -- step 16 adds two and its
+    undo deletes them, so note anything already there (it must not be
+    deleted by that undo, and an existing `ignore_user_permissions` one means
+    step 16 is partly done already):
+    ```
+    bench --site site1.local mariadb -e "SELECT name, field_name, property, value, modified, owner FROM \`tabProperty Setter\` WHERE doc_type='Stock Settings';"
+    ```
+5b. Existing "Is Default" on Warehouse permissions -- Frappe allows one Is
+    Default per user, so step 13 fails for a user who already has one on a
+    different warehouse (or on the transit warehouse, which must not be the
+    default). Note every row and fix it in step 13 rather than adding a second:
+    ```
+    bench --site site1.local mariadb -e "SELECT user, for_value, applicable_for, apply_to_all_doctypes, modified, owner FROM \`tabUser Permission\` WHERE allow='Warehouse' AND is_default=1 ORDER BY user;"
+    ```
+    Also check for a site-wide or user default warehouse that would compete
+    with it:
+    ```
+    bench --site site1.local mariadb -e "SELECT parent, defkey, defvalue FROM tabDefaultValue WHERE defkey IN ('warehouse','default_warehouse') ORDER BY parent;"
+    ```
 
 *Code*
 6. `cd apps/posawesome && git remote -v`, then `git pull <remote> stable`.
