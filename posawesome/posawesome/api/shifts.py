@@ -8,6 +8,7 @@ import frappe
 from frappe.utils import cint, nowdate
 from frappe import _
 from .discount_reasons import get_cashier_discount_reasons
+from .pos_access import get_authenticated_pos_user, get_authorized_pos_profile
 from .utilities import get_version
 
 
@@ -59,6 +60,7 @@ def get_opening_dialog_data():
 
 @frappe.whitelist()
 def create_opening_voucher(pos_profile, company, balance_details):
+    profile_doc = _authorize_shift_profile(pos_profile, company)
     balance_details = json.loads(balance_details)
 
     new_pos_opening = frappe.get_doc(
@@ -67,8 +69,8 @@ def create_opening_voucher(pos_profile, company, balance_details):
             "period_start_date": frappe.utils.get_datetime(),
             "posting_date": frappe.utils.getdate(),
             "user": frappe.session.user,
-            "pos_profile": pos_profile,
-            "company": company,
+            "pos_profile": profile_doc.name,
+            "company": profile_doc.company,
             "docstatus": 1,
         }
     )
@@ -81,8 +83,31 @@ def create_opening_voucher(pos_profile, company, balance_details):
     return data
 
 
+def _authorize_shift_profile(pos_profile, company):
+    """The POS Profile the logged-in user may open a shift on (assigned, enabled,
+    same company), else a refusal saying so."""
+    try:
+        return get_authorized_pos_profile(pos_profile, company)
+    except frappe.PermissionError:
+        if not frappe.flags.error_message:
+            raise  # pos_access already said why (not assigned, disabled, other company)
+        # Frappe's own "You need the 'read' permission on POS Profile ..." says nothing useful.
+        frappe.flags.error_message = None
+        frappe.throw(
+            _(
+                "You can't open a shift on POS Profile {0}: your account isn't allowed to use it. "
+                "Ask a manager to check your POS Profile and Warehouse permissions."
+            ).format(frappe.bold(frappe.utils.escape_html(pos_profile))),
+            frappe.PermissionError,
+            title=_("Not Allowed"),
+        )
+
+
 @frappe.whitelist()
-def check_opening_shift(user):
+def check_opening_shift(user=None):
+    # Always the logged-in user's own shift. The POS screen still sends `user`;
+    # it is ignored so nobody can read another cashier's shift and profile.
+    user = get_authenticated_pos_user()
     open_vouchers = frappe.db.get_all(
         "POS Opening Shift",
         filters={

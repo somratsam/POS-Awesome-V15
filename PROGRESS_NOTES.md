@@ -7163,3 +7163,73 @@ Rollback if needed: `git checkout <previous stable commit>` in apps/posawesome,
 `bench build --app posawesome`, `bench --site site1.local migrate`, restart.
 The Destination Store column stays (harmless, unused); the setup steps can stay
 or be undone one by one (each step lists its undo).
+
+## 77. Shift security: `check_opening_shift` and `create_opening_voucher` (2026-10-28)
+
+**Found.** Both whitelisted in `api/shifts.py`, so any logged-in user could call
+them directly:
+- `check_opening_shift(user)` used the `user` sent by the browser. Asking for
+  another cashier returned their open shift (opening balances), their store's
+  full POS Profile (176 fields, accounts included) and the Company record
+  (shown on staging inside a rolled-back transaction).
+- `create_opening_voucher` never checked the caller was allowed on the POS
+  Profile: an unassigned user opened a submitted, open shift on another
+  store's profile with any opening amounts (rolled back). They could not sell
+  on it (invoice APIs check the profile), but the false shift and amounts
+  would show in that store's shift lists and closing figures.
+
+**Built.**
+- `check_opening_shift(user=None)`: ignores the argument and uses the
+  logged-in user (`pos_access.get_authenticated_pos_user`; Guest refused). Both
+  POS screen callers (`usePosShift.ts`, `PayView.vue`) already send
+  `frappe.session.user`, so nothing changes for them.
+- `create_opening_voucher`: `pos_access.get_authorized_pos_profile(pos_profile,
+  company)` first (logged in, POS Profile read permission incl. User
+  Permissions, enabled, company matches, assigned unless a POS Profile
+  manager); the shift takes `pos_profile` and `company` from the profile. When
+  Frappe's own read check refuses, its "You need the 'read' permission ..." is
+  replaced with "You can't open a shift on POS Profile X: your account isn't
+  allowed to use it. Ask a manager to check your POS Profile and Warehouse
+  permissions."; pos_access's own messages (not assigned / disabled / other
+  company) pass through.
+- `api/test_shifts.py` (7): open then resume own shift (with and without a
+  user argument); another user's name ignored; unassigned cashier refused;
+  other store's user refused with the clear message; company mismatch refused;
+  manager (POS Manager + Accounts Manager, no restriction) allowed on two
+  profiles; POS Manager alone refused. 6 of 7 fail against the old code.
+
+**Live (staging browser).** Store-like user: opening dialog -> open -> terminal
+unlock -> reload resumes the same shift; `check_opening_shift(user=<someone
+else>)` returns their own; closed (closing-screen calls), opening dialog shown
+again. Manager (not assigned): opened. Other store's user: refused with the
+clear message. All test shifts closed, setup reverted.
+
+**Good to know.**
+- POS Awesome counts Sales Manager and Accounts Manager as POS Profile managers
+  (`pos_access.POS_PROFILE_MANAGER_ROLES`). Store users have both, so the
+  assignment check does not apply to them: their **POS Profile and Warehouse
+  User Permissions** keep them to their store.
+- Closing a shift saves the POS Opening Shift, which only **Sales Manager** and
+  **System Manager** may write (POS Opening Shift permissions). A store role
+  without Sales Manager could open shifts but not close them -- keep that in
+  any new store role.
+- POS Manager alone cannot read POS Profile (ERPNext: Accounts Manager /
+  Accounts User only), so such a user can no longer open a shift; they could
+  not sell before either.
+
+**Production deploy** (Python only; a separate night from section 72).
+1. Read-only check -- store users without a POS Profile permission (should
+   return no rows apart from people meant to work across stores):
+   ```
+   bench --site site1.local mariadb -e "SELECT u.name FROM tabUser u JOIN \`tabHas Role\` r ON r.parent=u.name AND r.role='Sales User' WHERE u.enabled=1 AND u.user_type='System User' AND NOT EXISTS (SELECT 1 FROM \`tabUser Permission\` p WHERE p.user=u.name AND p.allow='POS Profile');"
+   ```
+2. Ask open cashiers to finish their sales (a restart drops requests in flight).
+3. `cd apps/posawesome && git remote -v`, then `git pull <remote> stable`.
+   (`stable` also carries anything pushed before it -- deploy section 72 first.)
+4. `sudo supervisorctl restart all`.
+   No `bench migrate` (no doctype, fixture or patch) and no `bench build` (no
+   frontend file) are needed.
+5. Check: a store user reloads the POS -- an open shift resumes; one with no
+   shift sees the opening dialog, opens, and later closes as usual.
+Rollback: `git checkout <previous stable commit>` in apps/posawesome, then
+`sudo supervisorctl restart all`. Nothing in the database changes.
