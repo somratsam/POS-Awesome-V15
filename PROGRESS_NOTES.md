@@ -6746,3 +6746,376 @@ pre-existing. `bench build` exit 0. Migrate twice, exit 0, no fixture drift.
 6. `sudo supervisorctl restart all`
 7. As the inventory manager: Item Attribute "Size" -> Bulk Add Values ->
    Check a short test list -> Add -> check the form's version history.
+
+## 72. Store-to-store transfers: Destination Store, auto-share, End Transit check, Incoming Transfers (2026-10-28)
+
+**Request.** Make store-to-store transfers safe for store staff on top of
+ERPNext's own Add to Transit / End Transit (not replacing it). Decisions
+(user): a Stock Manager may return a shortage to the sending store, nobody
+else; email via site config `posa_transit_email`, off by default.
+
+**Found first (live, staging; ERPNext 16.26.2).**
+- No "Final Destination" field in v16; End Transit leaves Target Warehouse
+  empty. Add to Transit auto-fills the transit warehouse only from the
+  **source Warehouse's** Default In-Transit Warehouse (`set_transit_warehouse`
+  requires `from_warehouse`, so its Company branch never runs).
+- End Transit (`make_stock_in_entry` -> `get_mapped_doc`) needs **read** on the
+  sent entry. A receiver limited by Warehouse User Permissions to own store +
+  transit can't read it (the sender's store is on its rows); a DocShare
+  passes (`has_permission` -> `false_if_not_shared`).
+- Scan Barcode only searches Item Barcode / Serial / Batch / Warehouse, never
+  Item Code. Staging: all 1,414 variants have exactly one barcode row equal
+  to the Item Code; none missing/duplicated/colliding.
+- Repeat scans made one row per scan: the scanner matches a row's Source
+  Warehouse against `last_scanned_warehouse` or else the item's default
+  warehouse (all 2,016 Swan Item Defaults = "Stores - S").
+- `purpose` is read-only `fetch_from: stock_entry_type.purpose`, re-fetched
+  on every save, so a client can't pair a type with another purpose.
+- "No permission for Stock Settings" popup on every new Stock Entry for a
+  user whose Warehouse permissions don't include Stock Settings' Default
+  Warehouse (ERPNext's `stock_entry.js` reads `sample_retention_warehouse`;
+  the Single doc's `default_warehouse` link fails the user-permission check).
+  Pre-existing, not changed.
+- Staging has no "POS User" role (production has it as a site-made role).
+
+**Built.**
+- Custom Field `Stock Entry-posa_destination_store` "Destination Store"
+  (Warehouse; hand-added to `custom_field.json` + the hooks fixture list;
+  after `add_to_transit` in the unlabeled, non-collapsible section; required
+  and shown only on a sending transit entry; `ignore_user_permissions` so a
+  sender can pick another store; `no_copy`; list view + filter; indexed).
+- `api/stock_transit.py` via `doc_events["Stock Entry"]`:
+  `validate` -- destination required, same company, not group/disabled/
+  Transit, not the source; every row leaving a Transit warehouse must be End
+  Transit of a submitted sent row (row link, item and warehouse checked
+  against the DB) received into that row's Destination Store, or (Stock
+  Manager only) back into the row's source; Stock Manager may also write off
+  with a Material Issue; entries without a destination keep ERPNext's
+  behaviour. `on_submit` -- share read-only (`add_docshare`,
+  `ignore_share_permission`) with receivers = enabled System Users with a
+  Warehouse User Permission for the destination (all doctypes or Stock
+  Entry) whose roles read Stock Entry, minus the sender; bell notification
+  `type: "Alert"` (never emails); optional email when `posa_transit_email`
+  is set, failures logged not raised; warning if nobody qualifies. Shares stay.
+- `api/stock_entry.js` (doctype_js): Destination Store query set in
+  `refresh` (ERPNext's `onload` resets every Warehouse field's query); fills
+  `last_scanned_warehouse` from Default Source Warehouse on sending entries
+  so repeat scans merge; a user-scanned warehouse is left alone; our value
+  is cleared before save so a stale one is never stored.
+- Script Report "Incoming Transfers" (Stock User/Stock Manager/System
+  Manager; rows limited server-side to the user's permitted stores) +
+  shortcut on the POS Awesome workspace (live workspace matched the JSON
+  before re-import; `modified` bumped).
+
+**Verified on staging** (two throwaway users set up like the real store
+users: POS User, POS Manager, Sales User, Sales Manager, Accounts Manager,
+Customer + Stock User; Warehouse own store + transit; POS Profile; **no
+Company permission**): send with 3+2 scans (2 rows, qty 3 and 2), missing
+Destination Store refused, bell + share to the receiver, report lists it,
+End Transit into transit refused with "must be received into Stores - S",
+4 of 5 received (80%, 1 unit stays in transit), plain transfer out of transit
+refused, sender's shortage return refused, Stock Manager's return accepted.
+User Permission Stock Entry Type = Material Transfer blocks Material
+Receipt/Issue and keeps transfers working (tried on one user, removed).
+Residual gap: Delivery Note / Sales Invoice (Update Stock) can still take
+stock from a Transit warehouse (draft saved, rolled back) -- not fixed.
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_stock_transit` 19/19 (17 fail with the rules disabled),
+`test_api_imports` 4/4, `test_upload_stock_check` 16/16, plus 8 other
+modules reading hooks/fixtures/workspace. `test_workspace_gift_card` (2
+failures) and `test_invoice_cancel_hooks` (2 errors) fail identically with
+these changes stashed -- pre-existing. `bench build` exit 0. Migrate twice,
+exit 0, identical.
+
+**Production deploy** (covers sections 72-76; one deploy). Site `site1.local`.
+
+*Before pulling*
+1. Snapshot, then `bench --site site1.local backup --with-files`.
+2. Name checks -- must return no rows:
+   ```
+   bench --site site1.local mariadb -e "SELECT name FROM tabReport WHERE name='Incoming Transfers'; SELECT name FROM \`tabCustom Field\` WHERE name='Stock Entry-posa_destination_store';"
+   ```
+3. Workspace drift -- the live "POS Awesome" workspace must match git before
+   migrate re-imports it (migrate deletes and recreates it):
+   ```
+   bench --site site1.local mariadb -e "SELECT md5(content), modified FROM tabWorkspace WHERE name='POS Awesome'; SELECT COUNT(*) FROM \`tabWorkspace Link\` WHERE parent='POS Awesome'; SELECT label FROM \`tabWorkspace Shortcut\` WHERE parent='POS Awesome';"
+   ```
+   Compare with the previous release's `pos_awesome.json` (22 links, shortcut
+   "POS Awesome App"). If it differs, stop: someone edited it on the site.
+4. Open transit entries -- they keep ERPNext's old behaviour (no Destination
+   Store, no share, not in Incoming Transfers):
+   ```
+   bench --site site1.local mariadb -e "SELECT name, per_transferred FROM \`tabStock Entry\` WHERE add_to_transit=1 AND docstatus=1 AND per_transferred<100;"
+   ```
+5. Stock that is in a Transit warehouse today can afterwards only leave with
+   End Transit (or a Stock Manager's Material Issue):
+   ```
+   bench --site site1.local mariadb -e "SELECT b.warehouse, COUNT(*) items, SUM(b.actual_qty) qty FROM tabBin b JOIN tabWarehouse w ON w.name=b.warehouse WHERE w.warehouse_type='Transit' AND b.actual_qty<>0 GROUP BY b.warehouse;"
+   ```
+
+*Code*
+6. `cd apps/posawesome && git remote -v`, then `git pull <remote> stable`.
+7. `bench build --app posawesome`
+8. `bench --site site1.local migrate` (adds the Destination Store field, the
+   Incoming Transfers report and the workspace shortcut).
+9. `sudo supervisorctl restart all`
+
+*Setup (by hand, after the code is live)*
+10. **Transit warehouse.** One warehouse per company, e.g. "Goods In Transit -
+    SI": Warehouse Type = `Transit`, not a group, not disabled. (ERPNext
+    creates one with each company; check it exists.)
+11. **Each store warehouse:** Warehouse > the store > "Default In-Transit
+    Warehouse" = the transit warehouse. Add to Transit only reads this field
+    on the source warehouse (never the Company's).
+12. **Store users** (roles today: POS User, POS Manager, Sales User, Sales
+    Manager, Accounts Manager, Customer): add the role **Stock User**.
+    No Company User Permission is needed.
+13. **Store users' Warehouse permissions** (Desk > User Permission), each with
+    Allow = `Warehouse` and Apply To All Document Types ticked:
+    - their own store: **Is Default ticked** -- so new Sales Invoices,
+      Delivery Notes and Stock Entries start from their store instead of the
+      item default ("Head Office - SI"), and End Transit fills their store;
+    - the transit warehouse: **Is Default not ticked**.
+    Frappe allows one Is Default per user. Users reload the page (or log out
+    and in) to pick it up. Check -- each store user must have exactly one
+    `is_default = 1` row, their own store:
+    ```
+    bench --site site1.local mariadb -e "SELECT user, for_value, is_default, apply_to_all_doctypes FROM \`tabUser Permission\` WHERE allow='Warehouse' ORDER BY user, is_default DESC;"
+    ```
+14. **Material Transfer only.** For each store user one more User Permission:
+    - User: the store user
+    - Allow: `Stock Entry Type`
+    - For Value: `Material Transfer`
+    - Apply To All Document Types: ticked (Applicable For left empty)
+    - Is Default and Hide Descendants: not ticked
+    Not for Stock Managers (they write shortages off with a Material Issue).
+    Tested on staging: Material Receipt and Material Issue are refused,
+    Material Transfer and End Transit still work, other types' existing entries
+    disappear from the user's lists. It can't be bypassed through the API:
+    Stock Entry's `purpose` is read-only `fetch_from: stock_entry_type.purpose`
+    and re-fetched on every save. POS is unaffected (only Stock Entry links to
+    Stock Entry Type). Check:
+    `bench --site site1.local mariadb -e "SELECT user, for_value, apply_to_all_doctypes FROM \`tabUser Permission\` WHERE allow='Stock Entry Type';"`
+15. **"Insufficient Permission for Loyalty Program" popup** (Desk Sales Invoice
+    for a loyalty customer): Role Permission Manager > Document Type
+    `Loyalty Program` > Add a New Rule > Role `Sales User`, Level 0 > tick
+    **Read** only. Exposes the program's settings read-only (tiers, collection
+    factor, conversion factor, expiry, expense account, cost center, company,
+    customer group/territory); no customer data. Undo: Role Permission Manager >
+    `Loyalty Program` > "Reset to Default" (no custom rules existed before).
+16. **"No permission for Stock Settings" popup** (every new Stock Entry): a
+    role rule does NOT fix it -- store users already have Read through Sales
+    User. Frappe refuses because Stock Settings' "Default Warehouse" points at
+    a warehouse the user has no Warehouse permission for. Fix: Customize Form >
+    `Stock Settings` > fields **Default Warehouse** and **Sample Retention
+    Warehouse** > tick **Ignore User Permissions** > Update. (Console
+    equivalent: `make_property_setter("Stock Settings", f, "ignore_user_permissions", 1, "Check")`
+    for both fields.) Exposes Stock Settings read-only to users who already
+    have the Read role (valuation method, negative-stock flag, default
+    warehouse names, the configured roles); nothing writable. Undo: untick both
+    again (or delete the two Property Setters `Stock Settings-default_warehouse-ignore_user_permissions`
+    and `Stock Settings-sample_retention_warehouse-ignore_user_permissions`).
+
+*First-store test* -- see section 76.
+
+## 73. No selling or delivering from a Transit warehouse (2026-10-28)
+
+**Request.** Section 72's live test found that a store user (Sales User /
+Stock User / Accounts Manager) could save a Delivery Note or a Sales Invoice
+with Update Stock that takes goods from "Goods In Transit". Decision (user):
+refuse it for everyone, Stock Manager and Administrator included; shortages
+are handled with a Material Issue or a return.
+
+**Built.** `stock_transit.validate_no_sale_from_transit`, added to
+`doc_events` `validate` of Delivery Note, Sales Invoice and POS Invoice
+(after `invoice.validate` -- the existing value became a list). Refuses any
+`items` or `packed_items` row whose `warehouse` has Warehouse Type Transit:
+"Row N: <warehouse> is a transit warehouse. Goods in transit can't be sold or
+delivered until the receiving store takes them in with End Transit. Choose a
+store warehouse." Skipped: returns (they put stock back) and a Sales Invoice
+without Update Stock (no stock moves; its Delivery Note is checked). Only
+reads cached Warehouse docs: 0.007 ms per call for 1 row, 0.15 ms for 100
+rows, 0 DB queries warm; a full Sales Invoice `validate` is ~240 ms.
+
+**Verified on staging** (store-like user: POS User, POS Manager, Sales User,
+Sales Manager, Accounts Manager, Customer, Stock User; Warehouse own store +
+transit; POS Profile; no Company permission):
+- Refused for the store user and Administrator: Delivery Note, Sales Invoice
+  with Update Stock, POS Sales Invoice (`is_pos`), and the ERPNext POS Invoice
+  doctype (POS Settings is in "Sales Invoice" mode; flipped to "POS Invoice"
+  inside a rolled-back transaction to test it).
+- Through POS Awesome (`update_invoice` -> `submit_invoice`, terminal unlocked
+  with `activate_verified_cashier` for a test session id): normal sale,
+  store-credit return and background-job submit all work. A row that names
+  the transit warehouse is put back to the profile's own warehouse by the
+  POS path, so POS only reaches transit if a POS Profile's warehouse is a
+  transit warehouse -- tested (profile warehouse set to transit, reverted):
+  refused with the message above.
+- Normal Sales Invoice with Update Stock, Delivery Note and a credit note from
+  a store warehouse still submit.
+
+**Pre-existing, not changed:** `submit_in_background_job`'s `finally` block
+deletes `frappe.flags` keys with `hasattr`/`delattr`; on Frappe's `_dict`,
+`hasattr` is always true, so a background submit with no submission ledger
+(no `posa_client_request_id`) raises `KeyError: 'posa_owned_submission_ledger'`
+after the work is done and the job rolls back. The POS screen always sends a
+request id, so the normal path works.
+
+**Regression check.** See the report for this change (frontend suite,
+backend modules, no build/migrate needed: Python and hooks only).
+
+## 74. Every other way to take stock out of transit (2026-10-28)
+
+**Request.** Extend section 73 to Purchase Receipt / Purchase Invoice returns,
+then check every document type that can take stock out of a warehouse. Same
+rules: server-side, no role exemption, clear message, negligible cost.
+
+**Survey** (ERPNext 16.26.2: every `make_sl_entries` caller -- the stock,
+selling, buying and subcontracting controllers, Stock Entry, Stock
+Reconciliation, Asset Capitalization; store roles = POS User, POS Manager,
+Sales User, Sales Manager, Accounts Manager, Customer, Stock User):
+
+| Document | Store role can use it | Takes stock out of | Now |
+|---|---|---|---|
+| Stock Entry (all purposes; also Work Order, Job Card, Asset Repair, Subcontracting Inward, Material Request, Pick List -> Stock Entry) | Stock User | row `s_warehouse` | blocked since section 72 (Stock Manager Material Issue write-off only) |
+| Delivery Note, Sales Invoice (Update Stock), POS Invoice | yes | rows `warehouse`, `packed_items`; on an internal-transfer **return**, `target_warehouse` | blocked (the return case is new) |
+| Purchase Receipt | Stock User | on return rows `warehouse` + `rejected_warehouse`; internal transfer `from_warehouse`; old subcontracting `supplier_warehouse` | **blocked** |
+| Purchase Invoice (Update Stock) | Accounts Manager | same as Purchase Receipt | **blocked** |
+| Subcontracting Receipt | Stock User | `supplier_warehouse` (supplied items); on return rows `warehouse` + `rejected_warehouse` | **blocked** |
+| Stock Reservation Entry | Sales User, Stock User | holds stock; ERPNext then refuses End Transit ("Reserved Stock") | **blocked** |
+| Stock Reconciliation | no (Stock Manager) | can lower or raise | **blocked** (write-offs are a Material Issue) |
+| Asset Capitalization | no (Manufacturing/Quality Manager) | `stock_items.warehouse` | **blocked** |
+| Landed Cost Voucher, Asset Movement, Pick List, Material Request, Sales/Purchase/Subcontracting Order, Packing Slip, Quality Inspection, Serial and Batch Bundle | -- | no stock moves of their own | nothing to do |
+| POS Invoice Merge Log | Sales User/Manager | its Sales Invoice | covered by the Sales Invoice check |
+| Cancelling a document that put stock **into** transit | the owner | reverses into transit's stock | not blocked: cancelling an unreceived transfer is the sender's undo; a partly received one can't be cancelled (ERPNext's stock check refuses it -- tested) |
+
+Not blocked, by design: stock coming **into** transit (a Purchase Receipt into
+it, a return whose `from_warehouse` is transit, a Delivery Note whose
+`target_warehouse` is transit). Blocking `from_warehouse` = transit also closes
+ERPNext's internal-customer/supplier transfer through a transit warehouse;
+store transfers use Stock Entry, so nothing in use is affected.
+
+**Built.** `validate_no_sale_from_transit` became
+`validate_no_stock_out_of_transit`, wired to `validate` of Delivery Note,
+Sales Invoice, POS Invoice, Purchase Receipt, Purchase Invoice,
+Subcontracting Receipt, Stock Reservation Entry, Stock Reconciliation and
+Asset Capitalization. `_fields_taking_stock_out(doc)` lists exactly the fields
+per doctype and return/non-return; each distinct warehouse is looked up once
+(cached doc); the message is built only on refusal: "Row 1 (Rejected
+Warehouse): Goods In Transit - S is a transit warehouse. Goods in transit can
+only leave it with End Transit, so they can't be returned or moved from
+there. Choose a store warehouse." Cost: 0.003-0.011 ms for 1 row, 0.05-0.10 ms
+for 100 rows, 0 DB queries.
+
+**Verified on staging** (store-like user, own store + transit, no Company
+permission): refused -- Delivery Note, Sales Invoice with Update Stock,
+Purchase Receipt return, Purchase Invoice return with Update Stock (purchases
+made and rolled back); Stock Reconciliation refused for Administrator too.
+Still working -- POS sale, POS store-credit return, POS background-job submit,
+Desk Sales Invoice + credit note, Delivery Note, Purchase Receipt into
+transit. Subcontracting Receipt, Stock Reservation, Asset Capitalization and
+the internal-transfer fields are unit-tested only (staging has no
+subcontracting setup and stock reservation is off).
+
+**Housekeeping.** The leftover opening shift POSA-OS-26-0000035 was closed
+through POS Awesome's own `make_closing_shift_from_opening` ->
+`submit_closing_shift` (closing shift POSA-CS-26-0000031; expected amounts,
+Cash 70.000).
+
+## 75. End Transit: linked rows must come from transit; button hidden from non-receivers; clearer store message (2026-10-28)
+
+**Found (staging, store-like sender, rolled back).** End Transit rows whose
+Source Warehouse was changed to the sender's own store (Target = transit),
+keeping `against_stock_entry`/`ste_detail`, saved and submitted: ERPNext's
+`update_transferred_qty` counted them, the sent entry showed 100% received,
+the destination lost End Transit, and nothing arrived. Section 72's rule only
+looked at rows leaving a Transit warehouse.
+
+**Built.**
+- `validate_rows_leaving_transit` now also checks every row ERPNext counts as
+  received (`against_stock_entry`/`ste_detail` on a Material Transfer with
+  `outgoing_stock_entry`): it must match the sent row's item and take the
+  goods from that row's Transit warehouse. No role exemption. "Row 1: a row
+  received with End Transit must take the goods from Goods In Transit - S,
+  where transfer MAT-STE-... sent them." A Stock Manager's shortage return
+  (from transit to the sending store) still passes.
+- `stock_entry.js` `refresh`: removes ERPNext's End Transit button unless the
+  user has Stock Manager, has no Warehouse restriction for Stock Entry, or has
+  a Warehouse permission for the Destination Store (entries without one keep
+  ERPNext's behaviour). Cancel and "Received Stock Entries" untouched.
+- `stock_entry.js` `before_save`: if a Warehouse link (header or row, the
+  same fields Frappe checks: Link to Warehouse without
+  `ignore_user_permissions`) holds a warehouse outside the user's permissions
+  (`frappe.defaults.get_user_permissions()`, the same list the server uses,
+  descendants included), shows "Store Not Allowed" naming the field, the
+  allowed warehouses and how to send to another store, instead of Frappe's
+  "You need the 'create' permission on Stock Entry". Frappe checks create
+  permission before any server hook, so the server can't reword it; API and
+  import callers still get Frappe's text. Not reworded either: ERPNext's item
+  lookup on a row that already holds such a warehouse ("You need the 'read'
+  permission on Stock Entry new-stock-entry-...").
+
+**Verified in the browser** (MAT-STE-2026-00011, viewed only): sender sees
+View + Cancel, no End Transit; receiver and a store-restricted Stock Manager
+see End Transit (receiver's opens the receiving form). "Received Stock
+Entries" still shows for the sender on a received entry (MAT-STE-2026-00008).
+
+**Regression.** Frontend 257/257, 1373/1373 (a run during `bench build` had
+two timing failures; clean on re-run). `test_stock_transit` 33/33 (4 fail with
+the new rule disabled). `bench build` exit 0.
+
+## 76. End Transit header label; the two store popups; first-store test plan (2026-10-28)
+
+**Label.** With "Is Default" on the store user's Warehouse permission, Frappe
+fills every Warehouse field of a new form with it, so End Transit opened with
+"Default Source Warehouse" = the receiver's own store while its rows come from
+transit. `stock_entry.js` `show_transit_as_source` (refresh): on a draft entry
+with `outgoing_stock_entry`, if the rows linked to the sent entry share one
+Source Warehouse, show it in the header. Set directly (`frm.doc` +
+`refresh_field`) because ERPNext's `from_warehouse` handler would rewrite every
+row's Source Warehouse. Display only: rows, stock and the server checks are
+unchanged. Browser-checked (store users with Is Default; transit.manager with
+Is Default on Test - S for the test, reverted): receiver full receipt, receiver
+partial receipt and a Stock Manager returning the shortage to the sending store
+all open and save with "Goods In Transit - S"; ledger: transit -> store.
+
+**Popups** (store user, own store + transit, Is Default; browser, four states,
+all restored -- no Custom DocPerm or Property Setter left):
+| | "No permission for Stock Settings" | "Insufficient Permission for Loyalty Program" |
+|---|---|---|
+| as is | shows | shows |
+| Stock User Read on both (Role Permission Manager) | **still shows** | gone |
+| Stock Settings Default/Sample Retention Warehouse `ignore_user_permissions`; Sales User Read on Loyalty Program | gone | gone |
+| restored | shows | shows |
+Stock Settings: store users already read it through Sales User; Frappe refuses
+because `default_warehouse` links to a warehouse outside their Warehouse
+permissions (`has_user_permission` checks a Single's link fields too). Loyalty
+Program: only System Manager could read it; Sales User fits (selling feature,
+every store user has it) better than Stock User. Setup and undo: section 72
+deploy steps 15-16.
+
+**First-store test** (after the section 72 setup; stores A and B, one store
+user each, plus a Stock Manager):
+1. A: Stock Entry > + Add > Stock Entry Type "Material Transfer" > tick "Add to
+   Transit". "Default Source Warehouse" = A (filled), "Default Target
+   Warehouse" = the transit warehouse (filled). "Destination Store" = B. Scan
+   two items, one twice: two rows, qty 2 and 1. Save, Submit.
+2. A on the submitted entry: buttons View and Cancel, no "End Transit".
+3. B: bell "Incoming transfer MAT-STE-... from A"; POS Awesome > Incoming
+   Transfers lists it at 0%. Open it: "End Transit" is there.
+4. B: End Transit -> "Default Source Warehouse" shows the transit warehouse,
+   "Default Target Warehouse" B. Lower one row by 1 (a shortage). Save, Submit.
+   The sent entry shows less than 100% and stays on Incoming Transfers.
+5. Stock Manager: on the sent entry, End Transit, "Default Target Warehouse" =
+   A (return the shortage), Save, Submit -> 100%, gone from Incoming Transfers.
+6. B: Delivery Note with a row from the transit warehouse -> refused "Goods
+   Still in Transit".
+7. A and B: Desk Sales Invoice (Update Stock) -> "Set Source Warehouse" = own
+   store, no Loyalty / Stock Settings popups; a normal POS sale at each store.
+8. Stock Ledger for the items: A -> transit -> B, and transit -> A for the
+   returned unit; transit back to its starting quantity.
+Rollback if needed: `git checkout <previous stable commit>` in apps/posawesome,
+`bench build --app posawesome`, `bench --site site1.local migrate`, restart.
+The Destination Store column stays (harmless, unused); the setup steps can stay
+or be undone one by one (each step lists its undo).

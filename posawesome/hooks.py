@@ -42,6 +42,7 @@ doctype_js = {
     "Company": "posawesome/api/company.js",
     "Stock Reconciliation": "posawesome/api/stock_reconciliation.js",
     "Item Attribute": "posawesome/api/item_attribute.js",
+    "Stock Entry": "posawesome/api/stock_entry.js",
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
@@ -105,19 +106,51 @@ after_migrate = []
 # Hook on document methods and events
 
 doc_events = {
+    "Stock Entry": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate",
+        "on_submit": "posawesome.posawesome.api.stock_transit.on_submit",
+    },
+    # Nothing but End Transit may take stock out of a Transit warehouse.
+    "Delivery Note": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
+    "Purchase Receipt": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
+    "Purchase Invoice": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
+    "Subcontracting Receipt": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
+    "Stock Reservation Entry": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
+    "Stock Reconciliation": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
+    "Asset Capitalization": {
+        "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+    },
     "Item": {
         "after_insert": "posawesome.posawesome.api.item_processing.alternates.clear_alternate_item_caches",
         "on_update": "posawesome.posawesome.api.item_processing.alternates.clear_alternate_item_caches",
         "on_trash": "posawesome.posawesome.api.item_processing.alternates.clear_alternate_item_caches",
     },
     "Sales Invoice": {
-        "validate": "posawesome.posawesome.api.invoice.validate",
+        "validate": [
+            "posawesome.posawesome.api.invoice.validate",
+            "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+        ],
         "before_submit": "posawesome.posawesome.api.invoice.before_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
         "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
     },
     "POS Invoice": {
-        "validate": "posawesome.posawesome.api.invoice.validate",
+        "validate": [
+            "posawesome.posawesome.api.invoice.validate",
+            "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
+        ],
         "before_submit": "posawesome.posawesome.api.invoice.before_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
         "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
@@ -436,6 +469,7 @@ fixtures = [
                     "POS Invoice-posa_below_cost_override_reason",
                     "POS Invoice-posa_below_cost_override_details",
                     "User-posa_pos_pin",
+                    "Stock Entry-posa_destination_store",
                 ),
             ]
         ],
