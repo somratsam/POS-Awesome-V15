@@ -2037,4 +2037,134 @@ describe("usePaymentSubmission", () => {
 			expect.any(Object),
 		);
 	});
+	describe("partial payment off: the whole settlement must cover the total, not cash alone", () => {
+		const line = (mode_of_payment: string, type: string, amount: number) => ({
+			mode_of_payment,
+			type,
+			amount,
+			base_amount: amount,
+		});
+		const cash = (amount: number) => line("Cash", "Cash", amount);
+		const visa = (amount: number) => line("Visa", "Bank", amount);
+		const mastercard = (amount: number) => line("Master Card", "Bank", amount);
+
+		const validate = (
+			payments: any[],
+			{
+				total = 100,
+				partial = 0,
+				isReturn = 0,
+				creditSale = false,
+				loyalty = 0,
+				customerCredit = 0,
+				giftCard = 0,
+				writeOff = 0,
+				writeOffLimit = 0,
+			}: Record<string, any> = {},
+		) => {
+			const paid =
+				payments.reduce((sum, p) => sum + p.amount, 0) +
+				loyalty +
+				customerCredit +
+				giftCard;
+			const invoiceDoc = ref<any>({
+				is_return: isReturn,
+				items: [],
+				payments,
+				rounded_total: total,
+				grand_total: total,
+				write_off_amount: writeOff,
+				loyalty_amount: loyalty,
+				loyalty_points: loyalty,
+			});
+			const { validateSubmission } = usePaymentSubmission({
+				invoiceDoc,
+				posProfile: ref({
+					posa_allow_partial_payment: partial,
+					posa_allow_credit_sale: 1,
+					posa_max_write_off_amount: writeOffLimit,
+				}),
+				stockSettings: ref({}),
+				invoiceType: ref("Invoice"),
+				formatFloat: (value) => Math.round(Number(value || 0) * 100) / 100,
+				stores: { toastStore: { show: vi.fn() } },
+				diff_payment: ref(total - paid) as any,
+				paidChange: ref(Math.max(paid - total, 0)),
+				creditChange: ref(0),
+				isCashback: ref(true),
+				is_credit_sale: ref(creditSale),
+				is_write_off_change: ref(writeOff > 0),
+				loyaltyAmount: ref(loyalty),
+				redeemedCustomerCredit: ref(customerCredit),
+				giftCardRedemptions: ref(
+					giftCard ? [{ gift_card_code: "GC-1", amount: giftCard }] : [],
+				),
+			});
+			return validateSubmission(true);
+		};
+
+		it.each([
+			["Cash 80 + Visa 20", [cash(80), visa(20)]],
+			["Cash 50 + Visa 30 + Mastercard 20", [cash(50), visa(30), mastercard(20)]],
+			["Cash 100", [cash(100)]],
+			["Visa 100", [visa(100)]],
+		])("allows %s on an invoice of 100", async (_label, payments) => {
+			await expect(validate(payments)).resolves.toBe(true);
+		});
+
+		it("allows Cash 90 + 10 of loyalty", async () => {
+			await expect(validate([cash(90)], { loyalty: 10 })).resolves.toBe(true);
+		});
+
+		it("allows Cash 90 + 10 of customer credit", async () => {
+			await expect(validate([cash(90)], { customerCredit: 10 })).resolves.toBe(true);
+		});
+
+		it("allows Cash 90 + a 10 gift card", async () => {
+			await expect(validate([cash(90)], { giftCard: 10 })).resolves.toBe(true);
+		});
+
+		it("allows Cash 95 + a write-off of 5 within the profile limit", async () => {
+			await expect(
+				validate([cash(95)], { writeOff: 5, writeOffLimit: 5 }),
+			).resolves.toBe(true);
+		});
+
+		it.each([
+			["Cash 80 alone", [cash(80)]],
+			["Cash 50 + Visa 30", [cash(50), visa(30)]],
+			["Visa 80 alone", [visa(80)]],
+		])("still blocks %s on an invoice of 100 as not complete", async (_label, payments) => {
+			await expect(validate(payments)).rejects.toThrow("The amount paid is not complete");
+		});
+
+		it("still blocks Cash 90 + a write-off of 5 that leaves 5 unpaid", async () => {
+			await expect(
+				validate([cash(90)], { writeOff: 5, writeOffLimit: 5 }),
+			).rejects.toThrow(/Write off amount exceeds the allowed limit|not complete/);
+		});
+
+		it("never shows the old cash-only message", async () => {
+			await expect(validate([cash(80)])).rejects.not.toThrow(/Cash payment cannot be less/);
+		});
+
+		it("with partial payment on, still allows Cash 80 alone", async () => {
+			await expect(validate([cash(80)], { partial: 1 })).resolves.toBe(true);
+		});
+
+		it("skips the check for a credit sale", async () => {
+			await expect(validate([cash(0)], { creditSale: true })).resolves.toBe(true);
+		});
+
+		it("skips the check for a return", async () => {
+			await expect(
+				validate([line("Cash", "Cash", -80)], { total: -100, isReturn: 1 }),
+			).resolves.toBe(true);
+		});
+
+		it("works with the overpayment guard: cash-covered change passes, card-only excess is over", async () => {
+			await expect(validate([cash(80), visa(30)])).resolves.toBe(true);
+			await expect(validate([visa(100), mastercard(10)])).rejects.toThrow(/^Over by 10:/);
+		});
+	});
 });
