@@ -2,7 +2,7 @@ import { ref, unref, type Ref, type ComputedRef } from "vue";
 // @ts-ignore
 import { getSmartTenderSuggestions } from "../../../../utils/smartTender";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
-import { isCashLikePaymentLine } from "../../../utils/cashTender";
+import { isCashLikePaymentLine, subtractAmounts } from "../../../utils/cashTender";
 import { hasMeaningfulAmount } from "../../../utils/paymentInitialization";
 
 declare const frappe: any;
@@ -272,9 +272,15 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 	};
 
 	// Set full amount for a payment mode
-	const set_full_amount = (payment: any, isReturn = false) => {
+	// amountDue lets the caller pass a settlement amount that also nets off
+	// applied gift cards; it defaults to the loyalty/credit-net amount.
+	const set_full_amount = (
+		payment: any,
+		isReturn = false,
+		amountDue?: number,
+	) => {
 		const doc = unref(invoiceDoc);
-		const invoiceAmount = getInvoiceSettlementAmount();
+		const invoiceAmount = amountDue ?? getInvoiceSettlementAmount();
 		// Reset other payments
 		doc.payments.forEach((p: any) => {
 			if (p.mode_of_payment !== payment.mode_of_payment) {
@@ -293,7 +299,11 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		}
 	};
 
-	const set_rest_amount = (payment: any, isReturn = false) => {
+	const set_rest_amount = (
+		payment: any,
+		isReturn = false,
+		amountDue?: number,
+	) => {
 		// Focusing a box that already carries a deliberately-entered amount
 		// (manually typed, or auto-filled and then left as-is) must not silently
 		// overwrite it -- only a genuinely empty box should get the helpful
@@ -303,7 +313,7 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		}
 
 		const doc = unref(invoiceDoc);
-		const invoiceAmount = getInvoiceSettlementAmount();
+		const invoiceAmount = amountDue ?? getInvoiceSettlementAmount();
 		const currentPaid = doc.payments.reduce(
 			(acc: number, p: any) => acc + flt(p.amount),
 			0,
@@ -322,6 +332,58 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 			const baseAmount = toCompanyCurrency(currencyContext(doc), amount);
 			payment.base_amount = isReturn ? -Math.abs(baseAmount) : baseAmount;
 		}
+	};
+
+	// Staff charge the card machine first, then enter what the slip says, so a
+	// click (or focus) on a method means "this one pays what's left". When
+	// another line already holds an amount staff entered, fill this line with
+	// exactly what's still owed after those lines -- worked out in whole minor
+	// units -- and clear any amount the screen put there by itself (the Default
+	// line's prefill, an automatic Cash top-up). Staff-entered lines are never
+	// changed. Returns false when no other line holds a staff-entered amount,
+	// so the caller can fall back to its usual full-amount/remainder fill.
+	const fill_remaining_amount = (
+		payment: any,
+		fillOptions: {
+			amountDue: number;
+			isCashierEntered: (_payment: any) => boolean;
+			isExcluded?: (_payment: any) => boolean;
+		},
+	): boolean => {
+		const doc = unref(invoiceDoc);
+		if (!doc || !Array.isArray(doc.payments) || !payment) return false;
+
+		const precision = unref(currencyPrecision) ?? 2;
+		const others = doc.payments.filter(
+			(p: any) =>
+				p !== payment && p?.mode_of_payment && !fillOptions.isExcluded?.(p),
+		);
+		const staffEntered = others.filter(
+			(p: any) =>
+				fillOptions.isCashierEntered(p) && hasMeaningfulAmount(p, precision),
+		);
+		if (!staffEntered.length) return false;
+
+		const setAmount = (p: any, amount: number) => {
+			p.amount = amount;
+			if (p.base_amount !== undefined) {
+				p.base_amount = flt(toCompanyCurrency(currencyContext(doc), amount));
+			}
+		};
+
+		others
+			.filter((p: any) => !fillOptions.isCashierEntered(p))
+			.forEach((p: any) => setAmount(p, 0));
+
+		const remaining = subtractAmounts(
+			fillOptions.amountDue,
+			staffEntered.map((p: any) => p.amount),
+			precision,
+		);
+		if (remaining > 0) {
+			setAmount(payment, remaining);
+		}
+		return true;
 	};
 
 	const clear_all_amounts = () => {
@@ -464,6 +526,7 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		set_mpesa_payment,
 		set_full_amount,
 		set_rest_amount,
+		fill_remaining_amount,
 		clear_all_amounts,
 		request_payment,
 		rebalanceAfterCashierEdit,
