@@ -1,6 +1,7 @@
 import { computed, unref, type Ref } from "vue";
 import { formatUtils } from "../../../format";
 import { fromCompanyCurrency } from "../../../utils/erpnextCurrency";
+import { subtractAmounts } from "../../../utils/cashTender";
 
 declare const window: any;
 
@@ -145,7 +146,12 @@ export function usePaymentCalculations(options: PaymentCalculationOptions) {
 			invoice_total = flt(doc.rounded_total || doc.grand_total);
 		}
 
-		let diff = flt(invoice_total - total_payments.value);
+		// Whole minor units, so 139.300 - 80.000 is exactly 59.300.
+		const diff = subtractAmounts(
+			invoice_total,
+			[total_payments.value],
+			unref(currencyPrecision),
+		);
 		// For returns: negative diff means more refund needed, positive means over-refunded (cap to 0)
 		if (doc.is_return) return diff > 0 ? 0 : diff;
 		return diff;
@@ -166,7 +172,11 @@ export function usePaymentCalculations(options: PaymentCalculationOptions) {
 			invoice_total = flt(doc.rounded_total || doc.grand_total);
 		}
 
-		let change = flt(total_payments.value - invoice_total);
+		const change = subtractAmounts(
+			total_payments.value,
+			[invoice_total],
+			unref(currencyPrecision),
+		);
 		return change > 0 ? change : 0;
 	});
 
@@ -206,8 +216,8 @@ export function usePaymentCalculations(options: PaymentCalculationOptions) {
 				? `Remaining Refund (${currency})`
 				: `Change (${currency})`;
 		}
-		return diff_payment.value > 0
-			? `To Be Paid (${currency})`
+		return diff_payment.value >= 0
+			? `Remaining (${currency})`
 			: `Change (${currency})`;
 	});
 

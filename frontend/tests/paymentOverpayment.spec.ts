@@ -488,7 +488,7 @@ describe("payment overpayment", () => {
 		it("re-settles through the card-safe rebalance with the net-of-gift-card amount due", () => {
 			const body = fnBody("rebalanceOtherPaymentsAfterEdit");
 			expect(body).toContain("rebalanceAfterCashierEdit(editedPayment, {");
-			expect(body).toContain("netInvoiceSettlementAmount.value - giftCardAppliedAmount.value");
+			expect(body).toContain("amountDue: paymentLinesAmountDue()");
 			expect(body).toContain("isExcluded: isGiftCardPayment");
 			expect(body).toMatch(/doc\.is_return \|\| is_credit_sale\.value/);
 		});

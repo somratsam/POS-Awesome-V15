@@ -17,11 +17,12 @@
 		<v-col cols="12" sm="5">
 			<v-text-field
 				variant="solo"
-				:color="isOverpaid ? 'error' : 'primary'"
-				:base-color="isOverpaid ? 'error' : undefined"
+				:color="diffColor"
+				:base-color="diffColor === 'primary' ? undefined : diffColor"
 				:label="isOverpaid ? frappe._('Over by ({0})', [invoice_doc.currency]) : diff_label"
-				:class="['sleek-field pos-themed-input', { 'payment-summary-field--over': isOverpaid }]"
+				:class="['sleek-field pos-themed-input', `payment-summary-field--${diffState}`]"
 				data-test="payment-diff-field"
+				:data-state="diffState"
 				hide-details
 				:model-value="isOverpaid ? formatCurrency(uncoveredOverpayment) : diff_payment_display"
 				:prefix="currencySymbol(invoice_doc.currency)"
@@ -118,6 +119,23 @@ const props = defineProps({
 
 const isOverpaid = computed(() => props.uncoveredOverpayment > 0);
 
+// The figure next to Paid: what's still owed (red), settled exactly (green),
+// change to hand back from cash, or an overpayment cash can't cover (red).
+// Returns keep their own refund labels without the sale colours.
+const diffState = computed(() => {
+	if (props.invoice_doc?.is_return) return "return";
+	if (isOverpaid.value) return "over";
+	if (props.diffPayment > 0.0000001) return "remaining";
+	if (props.diffPayment < -0.0000001) return "change";
+	return "settled";
+});
+
+const diffColor = computed(() => {
+	if (diffState.value === "over" || diffState.value === "remaining") return "error";
+	if (diffState.value === "settled") return "success";
+	return "primary";
+});
+
 defineEmits(["show-paid-amount", "show-diff-payment", "show-paid-change", "update-credit-change"]);
 
 const frappe = window.frappe;
@@ -141,8 +159,19 @@ const frappe = window.frappe;
 
 .payment-summary-field--over :deep(input),
 .payment-summary-field--over :deep(.v-field__prefix),
-.payment-summary-field--over :deep(.v-label) {
+.payment-summary-field--over :deep(.v-label),
+.payment-summary-field--remaining :deep(input),
+.payment-summary-field--remaining :deep(.v-field__prefix),
+.payment-summary-field--remaining :deep(.v-label) {
 	color: rgb(var(--v-theme-error));
+	font-weight: 700;
+	opacity: 1;
+}
+
+.payment-summary-field--settled :deep(input),
+.payment-summary-field--settled :deep(.v-field__prefix),
+.payment-summary-field--settled :deep(.v-label) {
+	color: rgb(var(--v-theme-success));
 	font-weight: 700;
 	opacity: 1;
 }

@@ -74,7 +74,7 @@
 							@set-denomination="setPaymentToDenomination"
 							@mpesa-dialog="mpesa_c2b_dialog"
 							@request-payment="request_payment"
-							@set-rest-amount="set_rest_amount"
+							@set-rest-amount="handleSetRestAmount"
 							@open-gift-card="openGiftCardDialog"
 						/>
 						<PaymentGiftCardSection
@@ -333,11 +333,12 @@ import {
 	applyPreferredPaymentAmount,
 	initializePaymentLinesForDialog,
 	rebalancePreferredPaymentLine,
+	hasMeaningfulAmount,
 	resolvePreferredPaymentLine,
 	resolveReturnDefaultAmount,
 	shouldApplyReturnRefundCap,
 } from "../../utils/paymentInitialization";
-import { getUncoveredOverpayment } from "../../utils/cashTender";
+import { getUncoveredOverpayment, subtractAmounts } from "../../utils/cashTender";
 import { resolvePaymentPrintFormatDoctypes } from "../../utils/paymentPrintDoctype";
 import { resolvePaymentPrintFormat } from "../../utils/paymentPrintFormat";
 import { parseBooleanSetting } from "../../utils/stock";
@@ -669,6 +670,7 @@ const {
 	set_mpesa_payment,
 	set_full_amount,
 	set_rest_amount,
+	fill_remaining_amount,
 	clear_all_amounts,
 	request_payment,
 	getVisibleDenominations,
@@ -1279,6 +1281,12 @@ const rebalancePreferredPaymentCoverage = (giftCardAmount = giftCardAppliedAmoun
 	});
 };
 
+// What the payment lines themselves must cover: the invoice total net of
+// loyalty and customer credit, minus any applied gift card -- exact to the
+// currency precision.
+const paymentLinesAmountDue = () =>
+	subtractAmounts(netInvoiceSettlementAmount.value, [giftCardAppliedAmount.value], currency_precision.value);
+
 // Re-settle the other payment lines after a cashier edit. A card/bank amount
 // the cashier entered is never changed (it must match the terminal slip);
 // only cash lines and untouched system amounts (like the Default line's
@@ -1292,7 +1300,7 @@ const rebalanceOtherPaymentsAfterEdit = (editedPayment) => {
 	}
 
 	rebalanceAfterCashierEdit(editedPayment, {
-		amountDue: flt(netInvoiceSettlementAmount.value - giftCardAppliedAmount.value, currency_precision.value),
+		amountDue: paymentLinesAmountDue(),
 		preferredPayment: resolvePreferredPaymentLine(doc, isCashLikePayment),
 		isCashierEntered: (payment) => Boolean(lastEditedPaymentSequence.value[payment?.mode_of_payment]),
 		isExcluded: isGiftCardPayment,
@@ -1569,9 +1577,45 @@ const markPaymentCashierEntered = (payment) => {
 	lastEditedPaymentSequence.value[payment.mode_of_payment] = paymentEditSequenceCounter.value;
 };
 
+const canFillRemaining = (isReturn) => !isReturn && !invoice_doc.value?.is_return && !is_credit_sale.value;
+
+const fillRemainingOptions = () => ({
+	amountDue: paymentLinesAmountDue(),
+	isCashierEntered: (payment) => Boolean(lastEditedPaymentSequence.value[payment?.mode_of_payment]),
+	isExcluded: isGiftCardPayment,
+});
+
+// Clicking a method: if another line already holds a staff-entered amount,
+// fill only what's still owed; otherwise fill the full amount as before.
+// Returns and credit sales keep the plain full-amount fill.
 const handleSetFullAmount = (payment, isReturn) => {
+	if (!canFillRemaining(isReturn)) {
+		markPaymentCashierEntered(payment);
+		set_full_amount(payment, isReturn);
+		return;
+	}
+	const filled = fill_remaining_amount(payment, fillRemainingOptions());
 	markPaymentCashierEntered(payment);
-	set_full_amount(payment, isReturn);
+	if (!filled) {
+		set_full_amount(payment, isReturn, paymentLinesAmountDue());
+	}
+};
+
+// Focusing an empty Amount box follows the same rule. A remainder filled in
+// this way counts as staff-entered: the cashier keeps it with Tab or Enter,
+// so later rebalances must not move it away from the card slip.
+const handleSetRestAmount = (payment, isReturn) => {
+	if (hasMeaningfulAmount(payment, currency_precision.value)) return;
+	if (!canFillRemaining(isReturn)) {
+		set_rest_amount(payment, isReturn);
+		return;
+	}
+	if (!fill_remaining_amount(payment, fillRemainingOptions())) {
+		set_rest_amount(payment, isReturn, paymentLinesAmountDue());
+	}
+	if (hasMeaningfulAmount(payment, currency_precision.value)) {
+		markPaymentCashierEntered(payment);
+	}
 };
 
 const setPaymentToDenomination = (payment, amount) => {
@@ -1660,9 +1704,12 @@ const refreshPaymentCustomerInfo = async (doc) => {
 const showDiffPayment = () => {
 	if (!invoice_doc.value) return;
 	toastStore.show({
-		title: `To Be Paid: ${formatCurrency(
-			diff_payment.value < 0 ? -diff_payment.value : diff_payment.value,
-		)}`,
+		title:
+			uncovered_overpayment.value > 0
+				? `${__("Over by")}: ${formatCurrency(uncovered_overpayment.value)}`
+				: `${diff_payment.value < 0 ? __("Change") : __("Remaining")}: ${formatCurrency(
+						Math.abs(diff_payment.value),
+					)}`,
 		color: "info",
 	});
 };

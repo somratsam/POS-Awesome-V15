@@ -37,6 +37,31 @@ export const isCashLikePaymentLine = (
 	return mode.includes("cash");
 };
 
+// Money is added and subtracted in whole minor units (baisa for OMR, at
+// precision 3) so results are exact: 139.300 - 80.000 is 59.300, never
+// 59.29999. Inputs are first rounded to the currency precision.
+export const toMinorUnits = (value: unknown, precision = 2): number => {
+	const factor = Math.pow(10, Math.max(precision, 0));
+	return Math.round((Number(value) || 0) * factor);
+};
+
+export const fromMinorUnits = (minor: number, precision = 2): number =>
+	minor / Math.pow(10, Math.max(precision, 0));
+
+/** amountDue minus every amount, exact to the currency precision. */
+export const subtractAmounts = (
+	amountDue: unknown,
+	amounts: unknown[],
+	precision = 2,
+): number =>
+	fromMinorUnits(
+		amounts.reduce<number>(
+			(minor, amount) => minor - toMinorUnits(amount, precision),
+			toMinorUnits(amountDue, precision),
+		),
+		precision,
+	);
+
 /**
  * How much of an overpayment cannot be handed back as change.
  *
@@ -50,13 +75,10 @@ export const getUncoveredOverpayment = (
 	isCashLike: (_payment: PaymentLine) => boolean,
 	precision = 2,
 ): number => {
-	const cashTaken = (Array.isArray(payments) ? payments : []).reduce(
-		(sum, payment) =>
-			isCashLike(payment) ? sum + Math.max(Number(payment?.amount) || 0, 0) : sum,
-		0,
-	);
-	const factor = Math.pow(10, Math.max(precision, 0));
-	const uncovered = Math.round((Math.max(excess, 0) - cashTaken) * factor) / factor;
+	const cashTaken = (Array.isArray(payments) ? payments : [])
+		.filter((payment) => isCashLike(payment))
+		.map((payment) => Math.max(Number(payment?.amount) || 0, 0));
+	const uncovered = subtractAmounts(Math.max(excess, 0), cashTaken, precision);
 	return uncovered > 0 ? uncovered : 0;
 };
 
