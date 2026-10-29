@@ -345,6 +345,15 @@ single time, with no items silently skipped:
    since this touched `usePosShift.ts`, a shared file both depend on") — a
    vague "nothing else affected" does not satisfy this item.
 
+**Before testing any money logic on staging** (totals, payments, change,
+VAT, rounding): compare System Settings Currency Precision, Float Precision
+and Rounding Method, plus the POS Profile's `posa_decimal_precision`, on
+staging and production -- `SELECT field, value FROM tabSingles WHERE
+doctype='System Settings' AND field IN ('currency_precision',
+'float_precision','rounding_method')`. Staging once had Currency Precision 2
+while production had 3 (`PROGRESS_NOTES.md` section 78), which makes the
+server round amounts differently from what a cashier sees.
+
 Report all six items explicitly, in order, every time a final regression
 check is run — this is the authoritative definition and supersedes any
 looser or partial version used in earlier sessions. A "looks fine" scan is

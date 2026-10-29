@@ -7233,3 +7233,79 @@ clear message. All test shifts closed, setup reverted.
    shift sees the opening dialog, opens, and later closes as usual.
 Rollback: `git checkout <previous stable commit>` in apps/posawesome, then
 `sudo supervisorctl restart all`. Nothing in the database changes.
+
+## 78. Payment screen: card overpayments, split payments with partial payment off, fill the remaining amount (2026-10-29)
+
+Three commits on `develop-swan`, in this order: `9eea959a`, `76c85f95`,
+`6bea1869`. Not yet on `stable` -- the user is testing the first two by hand
+on staging and will say when to cherry-pick, in order.
+
+**Precision parity.** Staging System Settings had Currency Precision **2**;
+production has **3** (Float Precision 3, Banker's Rounding on both). The
+server rounds every Currency field with that setting
+(`frappe/model/meta.py` `get_field_precision`), while the POS screen uses
+the profile's `posa_decimal_precision` (3), so staging was saving typed
+3-decimal amounts and VAT splits at 2 decimals (e.g. net 9.520 / tax 0.480
+instead of 9.524 / 0.476). Staging set to 3 / 3 on 2026-10-29. Production's
+own Test Pos profile has `posa_decimal_precision` 2; the four store profiles
+have 3. See the standing check added to CLAUDE.md's final regression check.
+
+**`9eea959a` -- card overpayments.**
+- Found: typing into a non-Default line only reset the Default line (floored
+  at 0), so Visa clicked for the full 100 then Mastercard 20 left 120 paid.
+  At submit a card-only overpayment was turned into `paid_change` -- cash
+  handed out of a drawer that took none.
+- Built: submit is blocked when the excess over what's due is larger than
+  the cash taken ("Over by X: card payments exceed the amount due, and change
+  can only be given from cash. Correct <lines>."); the card-only ->
+  `paid_change` rule is gone; the summary shows "Over by X" in red. After a
+  cashier edit, only cash lines and untouched system amounts (Default
+  prefill) move; a card line the cashier typed or clicked never does.
+  Cash 120 + a card of 20 on 100 settles to Cash 80.
+- Cash line = Mode of Payment type Cash, the profile's
+  `posa_cash_mode_of_payment`, or a name containing "cash"
+  (`isCashLikePaymentLine`). Swan: only Cash; Visa, Master Card, Maal are Bank.
+- Upstream (defendicon) never auto-adjusts other lines on a typed edit;
+  both of our auto-adjust branches came from our own `6ac45e54` / `392add72`
+  (section 30).
+
+**`76c85f95` -- split payments with partial payment off (upstream `72fdbbea`).**
+- Found: with `posa_allow_partial_payment` off, submit compared the cash line
+  alone with the total ("Cash payment cannot be less than invoice total ..."),
+  so Cash 80 + Visa 20 on 100 was refused. It matched cash by name only and
+  kept just the last cash line. Production: only MAX&Co has partial payment
+  off. Reproduced on staging (Test Pos switched off, then back on).
+- Built: upstream's fix, cherry-picked (Dennis Igah co-author): the rule is
+  removed; the check below it sums all lines + loyalty + customer credit +
+  gift cards + write-off and still refuses a real underpayment ("The amount
+  paid is not complete"). The server only uses partial payment for the
+  write-off limit (`creation.py`), so neither check is a server boundary.
+- Bug #3 of section 30 (several "cash"-named methods) is still open; this
+  removed one name-only check but not the heuristic itself.
+
+**`6bea1869` -- fill the remaining amount.**
+- Workflow: staff charge the card machine first, then enter each slip.
+  Clicking a method used to fill the full amount and zero the rest.
+- Built: a click fills only what's still owed when another line holds a
+  staff-entered amount (typed, clicked, or focus-filled); amounts the screen
+  put there itself are cleared first; staff-entered lines never change; with
+  no staff-entered line it fills the full amount as before. Focusing an empty
+  Amount box follows the same rule. What's due nets off loyalty, customer
+  credit and gift cards (a full click used to ignore gift cards). Remaining
+  and the Remaining/Change figure are computed in whole baisa
+  (`cashTender.ts` `subtractAmounts`): 139.300 - 80.000 = 59.300. The figure
+  next to Paid: Remaining (red; green at 0.000), Change, Over by (red).
+  Returns and credit sales keep the plain full-amount fill.
+- ERPNext's own POS fills the remainder on click when the box is empty and
+  never touches other lines; upstream still zeroes the others.
+
+**Checks.** Each commit: full `vitest run` (last: 259/259 files, 1461/1461),
+`bench build` exit 0, no migrate needed (no doctype/fixture/print format),
+backend `invoice_processing.test_payment` 4/4, `test_payments` 9/9,
+`pos_closing_shift` 9/9, `invoice_processing.test_creation` 8 errors as
+before (pre-existing). New tests were each confirmed to fail against the old
+code. Live browser test not possible this session: headless Chromium crashes
+on the POS page in this WSL setup (signal 5), so the user is testing by hand.
+
+**Production deploy** (after the user's go): cherry-pick the three commits to
+`stable` in order, pull, `bench build --app posawesome`, restart. No migrate.
