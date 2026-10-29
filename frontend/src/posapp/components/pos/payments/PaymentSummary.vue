@@ -17,11 +17,13 @@
 		<v-col cols="12" sm="5">
 			<v-text-field
 				variant="solo"
-				color="primary"
-				:label="diff_label"
-				class="sleek-field pos-themed-input"
+				:color="isOverpaid ? 'error' : 'primary'"
+				:base-color="isOverpaid ? 'error' : undefined"
+				:label="isOverpaid ? frappe._('Over by ({0})', [invoice_doc.currency]) : diff_label"
+				:class="['sleek-field pos-themed-input', { 'payment-summary-field--over': isOverpaid }]"
+				data-test="payment-diff-field"
 				hide-details
-				:model-value="diff_payment_display"
+				:model-value="isOverpaid ? formatCurrency(uncoveredOverpayment) : diff_payment_display"
 				:prefix="currencySymbol(invoice_doc.currency)"
 				density="compact"
 				@focus="$emit('show-diff-payment')"
@@ -47,7 +49,7 @@
 		</v-col>
 
 		<!-- Paid Change (if applicable) -->
-		<v-col cols="12" sm="7" v-if="invoice_doc && change_due > 0 && !invoice_doc.is_return">
+		<v-col cols="12" sm="7" v-if="invoice_doc && change_due > 0 && !invoice_doc.is_return && !isOverpaid">
 			<v-text-field
 				variant="solo"
 				color="primary"
@@ -64,7 +66,7 @@
 		</v-col>
 
 		<!-- Credit Change (if applicable) -->
-		<v-col cols="12" sm="5" v-if="invoice_doc && change_due > 0 && !invoice_doc.is_return">
+		<v-col cols="12" sm="5" v-if="invoice_doc && change_due > 0 && !invoice_doc.is_return && !isOverpaid">
 			<v-text-field
 				variant="solo"
 				color="primary"
@@ -81,7 +83,9 @@
 </template>
 
 <script setup>
-defineProps({
+import { computed } from "vue";
+
+const props = defineProps({
 	invoice_doc: Object,
 	total_payments_display: String,
 	diff_payment_display: String,
@@ -104,7 +108,15 @@ defineProps({
 		type: String,
 		default: "",
 	},
+	// Overpayment sitting on card/bank lines that can't be handed back as
+	// change -- shown as "Over by X" in place of the Change figure.
+	uncoveredOverpayment: {
+		type: Number,
+		default: 0,
+	},
 });
+
+const isOverpaid = computed(() => props.uncoveredOverpayment > 0);
 
 defineEmits(["show-paid-amount", "show-diff-payment", "show-paid-change", "update-credit-change"]);
 
@@ -125,6 +137,14 @@ const frappe = window.frappe;
 .payment-summary-grid :deep(.v-field) {
 	border-radius: var(--pos-radius-sm);
 	background: var(--pos-surface-raised);
+}
+
+.payment-summary-field--over :deep(input),
+.payment-summary-field--over :deep(.v-field__prefix),
+.payment-summary-field--over :deep(.v-label) {
+	color: rgb(var(--v-theme-error));
+	font-weight: 700;
+	opacity: 1;
 }
 
 .payment-summary-pill {
