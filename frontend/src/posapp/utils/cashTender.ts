@@ -37,6 +37,29 @@ export const isCashLikePaymentLine = (
 	return mode.includes("cash");
 };
 
+/**
+ * How much of an overpayment cannot be handed back as change.
+ *
+ * Change can only come out of the cash that was actually taken, so an excess
+ * over the amount due is fine up to the cash lines' total; anything beyond
+ * that is money charged on a card/bank line that has nowhere to go.
+ */
+export const getUncoveredOverpayment = (
+	payments: PaymentLine[] | null | undefined,
+	excess: number,
+	isCashLike: (_payment: PaymentLine) => boolean,
+	precision = 2,
+): number => {
+	const cashTaken = (Array.isArray(payments) ? payments : []).reduce(
+		(sum, payment) =>
+			isCashLike(payment) ? sum + Math.max(Number(payment?.amount) || 0, 0) : sum,
+		0,
+	);
+	const factor = Math.pow(10, Math.max(precision, 0));
+	const uncovered = Math.round((Math.max(excess, 0) - cashTaken) * factor) / factor;
+	return uncovered > 0 ? uncovered : 0;
+};
+
 export const normalizeProfilePaymentLines = (
 	payments: PaymentLine[] | null | undefined,
 ): PaymentLine[] => {

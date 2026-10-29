@@ -122,80 +122,74 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		});
 	};
 
-	const autoBalancePayments = (
-		excludePayment: any,
-		_currencyPrecision: number = 2,
-		options?: { sortOthers?: (_a: any, _b: any) => number },
+	// Re-settle the payment lines after the cashier edits one of them. A
+	// card/bank amount the cashier entered is never changed here -- it has to
+	// match what the card terminal actually charged. Only two kinds of line
+	// may move: a cash line, and a line still holding an amount the system put
+	// there (e.g. the Default line's prefill) that the cashier hasn't touched.
+	// An excess shrinks those lines (untouched system amounts first); a
+	// shortfall grows the preferred line if it may move, otherwise a cash line.
+	// Whatever can't be settled this way is left for the cashier to correct.
+	const rebalanceAfterCashierEdit = (
+		editedPayment: any,
+		rebalanceOptions: {
+			amountDue: number;
+			preferredPayment?: any;
+			isCashierEntered: (_payment: any) => boolean;
+			isExcluded?: (_payment: any) => boolean;
+			sortOthers?: (_a: any, _b: any) => number;
+		},
 	) => {
 		const doc = unref(invoiceDoc);
-		if (!doc) return;
+		if (!doc || !Array.isArray(doc.payments)) return;
 
-		const invoice_total = getInvoiceSettlementAmount();
+		const { amountDue, preferredPayment, isCashierEntered, isExcluded } =
+			rebalanceOptions;
+		const sortOthers = rebalanceOptions.sortOthers ?? (() => 0);
 
-		// Calculate current total paid
-		const current_total_paid = doc.payments.reduce(
+		const canAdjust = (p: any) =>
+			!!p?.mode_of_payment &&
+			p !== editedPayment &&
+			!isExcluded?.(p) &&
+			(isCashLikePayment(p) || !isCashierEntered(p));
+
+		const byPriority = (a: any, b: any) =>
+			Number(isCashierEntered(a)) - Number(isCashierEntered(b)) ||
+			sortOthers(a, b);
+
+		const setAmount = (p: any, amount: number) => {
+			p.amount = amount;
+			if (p.base_amount !== undefined) {
+				p.base_amount = flt(toCompanyCurrency(currencyContext(doc), amount));
+			}
+		};
+
+		const totalPaid = doc.payments.reduce(
 			(sum: number, p: any) => sum + flt(p.amount),
 			0,
 		);
-
-		const diff = flt(current_total_paid - invoice_total);
-		const sortOthers =
-			options?.sortOthers ?? ((a: any, b: any) => flt(b.amount) - flt(a.amount));
+		const diff = flt(totalPaid - amountDue);
 
 		if (diff > 0) {
-			// Excess: subtract from other payments to bring the total back down.
-			// Find other payments with amount > 0 to reduce
-			// We filter out the current payment being edited to avoid circular issues
-			const otherPayments = doc.payments.filter(
-				(p: any) => p !== excludePayment && flt(p.amount) > 0,
-			);
+			let remainingExcess = diff;
+			const candidates = doc.payments
+				.filter((p: any) => canAdjust(p) && flt(p.amount) > 0)
+				.sort(byPriority);
 
-			// Sort by amount descending to reduce larger chunks first, unless the
-			// caller supplies its own ordering (e.g. most-recently-edited first).
-			otherPayments.sort(sortOthers);
-
-			let remaining_excess = diff;
-
-			for (const other of otherPayments) {
-				if (remaining_excess <= 0) break;
-
-				const otherAmount = flt(other.amount);
-				const reduction = Math.min(otherAmount, remaining_excess);
-				const newAmount = flt(otherAmount - reduction); // formatFloat handles precision if provided
-
-				other.amount = newAmount;
-				if (other.base_amount !== undefined) {
-					other.base_amount = flt(
-						toCompanyCurrency(currencyContext(doc), newAmount),
-					);
-				}
-
-				remaining_excess = flt(remaining_excess - reduction);
+			for (const other of candidates) {
+				if (remainingExcess <= 0) break;
+				const reduction = Math.min(flt(other.amount), remainingExcess);
+				setAmount(other, flt(flt(other.amount) - reduction));
+				remainingExcess = flt(remainingExcess - reduction);
 			}
 		} else if (diff < 0) {
-			// Deficit: the edit left the invoice short. Add the shortfall onto a
-			// single other payment (same priority order as the excess direction,
-			// e.g. least-recently-edited first) rather than spreading it across
-			// several -- there's no natural per-box cap on growth the way there
-			// is on shrinking toward zero, so one clear target keeps this
-			// predictable for the cashier.
-			const otherPayments = doc.payments.filter(
-				(p: any) => p !== excludePayment,
-			);
-
-			otherPayments.sort(sortOthers);
-
-			const target = otherPayments[0];
+			const target = canAdjust(preferredPayment)
+				? preferredPayment
+				: doc.payments
+						.filter((p: any) => canAdjust(p) && isCashLikePayment(p))
+						.sort(byPriority)[0];
 			if (target) {
-				const shortfall = -diff;
-				const newAmount = flt(flt(target.amount) + shortfall);
-
-				target.amount = newAmount;
-				if (target.base_amount !== undefined) {
-					target.base_amount = flt(
-						toCompanyCurrency(currencyContext(doc), newAmount),
-					);
-				}
+				setAmount(target, flt(flt(target.amount) - diff));
 			}
 		}
 	};
@@ -472,7 +466,7 @@ export function usePaymentMethods(options: PaymentMethodsOptions) {
 		set_rest_amount,
 		clear_all_amounts,
 		request_payment,
-		autoBalancePayments,
+		rebalanceAfterCashierEdit,
 		getVisibleDenominations,
 		isCashLikePayment,
 		reset_cash_payments,

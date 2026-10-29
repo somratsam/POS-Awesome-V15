@@ -33,6 +33,7 @@
 							:diff_label="diff_label"
 							:diff-payment="diff_payment"
 							:change_due="change_due"
+							:uncovered-overpayment="uncovered_overpayment"
 							:paid_change="paid_change"
 							:credit_change="credit_change"
 							:paid_change_rules="paid_change_rules"
@@ -69,7 +70,7 @@
 							:show-keyboard-shortcuts="counterGridMode"
 							:credit-only-return="returnsCreditOnlyPolicy"
 							@update-amount="handlePaymentAmountChange"
-							@set-full-amount="set_full_amount"
+							@set-full-amount="handleSetFullAmount"
 							@set-denomination="setPaymentToDenomination"
 							@mpesa-dialog="mpesa_c2b_dialog"
 							@request-payment="request_payment"
@@ -336,6 +337,7 @@ import {
 	resolveReturnDefaultAmount,
 	shouldApplyReturnRefundCap,
 } from "../../utils/paymentInitialization";
+import { getUncoveredOverpayment } from "../../utils/cashTender";
 import { resolvePaymentPrintFormatDoctypes } from "../../utils/paymentPrintDoctype";
 import { resolvePaymentPrintFormat } from "../../utils/paymentPrintFormat";
 import { parseBooleanSetting } from "../../utils/stock";
@@ -537,6 +539,20 @@ const netInvoiceSettlementAmount = computed(() => {
 	return invoice_doc.value?.is_return ? Math.min(net, 0) : Math.max(net, 0);
 });
 
+// Overpayment that can't be handed back as change because it sits on a
+// card/bank line rather than cash. Shown as "Over by X"; submit is blocked
+// by the matching guard in usePaymentSubmission.
+const uncovered_overpayment = computed(() => {
+	const doc = invoice_doc.value;
+	if (!doc || doc.is_return || is_credit_sale.value) return 0;
+	return getUncoveredOverpayment(
+		doc.payments,
+		-diff_payment.value,
+		isCashLikePayment,
+		currency_precision.value,
+	);
+});
+
 const validatePayment = computed(() => {
 	const profile = pos_profile.value;
 	if (!profile || !profile.posa_allow_sales_order) {
@@ -657,7 +673,7 @@ const {
 	request_payment,
 	getVisibleDenominations,
 	isCashLikePayment,
-	autoBalancePayments,
+	rebalanceAfterCashierEdit,
 } = usePaymentMethods({
 	invoiceDoc: computed(() => invoiceStore.invoiceDoc),
 	posProfile: pos_profile,
@@ -1263,22 +1279,23 @@ const rebalancePreferredPaymentCoverage = (giftCardAmount = giftCardAppliedAmoun
 	});
 };
 
-// Mirror of rebalancePreferredPaymentCoverage() for the opposite direction:
-// when the cashier edits the PREFERRED box directly, true up the OTHER boxes
-// so the total still matches the invoice -- symmetric in both directions: if
-// the edit left an excess, it shrinks other boxes (least-recently-edited/
-// never-touched first); if it left a shortfall, it grows the single
-// least-recently-edited/never-touched box to cover it. Either way, a box the
-// cashier just typed into elsewhere isn't immediately clobbered. Same guards
-// as rebalancePreferredPaymentCoverage (skip for returns and credit sales,
+// Re-settle the other payment lines after a cashier edit. A card/bank amount
+// the cashier entered is never changed (it must match the terminal slip);
+// only cash lines and untouched system amounts (like the Default line's
+// prefill) give way, least-recently-edited first. Same guards as
+// rebalancePreferredPaymentCoverage (skip for returns and credit sales,
 // where these boxes aren't meant to sum to the settlement amount).
-const rebalanceOtherPaymentsByRecency = (editedPayment) => {
+const rebalanceOtherPaymentsAfterEdit = (editedPayment) => {
 	const doc = invoice_doc.value;
 	if (!doc || doc.is_return || is_credit_sale.value) {
 		return;
 	}
 
-	autoBalancePayments(editedPayment, currency_precision.value, {
+	rebalanceAfterCashierEdit(editedPayment, {
+		amountDue: flt(netInvoiceSettlementAmount.value - giftCardAppliedAmount.value, currency_precision.value),
+		preferredPayment: resolvePreferredPaymentLine(doc, isCashLikePayment),
+		isCashierEntered: (payment) => Boolean(lastEditedPaymentSequence.value[payment?.mode_of_payment]),
+		isExcluded: isGiftCardPayment,
 		sortOthers: (a, b) => {
 			const seqA = lastEditedPaymentSequence.value[a?.mode_of_payment] || 0;
 			const seqB = lastEditedPaymentSequence.value[b?.mode_of_payment] || 0;
@@ -1540,24 +1557,21 @@ const handlePaymentAmountChange = (payment, event) => {
 	// This handler only fires for genuine cashier edits (the @update-amount
 	// event from a payment box), never for programmatic rebalances -- so it's
 	// safe to unconditionally record this box as the most recently touched.
-	if (payment?.mode_of_payment) {
-		paymentEditSequenceCounter.value += 1;
-		lastEditedPaymentSequence.value[payment.mode_of_payment] = paymentEditSequenceCounter.value;
-	}
+	markPaymentCashierEntered(payment);
+	rebalanceOtherPaymentsAfterEdit(payment);
+};
 
-	// True up the preferred payment line to the new remainder, same mechanism
-	// already used for loyalty/gift-card/credit changes -- but only when the
-	// box just edited isn't itself the preferred one, so a direct manual edit
-	// to the preferred box's own amount isn't immediately overwritten by its
-	// own rebalance. When the preferred box IS the one just edited, rebalance
-	// the other boxes instead, so a direct edit there doesn't leave the total
-	// silently out of sync with the invoice.
-	const preferredPayment = resolvePreferredPaymentLine(invoice_doc.value, isCashLikePayment);
-	if (preferredPayment && payment !== preferredPayment) {
-		rebalancePreferredPaymentCoverage();
-	} else if (preferredPayment && payment === preferredPayment) {
-		rebalanceOtherPaymentsByRecency(payment);
-	}
+// A box the cashier typed into or filled with the full amount counts as
+// cashier-entered: its amount is never changed automatically afterwards.
+const markPaymentCashierEntered = (payment) => {
+	if (!payment?.mode_of_payment) return;
+	paymentEditSequenceCounter.value += 1;
+	lastEditedPaymentSequence.value[payment.mode_of_payment] = paymentEditSequenceCounter.value;
+};
+
+const handleSetFullAmount = (payment, isReturn) => {
+	markPaymentCashierEntered(payment);
+	set_full_amount(payment, isReturn);
 };
 
 const setPaymentToDenomination = (payment, amount) => {
@@ -1891,7 +1905,7 @@ const handlePaymentShortcut = (event) => {
 				mpesa_c2b_dialog(payment);
 				return;
 			}
-			set_full_amount(payment, Boolean(invoice_doc.value?.is_return));
+			handleSetFullAmount(payment, Boolean(invoice_doc.value?.is_return));
 			nextTick(() => {
 				const card = paymentRoot.value?.querySelector?.(
 					`[data-payment-shortcut-index="${counterShortcut.index + 1}"]`,

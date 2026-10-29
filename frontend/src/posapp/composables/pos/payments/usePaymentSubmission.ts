@@ -19,6 +19,10 @@ import { resolvePosDocumentDoctype } from "../../../utils/posDocumentMode";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
 import { shouldApplyReturnRefundCap } from "../../../utils/paymentInitialization";
 import {
+	getUncoveredOverpayment,
+	isCashLikePaymentLine,
+} from "../../../utils/cashTender";
+import {
 	findLossRiskItems,
 	getItemCostFloor,
 	resolveSaleFloorPolicy,
@@ -734,6 +738,34 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			) {
 				throw new Error(__("The amount paid is not complete"));
 			}
+
+			// Change can only be handed back from cash. An overpayment larger
+			// than the cash taken sits on a card/bank line, so the invoice would
+			// record change the drawer never received -- the cashier must
+			// correct the card amounts instead.
+			const isCashLine = (payment: any) =>
+				isCashLikePaymentLine(payment, profile);
+			const uncovered = getUncoveredOverpayment(
+				doc.payments,
+				current_total_payments - invoice_total,
+				isCashLine,
+				prec,
+			);
+			if (uncovered > 0.001) {
+				const nonCashLines = (doc.payments || [])
+					.filter(
+						(payment: any) =>
+							!isCashLine(payment) &&
+							formatFloat(payment?.amount || 0, prec) > 0,
+					)
+					.map((payment: any) => payment.mode_of_payment);
+				throw new Error(
+					__(
+						"Over by {0}: card payments exceed the amount due, and change can only be given from cash. Correct {1}.",
+						[formatFloat(uncovered, prec), nonCashLines.join(", ")],
+					),
+				);
+			}
 		}
 
 		// 4. Validate phone payment
@@ -1004,51 +1036,12 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 		const diff = unref(diff_payment) || 0;
 		const writeOffAmount = getEffectiveWriteOffAmount(doc, profile, diff);
 		const changeLimit = !doc.is_return ? Math.max(-diff, 0) : 0;
-		let pChange = !doc.is_return
+		const pChange = !doc.is_return
 			? formatFloat(Math.min(unref(paidChange) || 0, changeLimit), prec)
 			: 0;
-		let cChange = !doc.is_return
+		const cChange = !doc.is_return
 			? formatFloat(Math.max(changeLimit - pChange, 0), prec)
 			: 0;
-
-		if (
-			!doc.is_return &&
-			changeLimit > 0 &&
-			pChange <= 0 &&
-			Array.isArray(doc.payments)
-		) {
-			const configuredCashMop = String(
-				profile?.posa_cash_mode_of_payment || "",
-			).toLowerCase();
-			const paidRows = doc.payments.filter(
-				(payment: any) => formatFloat(payment?.amount || 0, prec) > 0,
-			);
-			const hasCashPaid = paidRows.some((payment: any) => {
-				const mode = String(
-					payment?.mode_of_payment || "",
-				).toLowerCase();
-				const type = String(payment?.type || "").toLowerCase();
-				if (type === "cash") return true;
-				if (configuredCashMop && mode === configuredCashMop)
-					return true;
-				return mode.includes("cash");
-			});
-			const hasNonCashPaid = paidRows.some((payment: any) => {
-				const mode = String(
-					payment?.mode_of_payment || "",
-				).toLowerCase();
-				const type = String(payment?.type || "").toLowerCase();
-				if (type === "cash") return false;
-				if (configuredCashMop && mode === configuredCashMop)
-					return false;
-				return !mode.includes("cash");
-			});
-
-			if (hasNonCashPaid && !hasCashPaid) {
-				pChange = formatFloat(changeLimit, prec);
-				cChange = 0;
-			}
-		}
 
 		if (doc) {
 			ensureInvoiceClientRequestId(doc);
