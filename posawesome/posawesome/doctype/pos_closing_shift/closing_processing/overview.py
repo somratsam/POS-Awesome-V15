@@ -690,7 +690,6 @@ def get_closing_shift_overview(pos_opening_shift):
             cash_row["company_currency_total"] -= flt(cash_movement_company_currency_total)
 
     cash_expected_totals = []
-    cash_expected_company_currency_total = 0
     if cash_mode_of_payment:
         for row in payments_by_mode.values():
             if row["mode_of_payment"] == cash_mode_of_payment:
@@ -704,36 +703,30 @@ def get_closing_shift_overview(pos_opening_shift):
                         ),
                     },
                 )
-                cash_expected_company_currency_total += flt(row["company_currency_total"])
 
-    # Expected Cash is what should be in the drawer, so it starts from the
-    # opening float -- the same figure as the Cash row of Payment
-    # Reconciliation, which the closing variance rule checks. Payments by
-    # Mode stays cash taken only.
-    cash_taken_company_currency_total = cash_expected_company_currency_total
-    opening_cash = 0
-    if cash_mode_of_payment:
-        for detail in getattr(opening_shift_doc, "balance_details", None) or []:
-            if isinstance(detail, dict):
-                detail = frappe._dict(detail)
-            if getattr(detail, "mode_of_payment", None) == cash_mode_of_payment:
-                opening_cash += flt(getattr(detail, "amount", 0))
-    if opening_cash:
-        company_row = next(
-            (row for row in cash_expected_totals if row["currency"] == company_currency),
-            None,
-        )
-        if not company_row:
-            company_row = {
+    # Expected Cash is what should be in the drawer: the Cash row of the same
+    # closing build that Payment Reconciliation and the closing variance rule
+    # use (opening float, cash taken less change, cash Payment Entries, cash
+    # movements), so the two can't disagree. The per-currency rows above stay
+    # for any foreign-currency cash; the company-currency row takes the rest.
+    # Payments by Mode is unchanged.
+    opening_cash, drawer_cash = drawer_cash_expected(opening_shift_doc, cash_mode_of_payment)
+    foreign_cash_total = sum(
+        flt(row["company_currency_total"]) for row in cash_expected_totals if row["currency"] != company_currency
+    )
+    cash_expected_totals = [row for row in cash_expected_totals if row["currency"] != company_currency]
+    company_cash = flt(drawer_cash - foreign_cash_total)
+    if company_cash:
+        cash_expected_totals.append(
+            {
                 "currency": company_currency,
-                "total": 0,
-                "company_currency_total": 0,
+                "total": company_cash,
+                "company_currency_total": company_cash,
                 "exchange_rates": [],
             }
-            cash_expected_totals.append(company_row)
-        company_row["total"] = flt(company_row["total"]) + opening_cash
-        company_row["company_currency_total"] = flt(company_row["company_currency_total"]) + opening_cash
-        cash_expected_company_currency_total += opening_cash
+        )
+    cash_expected_company_currency_total = flt(drawer_cash)
+    cash_taken_company_currency_total = flt(drawer_cash - opening_cash)
 
     average_invoice_value = 0
     if sale_invoices_count:
@@ -1046,3 +1039,20 @@ def get_payment_reconciliation_details(closing_shift_doc):
             "net_currency_breakdown": net_currency_breakdown,
         },
     )
+
+
+def drawer_cash_expected(opening_shift_doc, cash_mode_of_payment):
+    """(opening, expected) for the cash mode, from the Payment Reconciliation
+    build the closing variance rule checks (creation.build_closing_shift)."""
+    # Imported here: creation is only needed for this figure.
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation import (
+        build_closing_shift,
+    )
+
+    if not cash_mode_of_payment:
+        return 0.0, 0.0
+    closing_shift = build_closing_shift(opening_shift_doc.as_dict())
+    for row in closing_shift.get("payment_reconciliation") or []:
+        if row.mode_of_payment == cash_mode_of_payment:
+            return flt(row.opening_amount), flt(row.expected_amount)
+    return 0.0, 0.0
