@@ -61,3 +61,14 @@ describe("ClosingDialog wiring for the Close Shift confirmation", () => {
 		expect(source).toMatch(/return \{[\s\S]*\n\t\t\tcurrency_precision,\n/);
 	});
 });
+
+describe("ClosingDialog passes the blind count flag to the overview", () => {
+	const source = readFileSync(resolve("src/posapp/components/pos/shell/ClosingDialog.vue"), "utf8");
+
+	it("forwards hideExpectedAmounts from the closing summary to ShiftOverview", () => {
+		const tag = source.slice(source.indexOf("<ShiftOverview"), source.indexOf("/>", source.indexOf("<ShiftOverview")));
+		expect(tag).toContain(':hide-expected-amounts="hideExpectedAmounts"');
+		expect(source).toContain("const summary = useClosingSummary(overview, pos_profile, dialog_data, summaryFormatters);");
+		expect(source).toMatch(/return \{[\s\S]*\.\.\.summary,/);
+	});
+});

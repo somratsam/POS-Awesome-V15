@@ -234,6 +234,11 @@ export function useClosingSummary(
 		);
 	});
 
+	// Blind count: a profile with Hide Expected Amount must not show figures
+	// the cashier could count against (Expected Cash, Cash Drawer Snapshot,
+	// Payments by Mode).
+	const hideExpectedAmounts = computed(() => Boolean(unref(posProfile)?.hide_expected_amount));
+
 	const cashExpectedSummary = computed(() => {
 		const ov = unref(overview);
 		return (
@@ -498,16 +503,25 @@ export function useClosingSummary(
 				key: "cash-expected",
 				label: __("Expected Cash"),
 				value: cashValue,
-				caption:
-					cashExpectedSummary.value.mode_of_payment && cashMovementSummary.value.company_currency_total
-						? `${__("Mode")}: ${cashExpectedSummary.value.mode_of_payment} | ${__("Cash movement deduction applied")}`
-						: cashExpectedSummary.value.mode_of_payment
-							? `${__("Mode")}: ${cashExpectedSummary.value.mode_of_payment}`
-							: __("No cash mode configured"),
+				// The figure includes the opening float, the same as the Cash row
+				// of Payment Reconciliation; the caption shows how it adds up.
+				caption: cashExpectedSummary.value.mode_of_payment
+					? `${__("Opening")} ${formatCurrencyWithSymbol(
+							cashExpectedSummary.value.opening_amount || 0,
+							overviewCompanyCurrency.value,
+						)} + ${__("cash taken")} ${formatCurrencyWithSymbol(
+							cashExpectedSummary.value.cash_taken || 0,
+							overviewCompanyCurrency.value,
+						)}${
+							cashMovementSummary.value.company_currency_total
+								? ` | ${__("Cash movement deduction applied")}`
+								: ""
+						}`
+					: __("No cash mode configured"),
 				icon: "mdi-safe",
 				color: "accent-success",
 			},
-		];
+		].filter((row) => !(hideExpectedAmounts.value && row.key === "cash-expected"));
 	});
 
 	const shouldShowCompanyEquivalent = (row: any, currency: string) => {
@@ -606,6 +620,7 @@ export function useClosingSummary(
 		customerCreditIssuedByCurrency,
 		primaryInsights,
 		secondaryInsights,
+		hideExpectedAmounts,
 		shouldShowCompanyEquivalent,
 		showExchangeRates,
 		formatExchangeRates,

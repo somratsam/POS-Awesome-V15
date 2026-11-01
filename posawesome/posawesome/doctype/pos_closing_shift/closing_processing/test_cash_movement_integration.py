@@ -128,6 +128,60 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         self.assertEqual(by_type["Expense"], 35)
         self.assertEqual(by_type["Deposit"], 15)
 
+    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
+    @patch("posawesome.posawesome.api.credit_exchange.frappe")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_all")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.db.get_value")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_cached_value")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_doc")
+    def test_overview_expected_cash_includes_opening_float(
+        self,
+        mock_get_doc,
+        mock_get_cached_value,
+        mock_db_get_value,
+        mock_get_all,
+        mock_get_pos_invoices,
+        mock_get_payments_entries,
+        mock_get_authorized_pos_profile,
+        mock_exchange_frappe,
+        mock_exchange_auth,
+    ):
+        # Same shift as test_make_closing_shift_deducts_cash_movements_from_cash_expected:
+        # 50 opening cash, 20 out as cash movements, no sales. Payment
+        # Reconciliation expects 30 in the drawer; Expected Cash must agree.
+        mock_get_pos_invoices.return_value = []
+        mock_get_payments_entries.return_value = []
+        mock_get_doc.return_value = SimpleNamespace(
+            doctype="POS Opening Shift",
+            name="POS-OPEN-1",
+            pos_profile="POS-PROFILE-1",
+            company="My Co",
+            balance_details=[
+                SimpleNamespace(mode_of_payment="Cash", amount=50),
+                SimpleNamespace(mode_of_payment="Visa", amount=7),
+            ],
+        )
+        mock_get_cached_value.return_value = "USD"
+        mock_db_get_value.side_effect = lambda dt, name, field: (
+            0 if field == "create_pos_invoice_instead_of_sales_invoice" else "Cash"
+        )
+        mock_get_all.return_value = [{"movement_type": "Expense", "amount": 20}]
+
+        _resolve_opening_shift(mock_exchange_frappe)
+        result = overview.get_closing_shift_overview("POS-OPEN-1")
+
+        cash_expected = result["cash_expected"]
+        self.assertEqual(cash_expected["company_currency_total"], 30)
+        self.assertEqual(cash_expected["opening_amount"], 50)
+        self.assertEqual(cash_expected["cash_taken"], -20)
+        self.assertEqual([(row["currency"], row["total"]) for row in cash_expected["by_currency"]], [("USD", 30)])
+        # Payments by Mode stays cash taken, without the float.
+        cash_payments = [row for row in result["payments_by_mode"] if row["mode_of_payment"] == "Cash"]
+        self.assertEqual([row["company_currency_total"] for row in cash_payments], [-20])
+
 
 if __name__ == "__main__":
     unittest.main()

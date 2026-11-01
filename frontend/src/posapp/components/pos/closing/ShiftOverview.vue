@@ -466,7 +466,7 @@
 						</div>
 					</div>
 					<!-- End: Change Returned -->
-					<div class="table-section">
+					<div v-if="!hideExpectedAmounts" class="table-section" data-test="cash-drawer-snapshot">
 						<div class="table-header mb-2">
 							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 								{{ __("Cash Drawer Snapshot") }}
@@ -905,7 +905,7 @@
 				</div>
 			</div>
 
-			<div class="table-section mt-4">
+			<div v-if="!hideExpectedAmounts" class="table-section mt-4" data-test="payments-by-mode">
 				<div class="table-header mb-2">
 					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
 						{{ __("Payments by Mode of Payment") }}
@@ -998,6 +998,9 @@ defineProps({
 	customerCreditIssuedByCurrency: Array,
 	paymentsByMode: Array,
 	overviewCompanyCurrency: String,
+	// Blind count (POS Profile "Hide Expected Amount"): hide the cash and
+	// payment totals the cashier could count against.
+	hideExpectedAmounts: Boolean,
 	// Functions
 	formatCurrencyWithSymbol: Function,
 	shouldShowCompanyEquivalent: Function,

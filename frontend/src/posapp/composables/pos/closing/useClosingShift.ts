@@ -240,6 +240,8 @@ export function useClosingShift(eventBus: any) {
 				company_currency_total: toNumber(
 					payload.cash_expected?.company_currency_total,
 				),
+				opening_amount: toNumber(payload.cash_expected?.opening_amount),
+				cash_taken: toNumber(payload.cash_expected?.cash_taken),
 				by_currency: normalizeCurrencyRows(
 					payload.cash_expected?.by_currency,
 					{
