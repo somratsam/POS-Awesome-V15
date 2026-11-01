@@ -210,7 +210,8 @@ describe("Closing shift Amount box", () => {
 				payments,
 				headers: [],
 				companyCurrencySymbol: "OMR",
-				formatCurrency: fmt,
+				// Like useFormat's formatCurrency(value, precision).
+				formatCurrency: (value: number, precision = 2) => Number(value || 0).toFixed(precision),
 				formatFloat: (value: number) => String(value),
 				...(currencyPrecision === undefined ? {} : { currencyPrecision }),
 			},
@@ -223,6 +224,21 @@ describe("Closing shift Amount box", () => {
 		const field = wrapper.findComponent(TextField);
 		return { wrapper, input, field, payments };
 	};
+
+	it("an empty box shows a faint 0 at the currency precision instead of the old 'Edit' label", () => {
+		const { input, field } = mountClosing(0, 3);
+		expect(input.getAttribute("placeholder")).toBe("0.000");
+		expect(field.vm.$attrs.label).toBeUndefined();
+		expect(input.getAttribute("aria-label")).toBe("Closing amount for Cash");
+
+		expect(mountClosing(0).input.getAttribute("placeholder")).toBe("0.00");
+	});
+
+	it("the placeholder stays while a value is shown, and the value wins", () => {
+		const { input } = mountClosing(45.5, 3);
+		expect(input.value).toBe("45.5");
+		expect(input.getAttribute("placeholder")).toBe("0.000");
+	});
 
 	it("shows an empty box for a 0 closing amount, and for null", () => {
 		expect(mountClosing(0).input.value).toBe("");

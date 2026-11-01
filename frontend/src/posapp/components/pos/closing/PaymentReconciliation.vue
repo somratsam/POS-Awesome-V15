@@ -27,7 +27,8 @@
 					@blur="onClosingAmountBlur(props.item)"
 					:data-test="`closing-amount-${props.item.mode_of_payment}`"
 					:rules="[closingAmountRule]"
-					:label="$frappe._('Edit')"
+					:placeholder="zeroPlaceholder"
+					:aria-label="__('Closing amount for {0}', [props.item.mode_of_payment])"
 					single-line
 					counter
 					type="number"
@@ -61,7 +62,7 @@
 </template>
 
 <script setup>
-import { inject, nextTick } from "vue";
+import { computed, inject, nextTick } from "vue";
 import { normalizeClosingAmount } from "../../../utils/closingAmount";
 
 const props = defineProps({
@@ -109,6 +110,9 @@ const closingAmountRule = (v) => {
 
 	return true;
 };
+
+// An empty box shows a faint 0 at the currency precision (e.g. "0.000").
+const zeroPlaceholder = computed(() => props.formatCurrency(0, props.currencyPrecision));
 
 // A closing amount of 0 shows as an empty box; while the cashier types, the
 // raw text is shown as-is. Leaving a box empty stores 0, never blank or null.
