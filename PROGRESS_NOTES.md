@@ -7577,3 +7577,130 @@ first-store transfer test.
 harmless: Destination Store column, Incoming Transfers report record, the
 variance columns. Restore the backup only if data is damaged (loses every
 sale since).
+
+## 81. Closing screen and Z Report cash: opening float, change, blind count; everything on `stable` (2026-11-01)
+
+Three commits on `develop-swan`, cherry-picked to `stable` in order:
+`110c1e06` = `96da961e`, `f46ac2c3` = `9eba210a`, `d488f070` = `e1b7b60a`.
+Hand-tested by the user on staging before the cherry-pick.
+
+**Found** (while writing the cashier guide): the Closing POS Shift overview
+card "Expected Cash" and the "Cash Drawer Snapshot" didn't match Payment
+Reconciliation, the figure the closing variance rule (section 80) checks.
+Staging shift: 20.000 opening, a 139.300 sale paid 150.000 cash, 10.700
+change -- reconciliation 159.300 (right), card 150.000 on the old code.
+Two separate gaps, both from upstream (`cd5eba17`, release 15.33.0):
+- the overview never added the opening float;
+- it took off change only when paid back through an overpayment Payment
+  Entry, never an invoice's own `change_amount`. ERPNext stores the cash
+  payment row as the amount tendered (150.000) and books the ledger net
+  (GL Cash debit 139.300).
+A cashier counting by the card was told "Cash: short ..." and asked for a
+reason. The Z Report's Cash Balance was always right; its Today's Payments
+(and the screen's Payments by Mode) printed cash tendered, 150.000, so the
+payment totals didn't add up to Net Sales.
+
+**`110c1e06` -- opening float on the card; blind count safeguard.**
+- `get_closing_shift_overview` returns `cash_expected.opening_amount` and
+  `cash_taken`; the card caption reads "Opening X + cash taken Y"
+  (`useClosingSummary.ts`; the overview normalizer in `useClosingShift.ts`
+  keeps the two fields).
+- On a POS Profile with Hide Expected Amount the overview hides the Expected
+  Cash card, the Cash Drawer Snapshot and Payments by Mode (`ShiftOverview.vue`
+  `hideExpectedAmounts`, forwarded by `ClosingDialog.vue`). No store uses
+  blind count today. Screen only: the overview and closing endpoints still
+  return the figures to anyone on that profile, as before.
+- The hand test failed on this commit alone: card 170.000 (= 150.000 + 20.000)
+  against 159.300 -- the change gap above.
+
+**`f46ac2c3` -- the card reads the reconciliation build.** The card no
+longer adds its own sum: `drawer_cash_expected()` (overview.py) reads the
+Cash row of `creation.build_closing_shift` -- the build Payment
+Reconciliation and `POSClosingShift.refresh_expected_amounts` use -- so the
+two can't disagree (change, cash movements, returns, cash refunds, cash
+Payment Entries, split payments). Imported inside the function: creation is
+only needed for this figure, and `test_overview_loyalty` loads overview.py
+with a stubbed frappe. Foreign-currency cash rows of the snapshot stay; the
+company-currency row takes the rest.
+
+**`d488f070` -- cash in Today's Payments and Payments by Mode is net of
+change.** Each sale's change comes off its cash row, only when the invoice
+has a cash row (amount > 0) in the profile's cash mode
+(`posa_cash_mode_of_payment` or "Cash") -- the reconciliation's rule; change
+with no cash row (pre-`9eea959a` card-only overpayments) comes off nothing.
+Z Report: `get_shift_invoice_rows` also reads `change_amount`;
+`get_payment_mode_counts(..., change_by_invoice, cash_mode_of_payment)`.
+Overview: the same in the invoice loop, skipped when the change went out
+through an overpayment Payment Entry (still taken off further down). No
+print-format change. Cash Balance, VAT, sales totals and counts unchanged.
+A reprint of an older Z Report now prints cash net of change too, so it can
+be lower than the paper printed that day.
+
+**Tests.**
+- `test_cash_movement_integration` (6): `_overview_and_reconciliation()`
+  runs the real overview and the real `build_closing_shift` on the same
+  mocked shift. The hand-test case fails on `110c1e06` (170.0 != 159.3);
+  split payments with change + credit return + cash refund + movement fails
+  (80 != 70); Payments by Mode 150 != 139.3 and 60 != 50 on `f46ac2c3`;
+  change without a cash row; movements only; opening float + movement.
+- `test_z_report_cash_net_of_change` (5): hand-test case, split, change
+  without a cash row, returns untouched, Z Report end to end (150.0 != 139.3
+  on `f46ac2c3`); the payment-row SQL is answered from a fixture.
+- `closingExpectedCash.spec.ts` (7) and a wiring test in
+  `closingDialogConfirmWiring.spec.ts`: caption, card hidden on blind count,
+  normalizer, ShiftOverview hides the two sections, ClosingDialog forwards
+  the flag. Reverting the frontend fails all 8.
+- `test_pos_closing_shift` (three loyalty / printed-invoice tests) and
+  `test_overview_loyalty` stub `drawer_cash_expected`.
+- The `AttributeError: module 'frappe' has no attribute 'model'` printed
+  after `test_overview_loyalty` is pre-existing (same on `21c5e94b`).
+
+**Checks** (each commit): frontend 262/262 files, 1541/1541; `bench build`
+exit 0 (`110c1e06`; the other two are Python only); no migrate; backend in
+isolation -- `test_cash_movement_integration` 6/6,
+`test_z_report_cash_net_of_change` 5/5, `test_z_report` 3/3,
+`test_z_report_vat` 8/8, `test_z_report_item_counts` 7/7,
+`test_z_report_line_discounts` 2/2, `test_pos_closing_shift` 10/10,
+`test_closing_variance` 12/12, `test_overview_loyalty` 4/4,
+`test_same_shift_exchange` 5/5, `test_closing_security` 11/11, `test_shifts`
+7/7. Live, read-only on staging shift `POSA-OS-26-0000041`: card 159.300,
+Payments by Mode 139.300, Z Report rendered in memory (closing built and
+marked submitted without saving, rolled back): Today's Payments
+`Cash 1 / 139.300`, Cash Balance 20.000 / 159.300.
+
+**`stable` now** (GitHub, tip `e1b7b60a`): section 80's list, then
+`96da961e` (= `110c1e06`), `9eba210a` (= `f46ac2c3`), `e1b7b60a`
+(= `d488f070`). `git diff stable develop-swan` shows only CLAUDE.md and
+PROGRESS_NOTES.md.
+
+**Production deploy, one night** -- section 80's plan with these changes
+(site `site1.local`; from `d4790c72` to `e1b7b60a`). Still needs build,
+migrate (twice) and restart: the build for `110c1e06` and earlier frontend
+commits, the migrates for section 72 / section 80 items. These three commits
+add no migrate of their own.
+- *Before*, add: (a) invoices with change but no cash row, read-only --
+  nothing comes off cash for them, so list them for the record:
+  ```
+  bench --site site1.local mariadb -e "SELECT si.name, si.posting_date, si.change_amount FROM \`tabSales Invoice\` si WHERE si.docstatus=1 AND si.change_amount>0 AND NOT EXISTS (SELECT 1 FROM \`tabSales Invoice Payment\` p WHERE p.parent=si.name AND p.mode_of_payment=COALESCE((SELECT pp.posa_cash_mode_of_payment FROM \`tabPOS Profile\` pp WHERE pp.name=si.pos_profile),'Cash') AND p.amount>0);"
+  ```
+  (b) tell the stores: the closing screen's Expected Cash now includes the
+  opening cash and is the drawer figure; Today's Payments shows cash net of
+  change; a reprint of an old Z Report can show less cash than the paper.
+- Step 7: `git log -1 --oneline` must be
+  `e1b7b60a fix: cash in Today's Payments and Payments by Mode is net of change`.
+- Steps 8-12 unchanged (build, migrate twice with the field-placement and
+  Z Report checks, restart).
+- *Post-deploy tests*, add after section 80's list, on one store with a
+  20.000 opening float and a cash sale given change (e.g. 139.300 paid
+  150.000):
+  1. Close Shift overview: Expected Cash = 159.300, caption "Opening 20.000 +
+     cash taken 139.300"; Cash Drawer Snapshot 159.300; Payment
+     Reconciliation Cash Expected Amount 159.300.
+  2. Payments by Mode: Cash 139.300; Change Returned 10.700.
+  3. Counting 159.300 closes without a reason.
+  4. Z Report: Today's Payments `Cash 1 / 139.300`, Net Sales 139.300, Cash
+     Balance Opening 20.000 / Expected 159.300 / Difference 0.000.
+  5. A split (Visa + Cash with change): Payments by Mode and the Z Report
+     show the card in full and cash net of change; the card still equals the
+     Cash Expected Amount.
+- *Rollback* unchanged: `git checkout d4790c72`, build, migrate, restart.
