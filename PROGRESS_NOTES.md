@@ -7373,10 +7373,72 @@ here (headless Chromium crashes on the POS page); the user tests by hand.
 - `make_closing_shift_from_opening(opening_shift)` trusts the opening shift
   dict from the browser (including `user` and opening amounts) and submits
   that shift's printed draft invoices as a side effect, for any shift name.
-- Same class of gap as section 77 (opening a shift). Fix proposed to the
-  user, waiting for approval.
+- Same class of gap as section 77 (opening a shift). Also found while
+  checking: `get_pos_invoices` (Desk closing form) submitted printed drafts
+  and returned full invoices for any shift, and pasted its `doctype`
+  argument into the SQL table name (`` `tab{doctype}` ``) -- an injected
+  value reached the SQL (confirmed by the test's syntax error against the
+  old code); `get_payments_entries` listed any shift's Payment Entries
+  (`frappe.get_all` skips permissions).
 
-**Cherry-pick order to `stable`** (when the user says go): `9eea959a`,
-`76c85f95`, `6bea1869`, `53bcd343`, `7a2e9595`, then the docs commits
-`e7100e66` and this one. Deploy: pull, `bench build --app posawesome`,
-`sudo supervisorctl restart all`; no migrate.
+**`e229b637` -- closing amount placeholder.** The Closing Amount boxes used
+"Edit" as a single-line label; they now show a faint 0 at the currency
+precision ("0.000") and keep an accessible name ("Closing amount for
+<mode>"). No other money box used "Edit". (The payment screen has no such
+placeholder -- it shows the "Amount" label; not built there.)
+
+**`1d8bfdfc` -- fixed: only a shift's own cashier or a POS supervisor may
+close it.**
+- Decision (user): "manager" = POS Awesome Supervisor or System Manager.
+  Sales Manager is not enough -- closing writes POS Opening Shift, which only
+  Sales Manager / System Manager may write, so every cashier who can close a
+  shift at all has Sales Manager; using it would let any same-store cashier
+  close a colleague's shift.
+- `closing_processing/access.py` `authorize_shift_close()` runs first in all
+  four whitelisted methods: signed in, opening shift exists and is Open,
+  `get_authorized_pos_profile` for its profile, caller is the shift's user or
+  a supervisor. The same owner-or-supervisor check runs in
+  `POSClosingShift.validate` (`check_closer`), so the Desk form follows it;
+  `company` is reset from the opening shift there too.
+- `make_closing_shift_from_opening` builds from the stored opening shift;
+  `submit_closing_shift` takes user / POS Profile / company / opening shift
+  from it (user and pos_profile were already `fetch_from`, so only company
+  was spoofable); `get_pos_invoices` accepts only Sales Invoice or POS
+  Invoice. Internal callers (overview, creation) use the unchecked
+  `fetch_shift_invoices` / `fetch_shift_payment_entries`.
+- Effect to know: a manager who closes leftover shifts in Desk needs the
+  **POS Awesome Supervisor** role (or System Manager); Sales Manager alone is
+  refused. A cashier whose POS Profile assignment was removed while their
+  shift was open must have it closed by a supervisor.
+- Not changed: the owner's closing figures (expected amounts, transactions)
+  still come from the browser; `get_closing_shift_overview` still only checks
+  POS Profile access (read-only figures).
+- Tests: `closing_processing/test_closing_security.py` (11). Against the old
+  code 8 fail (2 another cashier refused, 4 other store's supervisor refused,
+  5 Guest refused, 6 company spoof, 7 stored opening amounts, 8 closed shift
+  can't be prepared, 9 doctype limit, 11 Desk form rule); 1, 3, 10 pass both
+  ways. Existing tests that patched `get_pos_invoices` / `get_payments_entries`
+  on overview/creation now patch the `fetch_*` names.
+- Checks: frontend 260/260 files, 1519/1519; closing modules all pass
+  (`test_closing_security` 11/11, `test_pos_closing_shift` 10/10, Z Report
+  3/3, VAT 8/8, item counts 7/7, line discounts 2/2, cash movements 2/2,
+  same-shift exchange 5/5, overview loyalty 4/4), `test_shifts` 7/7,
+  `test_payment` 4/4, `test_payments` 9/9; `test_creation` 8 errors and
+  `test_submitted_invoice_shift_security` 1 import error, both identical
+  without this change. No build or migrate needed (Python only).
+- Cherry-picks cleanly onto `stable` alone, and in order after the payment
+  commits (checked in a throwaway worktree).
+
+**Before deploying `1d8bfdfc` to production**, read-only:
+```
+bench --site site1.local mariadb -e "SELECT u.name FROM tabUser u JOIN \`tabHas Role\` r ON r.parent=u.name AND r.role='Sales User' WHERE u.enabled=1 AND u.user_type='System User' AND NOT EXISTS (SELECT 1 FROM \`tabUser Permission\` p WHERE p.user=u.name AND p.allow='POS Profile');"
+bench --site site1.local mariadb -e "SELECT u.name, GROUP_CONCAT(DISTINCT r.role) roles, GROUP_CONCAT(DISTINCT p.for_value) profiles FROM tabUser u JOIN \`tabHas Role\` r ON r.parent=u.name AND r.role IN ('POS Awesome Supervisor','System Manager') LEFT JOIN \`tabUser Permission\` p ON p.user=u.name AND p.allow='POS Profile' WHERE u.enabled=1 GROUP BY u.name;"
+```
+The first should list no store users (only people meant to work across
+stores); the second shows who may close others' shifts, and on which stores.
+
+**Cherry-pick order to `stable`** (when the user says go): `1d8bfdfc` may go
+first on its own (security fix, Python only: pull + restart). Payment
+commits, in order: `9eea959a`, `76c85f95`, `6bea1869`, `53bcd343`,
+`7a2e9595`, `e229b637` (pull, `bench build --app posawesome`, restart; no
+migrate). Docs commits: `e7100e66`, `e2e81d39` and the one adding this.
