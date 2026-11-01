@@ -32,7 +32,7 @@ describe("Close Shift confirmation", () => {
 	});
 
 	it("Submit with an invalid figure neither asks nor sends, as before", async () => {
-		const { closing, eventBus } = await openClosing(["", 40]);
+		const { closing, eventBus } = await openClosing(["abc", 40]);
 
 		expect(closing.requestSubmit()).toBe(false);
 
@@ -66,6 +66,28 @@ describe("Close Shift confirmation", () => {
 		expect(eventBus.emit).toHaveBeenCalledWith("submit_closing_pos", closing.dialog_data.value);
 		expect(closing.confirmCloseDialog.value).toBe(false);
 		expect(closing.closingDialog.value).toBe(false);
+	});
+
+	it.each([[""], [null], [undefined], ["  "]])(
+		"an empty closing amount (%j) is sent as 0, never blank or null",
+		async (empty) => {
+			const { closing, eventBus } = await openClosing([empty as any, 40]);
+
+			expect(closing.requestSubmit()).toBe(true);
+			expect(closing.confirmSubmit()).toBe(true);
+
+			const sent = eventBus.emit.mock.calls[0][1];
+			expect(sent.payment_reconciliation[0].closing_amount).toBe(0);
+			expect(sent.payment_reconciliation[1].closing_amount).toBe(40);
+		},
+	);
+
+	it("typed closing amounts are sent as numbers", async () => {
+		const { closing, eventBus } = await openClosing(["12.345", 40]);
+		closing.requestSubmit();
+		closing.confirmSubmit();
+
+		expect(eventBus.emit.mock.calls[0][1].payment_reconciliation[0].closing_amount).toBe(12.345);
 	});
 
 	it("the next close (dialog opened again) can be sent", async () => {

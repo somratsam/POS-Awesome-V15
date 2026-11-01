@@ -20,7 +20,12 @@
 		>
 			<template v-slot:item.closing_amount="props">
 				<v-text-field
-					v-model="props.item.closing_amount"
+					:model-value="closingAmountDisplay(props.item.closing_amount)"
+					@update:model-value="(value) => (props.item.closing_amount = value)"
+					@focus="onClosingAmountFocus"
+					@mouseup="onClosingAmountMouseUp"
+					@blur="onClosingAmountBlur(props.item)"
+					:data-test="`closing-amount-${props.item.mode_of_payment}`"
 					:rules="[closingAmountRule]"
 					:label="$frappe._('Edit')"
 					single-line
@@ -56,7 +61,8 @@
 </template>
 
 <script setup>
-import { inject } from "vue";
+import { inject, nextTick } from "vue";
+import { normalizeClosingAmount } from "../../../utils/closingAmount";
 
 const props = defineProps({
 	payments: Array,
@@ -69,6 +75,11 @@ const props = defineProps({
 	// Formatters
 	formatCurrency: Function,
 	formatFloat: Function,
+	// Decimal places allowed in a closing amount (3 for OMR).
+	currencyPrecision: {
+		type: Number,
+		default: 2,
+	},
 });
 
 const $frappe = inject("frappe", window.frappe);
@@ -92,11 +103,45 @@ const closingAmountRule = (v) => {
 		return "Number is too large";
 	}
 
-	if (fractionalPart && fractionalPart.length > 2) {
-		return "Maximum of 2 decimal places";
+	if (fractionalPart && fractionalPart.length > props.currencyPrecision) {
+		return __("Maximum of {0} decimal places", [props.currencyPrecision]);
 	}
 
 	return true;
+};
+
+// A closing amount of 0 shows as an empty box; while the cashier types, the
+// raw text is shown as-is. Leaving a box empty stores 0, never blank or null.
+const closingAmountDisplay = (value) =>
+	value === 0 || value === null || value === undefined ? "" : value;
+
+const onClosingAmountBlur = (item) => {
+	item.closing_amount = normalizeClosingAmount(item.closing_amount);
+	selectClosingOnMouseUp = false;
+};
+
+// Focus selects the whole value so typing replaces it; a mouse click's
+// mouseup would otherwise move the caret and undo that once.
+let selectClosingOnMouseUp = false;
+const selectAllIn = (input) => {
+	try {
+		input?.select?.();
+	} catch {
+		// Some input types don't support selection; nothing to do.
+	}
+};
+
+const onClosingAmountFocus = (event) => {
+	selectClosingOnMouseUp = true;
+	const input = event?.target;
+	nextTick(() => selectAllIn(input));
+};
+
+const onClosingAmountMouseUp = (event) => {
+	if (!selectClosingOnMouseUp) return;
+	selectClosingOnMouseUp = false;
+	event?.preventDefault?.();
+	selectAllIn(event?.target);
 };
 
 const calculateDifference = (item) => {

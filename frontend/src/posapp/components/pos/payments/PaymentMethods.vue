@@ -67,11 +67,13 @@
 						:label="frappe._('Amount')"
 						:class="['sleek-field pos-themed-input', isReturn ? 'pos-themed-input--refund' : '']"
 						hide-details
-						:model-value="formatCurrency(payment.amount)"
+						:model-value="amountDisplay(payment)"
 						@change="$emit('update-amount', payment, $event)"
 						:rules="[isNumber]"
 						:prefix="currencySymbol(currency)"
-						@focus="$emit('set-rest-amount', payment, isReturn)"
+						@focus="onAmountFocus(payment, $event)"
+						@mouseup="onAmountMouseUp"
+						@blur="onAmountBlur"
 						@keydown.enter="blurTarget"
 						@keydown.esc="blurTarget"
 						:readonly="isGiftCardPayment(payment)"
@@ -165,6 +167,8 @@
 </template>
 
 <script setup>
+import { nextTick } from "vue";
+
 const frappe = window.frappe;
 const __ = window.__;
 
@@ -206,6 +210,43 @@ const handlePrimaryAction = (payment) => {
 		return;
 	}
 	emit("set-full-amount", payment, props.isReturn);
+};
+
+// A 0 amount shows as an empty box, so the label reads clearly and typing
+// starts fresh.
+const amountDisplay = (payment) =>
+	Number(payment?.amount) ? props.formatCurrency(payment.amount) : "";
+
+// Focusing an Amount box first lets the parent fill what's still owed (an
+// empty box only), then selects the whole value once the screen has caught
+// up: typing replaces it, Tab or Enter keeps it.
+let selectOnMouseUp = false;
+const selectAll = (input) => {
+	try {
+		input?.select?.();
+	} catch {
+		// Some input types don't support selection; nothing to do.
+	}
+};
+
+const onAmountFocus = (payment, event) => {
+	emit("set-rest-amount", payment, props.isReturn);
+	const input = event?.target;
+	selectOnMouseUp = true;
+	nextTick(() => selectAll(input));
+};
+
+// A mouse click focuses the box and then, on mouseup, places the caret --
+// which would undo the select-all done on focus. Keep the selection once.
+const onAmountMouseUp = (event) => {
+	if (!selectOnMouseUp) return;
+	selectOnMouseUp = false;
+	event?.preventDefault?.();
+	selectAll(event?.target);
+};
+
+const onAmountBlur = () => {
+	selectOnMouseUp = false;
 };
 
 const blurTarget = (event) => {

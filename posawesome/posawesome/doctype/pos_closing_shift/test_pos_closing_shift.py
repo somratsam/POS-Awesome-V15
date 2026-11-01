@@ -418,3 +418,21 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result["loyalty_redemption"]["by_currency"][0]["total"], 10)
         self.assertEqual(result["loyalty_redemption"]["by_currency"][0]["points"], 2)
         self.assertEqual(result["loyalty_redemption"]["by_currency"][0]["invoice_count"], 1)
+
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.pos_closing_shift.frappe")
+    def test_empty_closing_amount_is_saved_as_zero(self, mock_frappe):
+        from posawesome.posawesome.doctype.pos_closing_shift.pos_closing_shift import POSClosingShift
+
+        mock_frappe.get_cached_value.return_value = 3
+        rows = [
+            SimpleNamespace(closing_amount=None, expected_amount=12.5),
+            SimpleNamespace(closing_amount="", expected_amount=0),
+            SimpleNamespace(closing_amount="12.345", expected_amount=12.3),
+        ]
+
+        POSClosingShift.update_payment_reconciliation(SimpleNamespace(payment_reconciliation=rows))
+
+        self.assertEqual([row.closing_amount for row in rows], [0, 0, 12.345])
+        self.assertEqual(rows[0].difference, -12.5)
+        self.assertEqual(rows[1].difference, 0)
+        self.assertAlmostEqual(rows[2].difference, 0.045)
