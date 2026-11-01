@@ -7309,3 +7309,74 @@ on the POS page in this WSL setup (signal 5), so the user is testing by hand.
 
 **Production deploy** (after the user's go): cherry-pick the three commits to
 `stable` in order, pull, `bench build --app posawesome`, restart. No migrate.
+
+## 79. Clear payments, per-line remove, cash handed back in full; Amount boxes; closing-shift finding (2026-11-01)
+
+Two more commits on `develop-swan` after section 78, not yet on `stable`.
+
+**`53bcd343` -- Clear payments, per-line x, stricter overpayment guard.**
+- Found: after cards were filled in, a customer switching to all cash had no
+  quick way back -- clicking Cash did nothing (cards already covered the
+  total) and typing Cash 139.300 left the cards in place: Paid 278.600,
+  Change 139.300, and the `9eea959a` guard let it through because the
+  excess was no larger than the cash taken.
+- Built: "Clear payments" (Payment Methods header) sets every line to 0 and
+  forgets staff entries; an x on each line holding an amount sets just that
+  line to 0 and forgets it. Sales only (hidden for returns and credit
+  sales); loyalty, customer credit and gift card redemptions untouched.
+  Submit is also blocked when the change would be equal to or more than all
+  the cash taken ("Over by X: cash would be handed back in full. Reduce a
+  card amount or remove the cash."), shown as "Over by" in red
+  (`cashTender.ts` `getOverpaymentBlock`). Cash 10 + Visa 100 on 100 is now
+  blocked (the `9eea959a` test was updated); Cash 120 alone (Change 20) and
+  Cash 150 + Visa 50 (Change 100) still pass.
+- The 139.300 sequence (click Visa, type 80, click Maal = 59.300, click Cash
+  = no change) is a permanent test under Cash, Visa and Master Card Default.
+
+**`7a2e9595` -- Amount boxes on the payment and closing shift screens.**
+- Payment screen: 0 shows as an empty box; focus fills what's still owed
+  (empty box only), then selects the whole value -- typing replaces it, Tab
+  or Enter keeps it. The first mouseup after a click is cancelled, since it
+  would otherwise move the caret and undo the selection.
+- Closing shift: 0 shows as an empty box; focus selects the value (the box
+  is `type="number"`, so jsdom can't hold a selection -- tests check that
+  `select()` runs; the real highlight is on the manual checklist). An empty
+  closing amount is stored as 0, never blank or null, in three places: on
+  leaving the box, in `useClosingShift.hasValidClosingAmounts()` before the
+  close is checked and sent, and server-side in
+  `POSClosingShift.update_payment_reconciliation()` (runs in `validate`,
+  before Frappe's mandatory check). Before, an empty box silently blocked
+  Submit.
+- The closing amount rule (from upstream) allowed only 2 decimals, flagging
+  correct OMR counts like 12.345; it now follows the currency precision
+  passed in from `ClosingDialog` (forwarding covered by a wiring test).
+
+**Checks.** Each commit: full `vitest run` (last: 260/260 files, 1517/1517),
+`bench build` exit 0, no migrate (no doctype JSON, fixture or print
+format). Backend: `test_pos_closing_shift` 10/10 (new test: blank/null
+closing amount saved as 0), `closing_processing.test_z_report` 3/3,
+`test_z_report_vat` 8/8, `test_cash_movement_integration` 2/2,
+`test_same_shift_exchange` 5/5, `test_overview_loyalty` 4/4,
+`invoice_processing.test_payment` 4/4, `test_payments` 9/9,
+`invoice_processing.test_creation` 8 errors as before. Each new test was
+confirmed to fail against the old code. Live browser test still not possible
+here (headless Chromium crashes on the POS page); the user tests by hand.
+
+**Found, not fixed -- closing another cashier's shift.**
+`closing_processing/creation.py`:
+- `submit_closing_shift(closing_shift)` is whitelisted, builds the whole POS
+  Closing Shift from the JSON the browser sends and saves/submits it with
+  `ignore_permissions=True`. `POSClosingShift.validate` only checks the
+  opening shift is Open and not already closed -- not who is calling. Any
+  logged-in user could close another cashier's open shift, with figures of
+  their choosing.
+- `make_closing_shift_from_opening(opening_shift)` trusts the opening shift
+  dict from the browser (including `user` and opening amounts) and submits
+  that shift's printed draft invoices as a side effect, for any shift name.
+- Same class of gap as section 77 (opening a shift). Fix proposed to the
+  user, waiting for approval.
+
+**Cherry-pick order to `stable`** (when the user says go): `9eea959a`,
+`76c85f95`, `6bea1869`, `53bcd343`, `7a2e9595`, then the docs commits
+`e7100e66` and this one. Deploy: pull, `bench build --app posawesome`,
+`sudo supervisorctl restart all`; no migrate.
