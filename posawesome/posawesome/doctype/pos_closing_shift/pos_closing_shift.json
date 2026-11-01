@@ -25,6 +25,8 @@
   "payment_reconciliation_details",
   "section_break_11",
   "payment_reconciliation",
+  "posa_variance_reason",
+  "posa_variance_approved_by",
   "section_break_13",
   "grand_total",
   "net_total",
@@ -133,6 +135,19 @@
    "options": "POS Closing Shift Detail"
   },
   {
+   "fieldname": "posa_variance_reason",
+   "fieldtype": "Small Text",
+   "label": "Variance Reason",
+   "description": "Why the closing amounts differ from the expected amounts by more than the POS Profile's tolerance."
+  },
+  {
+   "fieldname": "posa_variance_approved_by",
+   "fieldtype": "Link",
+   "label": "Variance Approved By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
    "collapsible": 1,
    "collapsible_depends_on": "eval:doc.docstatus==0",
    "fieldname": "section_break_13",
@@ -224,7 +239,7 @@
  ],
  "is_submittable": 1,
  "links": [],
- "modified": "2023-06-12 03:01:49.146706",
+ "modified": "2026-11-01 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "POSAwesome",
  "name": "POS Closing Shift",

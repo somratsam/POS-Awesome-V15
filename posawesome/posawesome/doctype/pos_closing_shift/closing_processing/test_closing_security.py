@@ -124,6 +124,8 @@ class TestClosingSecurity(IntegrationTestCase):
             self.skipTest("A second company is required")
         payload = json.loads(self._payload_as(OWNER))
         payload.update({"user": COLLEAGUE, "pos_profile": self.profile_b, "company": other_company})
+        for row in payload["payment_reconciliation"]:
+            row["closing_amount"] = row["expected_amount"]  # counted right; this test is about who/where
         frappe.set_user(OWNER)
         name = submit_closing_shift(json.dumps(payload, default=str))
         frappe.set_user("Administrator")
@@ -227,8 +229,14 @@ class TestClosingSecurity(IntegrationTestCase):
                 "user": OWNER,
                 "period_start_date": self.opening.period_start_date,
                 "period_end_date": frappe.utils.now_datetime(),
+                # Counted right (opening cash, no sales); this test is about who may close.
                 "payment_reconciliation": [
-                    {"mode_of_payment": self.mode, "opening_amount": 0, "expected_amount": 0, "closing_amount": 0}
+                    {
+                        "mode_of_payment": self.mode,
+                        "opening_amount": OPENING_AMOUNT,
+                        "expected_amount": OPENING_AMOUNT,
+                        "closing_amount": OPENING_AMOUNT,
+                    }
                 ],
             }
         )

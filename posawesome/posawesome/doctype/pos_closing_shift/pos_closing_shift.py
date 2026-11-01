@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, cstr, flt
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.access import check_shift_close_allowed
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
@@ -19,6 +19,7 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview
     get_payment_reconciliation_details,
 )
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation import (
+    build_closing_shift,
     make_closing_shift_from_opening,
     submit_closing_shift,
 )
@@ -59,7 +60,9 @@ class POSClosingShift(Document):
                 title=_("Invalid Opening Entry"),
             )
         self.check_closer()
+        self.refresh_expected_amounts()
         self.update_payment_reconciliation()
+        self.check_closing_variance()
         self.update_customer_credit_totals()
         self.update_same_shift_exchange_total()
 
@@ -72,6 +75,64 @@ class POSClosingShift(Document):
         opening = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
         check_shift_close_allowed(opening, frappe.session.user)
         self.company = opening.company
+
+    def refresh_expected_amounts(self):
+        # The expected amounts always come from the shift's own records, never
+        # from what the browser (or a Desk form) sent, so the variance check
+        # below can't be dodged by editing them to match the count.
+        if frappe.flags.in_install or frappe.flags.in_migrate or frappe.flags.in_patch:
+            return
+        opening = frappe.get_doc("POS Opening Shift", self.pos_opening_shift).as_dict()
+        fresh = {row.mode_of_payment: row for row in build_closing_shift(opening).payment_reconciliation}
+        counted = {row.mode_of_payment: row for row in self.payment_reconciliation}
+        for mode, row in fresh.items():
+            if mode in counted:
+                counted[mode].opening_amount = row.opening_amount
+                counted[mode].expected_amount = row.expected_amount
+            else:
+                self.append(
+                    "payment_reconciliation",
+                    {
+                        "mode_of_payment": mode,
+                        "opening_amount": row.opening_amount,
+                        "expected_amount": row.expected_amount,
+                        "closing_amount": 0,
+                    },
+                )
+        for mode, row in counted.items():
+            if mode not in fresh:
+                row.opening_amount = 0
+                row.expected_amount = 0
+
+    def check_closing_variance(self):
+        # A payment method off by more than the POS Profile's tolerance (either
+        # way) needs a reason, and a POS supervisor's approval when the profile
+        # asks for it. The closing still records the real count.
+        if frappe.flags.in_install or frappe.flags.in_migrate or frappe.flags.in_patch:
+            return
+        profile = frappe.get_cached_doc("POS Profile", self.pos_profile)
+        precision = cint(frappe.get_cached_value("System Settings", None, "currency_precision")) or 3
+        tolerance = profile.get("posa_closing_variance_tolerance")
+        tolerance = 0.5 if tolerance in (None, "") else flt(tolerance)
+        factor = 10**precision
+        off = [
+            d.mode_of_payment
+            for d in self.payment_reconciliation
+            if round(abs(flt(d.difference)) * factor) > round(tolerance * factor)
+        ]
+        if not off:
+            self.posa_variance_approved_by = None
+            return
+        if not cstr(self.posa_variance_reason).strip():
+            frappe.throw(
+                _(
+                    "The closing amounts for {0} differ from the expected amounts by more than {1}. Enter a reason to close the shift."
+                ).format(", ".join(off), frappe.format_value(tolerance, {"fieldtype": "Float", "precision": precision}))
+            )
+        if cint(profile.get("posa_closing_variance_needs_supervisor")):
+            self.posa_variance_approved_by = closing_variance_approver(self.pos_profile)
+        else:
+            self.posa_variance_approved_by = None
 
     def update_payment_reconciliation(self):
         # update the difference values in Payment Reconciliation child table
@@ -139,3 +200,29 @@ class POSClosingShift(Document):
     @frappe.whitelist()
     def get_payment_reconciliation_details(self):
         return get_payment_reconciliation_details(self)
+
+
+def closing_variance_approver(pos_profile):
+    """The POS supervisor approving an over-tolerance closing: the signed-in
+    user, or the terminal's active cashier (switched to by PIN) -- the same
+    rule as a below-cost sale override."""
+    from posawesome.posawesome.api.employees import _get_user_doc, _is_pos_supervisor
+    from posawesome.posawesome.api.terminal_state import get_active_terminal_cashier
+
+    session_user = frappe.session.user
+    if _is_pos_supervisor(_get_user_doc(session_user)):
+        return session_user
+    try:
+        cashier = get_active_terminal_cashier(pos_profile)
+    except frappe.PermissionError:
+        # Locked terminal / no PIN cashier: no supervisor is switched in.
+        frappe.clear_last_message()
+        cashier = None
+    if cashier and _is_pos_supervisor(_get_user_doc(cashier)):
+        return cashier
+    frappe.throw(
+        _(
+            "A POS supervisor must approve this closing because it differs from the expected amounts. Switch to a POS supervisor, then close the shift again."
+        ),
+        frappe.PermissionError,
+    )

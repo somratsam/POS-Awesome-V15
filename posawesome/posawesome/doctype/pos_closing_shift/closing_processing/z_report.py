@@ -187,4 +187,6 @@ def get_z_report_data(pos_closing_shift):
         "total_register_count": total_register_count,
         "payment_modes": payment_modes,
         "payment_reconciliation": payment_reconciliation,
+        "variance_reason": doc.get("posa_variance_reason") or "",
+        "variance_approved_by": doc.get("posa_variance_approved_by") or "",
     }
