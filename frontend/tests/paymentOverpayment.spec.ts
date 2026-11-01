@@ -202,9 +202,14 @@ describe("payment overpayment", () => {
 	describe("getUncoveredOverpayment", () => {
 		const isCash = (p: any) => isCashLikePaymentLine(p);
 
-		it("is zero when the excess is no larger than the cash taken", () => {
-			const payments = [line("Cash", "Cash", { amount: 10 }), line("Visa", "Bank", { amount: 100 })];
+		it("is zero when the excess is smaller than the cash taken", () => {
+			const payments = [line("Cash", "Cash", { amount: 30 }), line("Visa", "Bank", { amount: 80 })];
 			expect(getUncoveredOverpayment(payments, 10, isCash)).toBe(0);
+		});
+
+		it("is the whole excess when it equals all the cash taken (cash handed back in full)", () => {
+			const payments = [line("Cash", "Cash", { amount: 10 }), line("Visa", "Bank", { amount: 100 })];
+			expect(getUncoveredOverpayment(payments, 10, isCash)).toBe(10);
 		});
 
 		it("is the part of the excess beyond the cash taken", () => {
@@ -429,9 +434,19 @@ describe("payment overpayment", () => {
 			await expect(validate()).rejects.toThrow(/Over by 5/);
 		});
 
-		it("allows an excess no larger than the cash taken (it is change)", async () => {
+		it("blocks Cash 10 + Visa 100 on 100: the cash would be handed back in full", async () => {
 			const validate = makeValidator(
 				[line("Cash", "Cash", { amount: 10 }), line("Visa", "Bank", { amount: 100 })],
+				100,
+			);
+			await expect(validate()).rejects.toThrow(
+				"Over by 10: cash would be handed back in full. Reduce a card amount or remove the cash.",
+			);
+		});
+
+		it("allows an excess smaller than the cash taken (it is change)", async () => {
+			const validate = makeValidator(
+				[line("Cash", "Cash", { amount: 30 }), line("Visa", "Bank", { amount: 80 })],
 				100,
 			);
 			await expect(validate()).resolves.toBe(true);
@@ -459,7 +474,7 @@ describe("payment overpayment", () => {
 
 		it("counts the profile's configured cash mode as cash when deciding", async () => {
 			const validate = makeValidator(
-				[line("Drawer", "Bank", { amount: 20 }), line("Visa", "Bank", { amount: 100 })],
+				[line("Drawer", "Bank", { amount: 30 }), line("Visa", "Bank", { amount: 80 })],
 				100,
 				{ posa_cash_mode_of_payment: "Drawer" },
 			);

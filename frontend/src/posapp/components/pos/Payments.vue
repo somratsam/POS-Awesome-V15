@@ -52,8 +52,19 @@
 						v-if="is_cashback && invoice_doc"
 						class="payment-section payment-section--methods"
 					>
-						<div class="payment-section__header">
+						<div class="payment-section__header payment-section__header--with-action">
 							<h3 class="payment-section__title">{{ __("Payment Methods") }}</h3>
+							<v-btn
+								v-if="paymentClearControlsVisible"
+								size="small"
+								variant="text"
+								color="secondary"
+								prepend-icon="mdi-close-circle-outline"
+								data-test="payment-clear-all"
+								@click="clearPaymentLines"
+							>
+								{{ __("Clear payments") }}
+							</v-btn>
 						</div>
 						<PaymentMethods
 							:payments="visiblePaymentMethods"
@@ -69,6 +80,7 @@
 							:isGiftCardPayment="isGiftCardPayment"
 							:show-keyboard-shortcuts="counterGridMode"
 							:credit-only-return="returnsCreditOnlyPolicy"
+							:show-clear-controls="paymentClearControlsVisible"
 							@update-amount="handlePaymentAmountChange"
 							@set-full-amount="handleSetFullAmount"
 							@set-denomination="setPaymentToDenomination"
@@ -76,6 +88,7 @@
 							@request-payment="request_payment"
 							@set-rest-amount="handleSetRestAmount"
 							@open-gift-card="openGiftCardDialog"
+							@remove-payment="removePaymentLine"
 						/>
 						<PaymentGiftCardSection
 							:enabled="Boolean(pos_profile?.posa_use_gift_cards)"
@@ -1588,6 +1601,28 @@ const fillRemainingOptions = () => ({
 // Clicking a method: if another line already holds a staff-entered amount,
 // fill only what's still owed; otherwise fill the full amount as before.
 // Returns and credit sales keep the plain full-amount fill.
+// "Clear payments" and the per-line x: for when the customer changes how they
+// pay. Lines go back to 0 and are no longer staff-entered, so the next click
+// fills the full amount again. Loyalty, customer credit and gift card
+// redemptions live in their own sections and are left alone; charges already
+// made on the card machine still have to be voided there.
+const paymentClearControlsVisible = computed(() => canFillRemaining(false));
+
+const clearPaymentLines = () => {
+	clear_all_amounts();
+	paymentEditSequenceCounter.value = 0;
+	lastEditedPaymentSequence.value = {};
+};
+
+const removePaymentLine = (payment) => {
+	if (!payment?.mode_of_payment) return;
+	payment.amount = 0;
+	if (payment.base_amount !== undefined) {
+		payment.base_amount = 0;
+	}
+	delete lastEditedPaymentSequence.value[payment.mode_of_payment];
+};
+
 const handleSetFullAmount = (payment, isReturn) => {
 	if (!canFillRemaining(isReturn)) {
 		markPaymentCashierEntered(payment);
@@ -2433,6 +2468,13 @@ defineExpose({
 </script>
 
 <style scoped>
+.payment-section__header--with-action {
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--pos-space-2);
+}
+
 /* Remove readonly styling */
 .v-text-field--readonly {
 	cursor: text;

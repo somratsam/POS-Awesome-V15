@@ -41,6 +41,18 @@
 					>
 						Ctrl/⌘+{{ paymentIndex + 1 }}
 					</kbd>
+					<v-btn
+						v-if="showClearControls && Number(payment.amount)"
+						icon="mdi-close"
+						size="x-small"
+						variant="text"
+						color="secondary"
+						class="payment-method-card__remove"
+						:data-test="`payment-remove-${payment.mode_of_payment}`"
+						:aria-label="__('Remove {0} amount', [payment.mode_of_payment])"
+						:title="__('Remove {0} amount', [payment.mode_of_payment])"
+						@click="$emit('remove-payment', payment)"
+					></v-btn>
 				</div>
 			</div>
 
@@ -173,6 +185,8 @@ const props = defineProps({
 	},
 	showKeyboardShortcuts: Boolean,
 	creditOnlyReturn: Boolean,
+	// Sales only: shows the per-line remove (x) button.
+	showClearControls: Boolean,
 });
 
 const emit = defineEmits([
@@ -183,6 +197,7 @@ const emit = defineEmits([
 	"request-payment",
 	"set-rest-amount",
 	"open-gift-card",
+	"remove-payment",
 ]);
 
 const handlePrimaryAction = (payment) => {
@@ -255,6 +270,10 @@ const blurTarget = (event) => {
 	align-items: center;
 	flex-wrap: wrap;
 	justify-content: flex-end;
+}
+
+.payment-method-card__remove {
+	margin-inline-start: 2px;
 }
 
 .payment-method-card__badge {

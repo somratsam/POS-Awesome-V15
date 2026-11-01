@@ -19,7 +19,7 @@ import { resolvePosDocumentDoctype } from "../../../utils/posDocumentMode";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
 import { shouldApplyReturnRefundCap } from "../../../utils/paymentInitialization";
 import {
-	getUncoveredOverpayment,
+	getOverpaymentBlock,
 	isCashLikePaymentLine,
 } from "../../../utils/cashTender";
 import {
@@ -713,17 +713,18 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 
 			// Change can only be handed back from cash. An overpayment larger
 			// than the cash taken sits on a card/bank line, so the invoice would
-			// record change the drawer never received -- the cashier must
-			// correct the card amounts instead.
+			// record change the drawer never received; one equal to all the cash
+			// taken means the cards already cover the total and the cash would
+			// go straight back -- either way the cashier must correct the lines.
 			const isCashLine = (payment: any) =>
 				isCashLikePaymentLine(payment, profile);
-			const uncovered = getUncoveredOverpayment(
+			const block = getOverpaymentBlock(
 				doc.payments,
 				current_total_payments - invoice_total,
 				isCashLine,
 				prec,
 			);
-			if (uncovered > 0.001) {
+			if (block.reason === "cards") {
 				const nonCashLines = (doc.payments || [])
 					.filter(
 						(payment: any) =>
@@ -734,7 +735,15 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 				throw new Error(
 					__(
 						"Over by {0}: card payments exceed the amount due, and change can only be given from cash. Correct {1}.",
-						[formatFloat(uncovered, prec), nonCashLines.join(", ")],
+						[formatFloat(block.overBy, prec), nonCashLines.join(", ")],
+					),
+				);
+			}
+			if (block.reason === "cash_in_full") {
+				throw new Error(
+					__(
+						"Over by {0}: cash would be handed back in full. Reduce a card amount or remove the cash.",
+						[formatFloat(block.overBy, prec)],
 					),
 				);
 			}

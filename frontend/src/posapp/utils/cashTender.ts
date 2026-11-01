@@ -63,24 +63,52 @@ export const subtractAmounts = (
 	);
 
 /**
- * How much of an overpayment cannot be handed back as change.
+ * Why an overpayment can't be settled as change, and by how much it is over.
  *
- * Change can only come out of the cash that was actually taken, so an excess
- * over the amount due is fine up to the cash lines' total; anything beyond
- * that is money charged on a card/bank line that has nowhere to go.
+ * Change can only come out of the cash that was actually taken:
+ * - "cards": the excess is larger than the cash taken, so part of it sits on
+ *   card/bank lines that have nowhere to go (over by excess - cash).
+ * - "cash_in_full": the excess equals or exceeds all the cash taken, so the
+ *   cash would be handed straight back -- the cards alone already cover the
+ *   total, which is always a mistake (over by the whole excess).
  */
+export const getOverpaymentBlock = (
+	payments: PaymentLine[] | null | undefined,
+	excess: number,
+	isCashLike: (_payment: PaymentLine) => boolean,
+	precision = 2,
+): { reason: "cards" | "cash_in_full" | null; overBy: number } => {
+	const cashTaken = (Array.isArray(payments) ? payments : [])
+		.filter((payment) => isCashLike(payment))
+		.reduce(
+			(minor, payment) =>
+				minor + Math.max(toMinorUnits(payment?.amount, precision), 0),
+			0,
+		);
+	const excessMinor = Math.max(toMinorUnits(excess, precision), 0);
+	if (excessMinor <= 0) return { reason: null, overBy: 0 };
+	if (excessMinor > cashTaken) {
+		return {
+			reason: "cards",
+			overBy: fromMinorUnits(excessMinor - cashTaken, precision),
+		};
+	}
+	if (cashTaken > 0 && excessMinor >= cashTaken) {
+		return {
+			reason: "cash_in_full",
+			overBy: fromMinorUnits(excessMinor, precision),
+		};
+	}
+	return { reason: null, overBy: 0 };
+};
+
+/** The "Over by" amount shown on the payment screen (0 when settled fine). */
 export const getUncoveredOverpayment = (
 	payments: PaymentLine[] | null | undefined,
 	excess: number,
 	isCashLike: (_payment: PaymentLine) => boolean,
 	precision = 2,
-): number => {
-	const cashTaken = (Array.isArray(payments) ? payments : [])
-		.filter((payment) => isCashLike(payment))
-		.map((payment) => Math.max(Number(payment?.amount) || 0, 0));
-	const uncovered = subtractAmounts(Math.max(excess, 0), cashTaken, precision);
-	return uncovered > 0 ? uncovered : 0;
-};
+): number => getOverpaymentBlock(payments, excess, isCashLike, precision).overBy;
 
 export const normalizeProfilePaymentLines = (
 	payments: PaymentLine[] | null | undefined,
