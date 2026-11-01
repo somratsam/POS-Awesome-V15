@@ -56,7 +56,7 @@ def _install_stubs():
 
     closing_data_module.get_shift_invoice_rows = lambda doc: []
     closing_data_module.get_shift_line_discount_totals = lambda doc: {}
-    closing_data_module.get_payment_mode_counts = lambda sale_names, return_names: {}
+    closing_data_module.get_payment_mode_counts = lambda sale_names, return_names, **kwargs: {}
     closing_utils_module.get_base_value = lambda row, amount_field, base_field, conversion_rate=None: 0.0
 
     pos_access_module = types.ModuleType("posawesome.posawesome.api.pos_access")

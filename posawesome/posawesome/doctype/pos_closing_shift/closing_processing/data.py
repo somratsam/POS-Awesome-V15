@@ -124,6 +124,7 @@ def get_shift_invoice_rows(closing_shift_doc):
         "posa_redeemed_customer_credit",
         "total_taxes_and_charges",
         "base_total_taxes_and_charges",
+        "change_amount",
     ]
 
     rows = []
@@ -180,7 +181,9 @@ def get_same_shift_exchange_total(invoice_rows, pos_opening_shift, returning_cus
     return total
 
 
-def get_payment_mode_counts(sale_invoice_names, return_invoice_names):
+def get_payment_mode_counts(
+    sale_invoice_names, return_invoice_names, change_by_invoice=None, cash_mode_of_payment=None
+):
     """Return per-mode-of-payment transaction counts and totals, split by
     sale vs return invoices, for the given invoice name lists.
 
@@ -217,6 +220,22 @@ def get_payment_mode_counts(sale_invoice_names, return_invoice_names):
 
     accumulate(sale_invoice_names, "sale_total", "sale_count", is_return=False)
     accumulate(return_invoice_names, "return_total", "return_count", is_return=True)
+
+    # Cash is net of the change handed back, as in Payment Reconciliation and
+    # the ledger: a payment row holds what was tendered. Only for invoices
+    # with a cash row -- change with no cash row isn't taken off anything.
+    with_change = {name: flt(change) for name, change in (change_by_invoice or {}).items() if flt(change)}
+    if with_change and cash_mode_of_payment and cash_mode_of_payment in result:
+        with_cash_row = frappe.db.sql(
+            """
+            select distinct parent
+            from `tabSales Invoice Payment`
+            where parent in %(names)s and mode_of_payment = %(mode)s and amount > 0
+            """,
+            {"names": tuple(with_change), "mode": cash_mode_of_payment},
+            pluck=True,
+        )
+        result[cash_mode_of_payment]["sale_total"] -= sum(with_change[name] for name in with_cash_row)
 
     return result
 
