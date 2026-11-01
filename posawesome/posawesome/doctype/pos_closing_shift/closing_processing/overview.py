@@ -6,8 +6,8 @@ from posawesome.posawesome.api.credit_exchange import get_customers_with_same_sh
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
-    get_pos_invoices,
-    get_payments_entries,
+    fetch_shift_invoices,
+    fetch_shift_payment_entries,
 )
 
 
@@ -64,7 +64,7 @@ def get_closing_shift_overview(pos_opening_shift):
         "create_pos_invoice_instead_of_sales_invoice",
     )
     doctype = "POS Invoice" if use_pos_invoice else "Sales Invoice"
-    invoices = get_pos_invoices(opening_shift_doc.name, doctype, submit_printed=0)
+    invoices = fetch_shift_invoices(opening_shift_doc.name, doctype, submit_printed=0)
 
     total_invoices = len(invoices)
     company_currency_total = 0
@@ -177,7 +177,7 @@ def get_closing_shift_overview(pos_opening_shift):
         invoice_membership_cache[key] = bool(value and value == opening_shift_doc.name)
         return invoice_membership_cache[key]
 
-    payment_entries = get_payments_entries(opening_shift_doc.name)
+    payment_entries = fetch_shift_payment_entries(opening_shift_doc.name)
 
     payment_entry_names = [row.get("name") for row in payment_entries if row.get("name")]
     references_by_entry = defaultdict(list)

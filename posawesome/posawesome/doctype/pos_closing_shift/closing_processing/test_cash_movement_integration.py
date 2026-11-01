@@ -32,15 +32,17 @@ class DummyClosingShift:
 
 
 class TestClosingShiftCashMovementIntegration(unittest.TestCase):
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.get_payments_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.get_pos_invoices")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.fetch_shift_payment_entries")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.fetch_shift_invoices")
     @patch(
         "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.submit_printed_invoices"
     )
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.authorize_shift_close")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.frappe")
     def test_make_closing_shift_deducts_cash_movements_from_cash_expected(
         self,
         mock_frappe,
+        mock_authorize_shift_close,
         mock_submit_printed_invoices,
         mock_get_pos_invoices,
         mock_get_payments_entries,
@@ -65,6 +67,8 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
             "balance_details": [{"mode_of_payment": "Cash", "amount": 50}],
         }
 
+        # The closing is built from the stored opening shift the check returns.
+        mock_authorize_shift_close.return_value = SimpleNamespace(as_dict=lambda: opening_shift)
         result = creation.make_closing_shift_from_opening(json.dumps(opening_shift))
 
         self.assertEqual(result["closing_shift"], closing_doc)
@@ -79,8 +83,8 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_all")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.db.get_value")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_cached_value")

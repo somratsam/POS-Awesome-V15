@@ -246,8 +246,8 @@ class TestPOSClosingShift(unittest.TestCase):
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
     def test_overview_does_not_resubmit_printed_invoices(
         self,
@@ -288,8 +288,8 @@ class TestPOSClosingShift(unittest.TestCase):
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
     def test_overview_reports_loyalty_redemption_without_payment_reconciliation(
         self,
@@ -350,8 +350,8 @@ class TestPOSClosingShift(unittest.TestCase):
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_payments_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_pos_invoices")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
     def test_overview_excludes_return_loyalty_adjustments_from_redeemed_totals(
         self,
