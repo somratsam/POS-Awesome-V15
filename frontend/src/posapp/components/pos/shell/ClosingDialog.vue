@@ -43,6 +43,7 @@
 								:company-currency-symbol="companyCurrencySymbol"
 								:format-currency="formatCurrency"
 								:format-float="formatFloat"
+								:currency-precision="currency_precision"
 							/>
 						</v-col>
 					</v-row>
@@ -122,7 +123,7 @@ export default {
 			confirmSubmit,
 		} = useClosingShift(eventBus);
 
-		const { formatCurrency, formatFloat, currencySymbol } = useFormat();
+		const { formatCurrency, formatFloat, currencySymbol, currency_precision } = useFormat();
 		const translate = (t) => window.__(t);
 
 		const summaryFormatters = {
@@ -252,6 +253,7 @@ export default {
 			// Expose formatters used in template
 			formatCurrency,
 			formatFloat,
+			currency_precision,
 			formatCurrencyWithSymbol: summaryFormatters.formatCurrencyWithSymbol,
 			shouldShowCompanyEquivalent: summary.shouldShowCompanyEquivalent,
 			showExchangeRates: summary.showExchangeRates,

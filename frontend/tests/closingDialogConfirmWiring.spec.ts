@@ -24,4 +24,11 @@ describe("ClosingDialog wiring for the Close Shift confirmation", () => {
 			/if \(confirmCloseDialog\.value\) \{\s*cancelConfirm\(\);\s*return;\s*\}\s*closeDialog\(\);/,
 		);
 	});
+
+	it("passes the currency precision to the closing amounts table (3 decimals for OMR)", () => {
+		const tag = source.slice(source.indexOf("<PaymentReconciliation"), source.indexOf("/>", source.indexOf("<PaymentReconciliation")));
+		expect(tag).toContain(':currency-precision="currency_precision"');
+		expect(source).toMatch(/const \{[^}]*\bcurrency_precision\b[^}]*\} = useFormat\(\);/);
+		expect(source).toMatch(/return \{[\s\S]*\n\t\t\tcurrency_precision,\n/);
+	});
 });

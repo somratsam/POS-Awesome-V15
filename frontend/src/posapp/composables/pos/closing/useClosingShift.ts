@@ -1,4 +1,5 @@
 import { ref, watch } from "vue";
+import { normalizeClosingAmounts } from "../../../utils/closingAmount";
 
 declare const frappe: any;
 
@@ -284,11 +285,14 @@ export function useClosingShift(eventBus: any) {
 		}
 	};
 
+	// An empty closing amount counts as 0 and is stored as 0, never blank or
+	// null; only a value that isn't a number blocks the close.
 	const hasValidClosingAmounts = () => {
 		const payments =
 			dialog_data.value.payment_reconciliation ||
 			dialog_data.value.payments ||
 			[];
+		normalizeClosingAmounts(payments);
 		return !payments.some((p: any) => isNaN(parseFloat(p.closing_amount)));
 	};
 

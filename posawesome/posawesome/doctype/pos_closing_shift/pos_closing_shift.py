@@ -66,6 +66,8 @@ class POSClosingShift(Document):
         # get default precision for site
         precision = frappe.get_cached_value("System Settings", None, "currency_precision") or 3
         for d in self.payment_reconciliation:
+            # A closing amount left empty is 0, never blank or null.
+            d.closing_amount = flt(d.closing_amount, precision)
             d.difference = +flt(d.closing_amount, precision) - flt(d.expected_amount, precision)
 
     def update_customer_credit_totals(self):
