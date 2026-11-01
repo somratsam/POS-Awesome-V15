@@ -88,13 +88,31 @@ def make_closing_shift_from_opening(opening_shift):
     except (TypeError, ValueError):
         sent = opening_shift
     opening_shift = authorize_shift_close(sent).as_dict()
+    skipped_printed_invoices = submit_printed_invoices(
+        opening_shift.get("name"), _shift_invoice_doctype(opening_shift)
+    )
+    return {
+        "closing_shift": build_closing_shift(opening_shift),
+        "skipped_printed_invoices": skipped_printed_invoices,
+    }
+
+
+def _shift_invoice_doctype(opening_shift):
     use_pos_invoice = frappe.db.get_value(
         "POS Profile",
         opening_shift.get("pos_profile"),
         "create_pos_invoice_instead_of_sales_invoice",
     )
-    doctype = "POS Invoice" if use_pos_invoice else "Sales Invoice"
-    skipped_printed_invoices = submit_printed_invoices(opening_shift.get("name"), doctype)
+    return "POS Invoice" if use_pos_invoice else "Sales Invoice"
+
+
+def build_closing_shift(opening_shift):
+    """An unsaved POS Closing Shift for `opening_shift` (a dict of the stored
+    opening shift), with the expected amounts worked out from the shift's own
+    invoices, Payment Entries and cash movements. No side effects, so the
+    server can rebuild it at submit time instead of trusting the browser's
+    expected figures."""
+    doctype = _shift_invoice_doctype(opening_shift)
     closing_shift = frappe.new_doc("POS Closing Shift")
     closing_shift.pos_opening_shift = opening_shift.get("name")
     closing_shift.period_start_date = opening_shift.get("period_start_date")
@@ -244,10 +262,7 @@ def make_closing_shift_from_opening(opening_shift):
     closing_shift.set("taxes", taxes)
     closing_shift.set("pos_payments", pos_payments_table)
 
-    return {
-        "closing_shift": closing_shift,
-        "skipped_printed_invoices": skipped_printed_invoices,
-    }
+    return closing_shift
 
 
 @frappe.whitelist()

@@ -14,9 +14,38 @@ describe("ClosingDialog wiring for the Close Shift confirmation", () => {
 	});
 
 	it("renders the confirmation with Go Back and Close Shift wired", () => {
-		expect(source).toMatch(
-			/<CloseShiftConfirmDialog\s+:model-value="confirmCloseDialog"\s+@go-back="cancelConfirm"\s+@confirm="confirmSubmit"/,
-		);
+		const tag = source.slice(source.indexOf("<CloseShiftConfirmDialog"), source.indexOf("/>", source.indexOf("<CloseShiftConfirmDialog")));
+		expect(tag).toContain(':model-value="confirmCloseDialog"');
+		expect(tag).toContain('@go-back="cancelConfirm"');
+		expect(tag).toContain('@confirm="confirmClose"');
+	});
+
+	it("passes the closing variance figures and the reason to the confirmation", () => {
+		const tag = source.slice(source.indexOf("<CloseShiftConfirmDialog"), source.indexOf("/>", source.indexOf("<CloseShiftConfirmDialog")));
+		for (const binding of [
+			':variances="closingVariances"',
+			':tolerance="closingVarianceTolerance"',
+			':hide-amounts="Boolean(pos_profile && pos_profile.hide_expected_amount)"',
+			':needs-supervisor="closingVarianceNeedsSupervisor"',
+			':can-approve="canApproveClosingVariance"',
+			':reason="varianceReason"',
+			'@update:reason="(value) => (varianceReason = value)"',
+		]) {
+			expect(tag).toContain(binding);
+		}
+		expect(source).toContain("getClosingVariances(\n\t\t\t\tdialog_data.value?.payment_reconciliation,");
+		expect(source).toContain("resolveClosingVarianceTolerance(pos_profile.value)");
+		expect(source).toMatch(/employeeStore\.currentCashier\?\.is_supervisor/);
+	});
+
+	it("sends the reason with the close, and starts each closing with an empty reason", () => {
+		const body = source.slice(source.indexOf("const confirmClose = () => {"), source.indexOf("};", source.indexOf("const confirmClose = () => {")));
+		expect(body).toContain("dialog_data.value.posa_variance_reason = closingVariances.value.length");
+		expect(body).toContain("confirmSubmit();");
+		expect(source).toMatch(/eventBus\.on\("open_ClosingDialog", \(data\) => \{\s*closingDialog\.value = true;\s*varianceReason\.value = "";/);
+		for (const name of ["varianceReason,", "closingVariances,", "confirmClose,", "canApproveClosingVariance,"]) {
+			expect(source).toContain(`\t\t\t${name}`);
+		}
 	});
 
 	it("Esc with the confirmation open only goes back, keeping the closing dialog", () => {

@@ -78,14 +78,27 @@
 	</v-dialog>
 	<CloseShiftConfirmDialog
 		:model-value="confirmCloseDialog"
+		:variances="closingVariances"
+		:tolerance="closingVarianceTolerance"
+		:hide-amounts="Boolean(pos_profile && pos_profile.hide_expected_amount)"
+		:needs-supervisor="closingVarianceNeedsSupervisor"
+		:can-approve="canApproveClosingVariance"
+		:reason="varianceReason"
+		:format-amount="(value) => formatCurrency(value, currency_precision)"
+		@update:reason="(value) => (varianceReason = value)"
 		@go-back="cancelConfirm"
-		@confirm="confirmSubmit"
+		@confirm="confirmClose"
 	/>
 </template>
 
 <script>
 import { useUIStore } from "../../../stores/uiStore.js";
-import { ref, inject, onMounted, onBeforeUnmount, watch } from "vue";
+import { computed, ref, inject, onMounted, onBeforeUnmount, watch } from "vue";
+import { useEmployeeStore } from "../../../stores/employeeStore";
+import {
+	getClosingVariances,
+	resolveClosingVarianceTolerance,
+} from "../../../utils/closingVariance";
 import { useClosingShift } from "../../../composables/pos/closing/useClosingShift";
 import { useClosingSummary } from "../../../composables/pos/closing/useClosingSummary";
 
@@ -124,6 +137,34 @@ export default {
 		} = useClosingShift(eventBus);
 
 		const { formatCurrency, formatFloat, currencySymbol, currency_precision } = useFormat();
+		const employeeStore = useEmployeeStore();
+
+		// Closing amounts off by more than the POS Profile's tolerance need a
+		// reason (and a POS supervisor when the profile asks); the server
+		// re-checks it against its own expected amounts.
+		const varianceReason = ref("");
+		const closingVarianceTolerance = computed(() => resolveClosingVarianceTolerance(pos_profile.value));
+		const closingVarianceNeedsSupervisor = computed(() =>
+			Boolean(Number(pos_profile.value?.posa_closing_variance_needs_supervisor || 0)),
+		);
+		const closingVariances = computed(() =>
+			getClosingVariances(
+				dialog_data.value?.payment_reconciliation,
+				closingVarianceTolerance.value,
+				currency_precision.value,
+			),
+		);
+		const canApproveClosingVariance = computed(
+			() =>
+				Boolean(employeeStore.currentCashier?.is_supervisor) ||
+				Boolean(window.frappe?.user?.has_role?.("POS Awesome Supervisor")),
+		);
+		const confirmClose = () => {
+			dialog_data.value.posa_variance_reason = closingVariances.value.length
+				? String(varianceReason.value || "").trim()
+				: null;
+			confirmSubmit();
+		};
 		const translate = (t) => window.__(t);
 
 		const summaryFormatters = {
@@ -205,6 +246,7 @@ export default {
 			if (eventBus) {
 				eventBus.on("open_ClosingDialog", (data) => {
 					closingDialog.value = true;
+					varianceReason.value = "";
 					dialog_data.value = data;
 					fetchOverview(data.pos_opening_shift, pos_profile.value?.currency);
 				});
@@ -254,6 +296,12 @@ export default {
 			formatCurrency,
 			formatFloat,
 			currency_precision,
+			varianceReason,
+			closingVariances,
+			closingVarianceTolerance,
+			closingVarianceNeedsSupervisor,
+			canApproveClosingVariance,
+			confirmClose,
 			formatCurrencyWithSymbol: summaryFormatters.formatCurrencyWithSymbol,
 			shouldShowCompanyEquivalent: summary.shouldShowCompanyEquivalent,
 			showExchangeRates: summary.showExchangeRates,
