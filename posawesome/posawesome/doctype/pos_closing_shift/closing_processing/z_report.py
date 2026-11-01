@@ -89,6 +89,7 @@ def get_z_report_data(pos_closing_shift):
     net_excl_vat = 0.0
     sale_names = []
     return_names = []
+    sale_change = {}
 
     for row in invoice_rows:
         conversion_rate = row.get("conversion_rate")
@@ -107,6 +108,7 @@ def get_z_report_data(pos_closing_shift):
             total_sales += base_grand_total
             sale_count += 1
             sale_names.append(row.get("name"))
+            sale_change[row.get("name")] = flt(row.get("change_amount"))
             items_sold += flt(row.get("total_qty"))
             # Invoice-level discount plus the discounts on its item lines
             # (Disc %), which the parent discount_amount doesn't include.
@@ -135,6 +137,10 @@ def get_z_report_data(pos_closing_shift):
     )
     store_name = get_store_name(pos_profile_doc) if pos_profile_doc else doc.pos_profile
 
+    # The same cash mode Payment Reconciliation uses (creation.build_closing_shift).
+    cash_mode_of_payment = (
+        frappe.db.get_value("POS Profile", doc.pos_profile, "posa_cash_mode_of_payment") or "Cash"
+    )
     payment_modes = {
         mode: {
             "sale_count": entry.get("sale_count", 0),
@@ -142,7 +148,12 @@ def get_z_report_data(pos_closing_shift):
             "return_count": entry.get("return_count", 0),
             "return_total": flt(entry.get("return_total"), CURRENCY_PRECISION),
         }
-        for mode, entry in get_payment_mode_counts(sale_names, return_names).items()
+        for mode, entry in get_payment_mode_counts(
+            sale_names,
+            return_names,
+            change_by_invoice=sale_change,
+            cash_mode_of_payment=cash_mode_of_payment,
+        ).items()
     }
 
     payment_reconciliation = [

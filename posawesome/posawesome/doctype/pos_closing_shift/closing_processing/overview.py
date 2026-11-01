@@ -487,6 +487,29 @@ def get_closing_shift_overview(pos_opening_shift):
                 conversion_rate,
             )
 
+        # Cash is net of the change handed back, as in Payment Reconciliation
+        # and the ledger: the payment row holds what was tendered. Only when
+        # the invoice has a cash row; change paid through an overpayment
+        # Payment Entry comes off further down.
+        if change_amount and not has_overpayment_entry and cash_mode_of_payment:
+            cash_row = next(
+                (
+                    payment
+                    for payment in invoice.get("payments", [])
+                    if payment.get("mode_of_payment") == cash_mode_of_payment and flt(payment.get("amount")) > 0
+                ),
+                None,
+            )
+            if cash_row:
+                accumulate_payment(
+                    payments_by_mode,
+                    cash_mode_of_payment,
+                    resolve_payment_currency(cash_row, invoice_currency),
+                    -change_amount,
+                    -get_base_value(invoice, "change_amount", "base_change_amount", conversion_rate),
+                    conversion_rate,
+                )
+
     # "Exchanges Today": delegates the "which customers had a same-shift
     # return" question to get_customers_with_same_shift_return() -- the
     # single canonical check also used by the Z Report, the receipt print

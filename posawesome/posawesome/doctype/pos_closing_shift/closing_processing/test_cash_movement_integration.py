@@ -132,6 +132,8 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         self.assertEqual(len(cash_expected["by_currency"]), 1)
         self.assertAlmostEqual(cash_expected["by_currency"][0]["total"], 159.3, places=3)
         self.assertAlmostEqual(result["change_returned"]["company_currency_total"], 10.7, places=3)
+        # Payments by Mode shows the cash kept, net of the change: 139.300, not 150.000.
+        self.assertEqual(_payments_by_mode(result), {"Cash": 139.3})
 
     def test_overview_expected_cash_matches_reconciliation_with_split_payments_and_returns(self):
         # Split card + cash with change, a cash-only sale, a credit-only return
@@ -152,6 +154,23 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         self.assertAlmostEqual(result["cash_expected"]["company_currency_total"], 70, places=3)
         self.assertAlmostEqual(result["cash_expected"]["cash_taken"], 50, places=3)
         self.assertAlmostEqual(reconciliation["Visa"].expected_amount, 60, places=3)
+        # 40 + 30 - 15 refunded - 5 out; card payments never carry change.
+        self.assertEqual(_payments_by_mode(result), {"Cash": 50, "Visa": 60})
+
+    def test_change_without_a_cash_row_is_not_taken_off_cash(self):
+        # An older card-only overpayment turned into change has no cash row:
+        # nothing comes off cash, the same as Payment Reconciliation.
+        result, reconciliation = _overview_and_reconciliation(
+            balance={"Cash": 20, "Visa": 0},
+            invoices=[
+                _invoice("SINV-1", 100, [("Visa", 110)], change=10),
+                _invoice("SINV-2", 30, [("Cash", 30)]),
+            ],
+        )
+
+        self.assertEqual(_payments_by_mode(result), {"Cash": 30, "Visa": 110})
+        self.assertAlmostEqual(reconciliation["Cash"].expected_amount, 50, places=3)
+        self.assertAlmostEqual(result["cash_expected"]["company_currency_total"], 50, places=3)
 
 
 OVERVIEW = "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview"
@@ -170,6 +189,10 @@ class _ClosingShift(DummyClosingShift):
 
 class _Row(dict):
     __getattr__ = dict.get
+
+
+def _payments_by_mode(result):
+    return {row["mode_of_payment"]: round(row["company_currency_total"], 3) for row in result["payments_by_mode"]}
 
 
 def _invoice(name, grand_total, payments, change=0, is_return=0):
