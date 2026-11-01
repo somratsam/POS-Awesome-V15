@@ -706,6 +706,35 @@ def get_closing_shift_overview(pos_opening_shift):
                 )
                 cash_expected_company_currency_total += flt(row["company_currency_total"])
 
+    # Expected Cash is what should be in the drawer, so it starts from the
+    # opening float -- the same figure as the Cash row of Payment
+    # Reconciliation, which the closing variance rule checks. Payments by
+    # Mode stays cash taken only.
+    cash_taken_company_currency_total = cash_expected_company_currency_total
+    opening_cash = 0
+    if cash_mode_of_payment:
+        for detail in getattr(opening_shift_doc, "balance_details", None) or []:
+            if isinstance(detail, dict):
+                detail = frappe._dict(detail)
+            if getattr(detail, "mode_of_payment", None) == cash_mode_of_payment:
+                opening_cash += flt(getattr(detail, "amount", 0))
+    if opening_cash:
+        company_row = next(
+            (row for row in cash_expected_totals if row["currency"] == company_currency),
+            None,
+        )
+        if not company_row:
+            company_row = {
+                "currency": company_currency,
+                "total": 0,
+                "company_currency_total": 0,
+                "exchange_rates": [],
+            }
+            cash_expected_totals.append(company_row)
+        company_row["total"] = flt(company_row["total"]) + opening_cash
+        company_row["company_currency_total"] = flt(company_row["company_currency_total"]) + opening_cash
+        cash_expected_company_currency_total += opening_cash
+
     average_invoice_value = 0
     if sale_invoices_count:
         average_invoice_value = gross_company_currency_total / sale_invoices_count
@@ -842,6 +871,8 @@ def get_closing_shift_overview(pos_opening_shift):
         "cash_expected": {
             "mode_of_payment": cash_mode_of_payment,
             "company_currency_total": flt(cash_expected_company_currency_total),
+            "opening_amount": flt(opening_cash),
+            "cash_taken": flt(cash_taken_company_currency_total),
             "by_currency": sorted(
                 cash_expected_totals,
                 key=lambda row: (row.get("currency") or ""),

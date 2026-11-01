@@ -24,6 +24,7 @@
 								:customer-credit-issued-summary="customerCreditIssuedSummary"
 								:customer-credit-issued-by-currency="customerCreditIssuedByCurrency"
 								:payments-by-mode="paymentsByMode"
+								:hide-expected-amounts="hideExpectedAmounts"
 								:overview-company-currency="overviewCompanyCurrency"
 								:format-currency-with-symbol="formatCurrencyWithSymbol"
 								:should-show-company-equivalent="shouldShowCompanyEquivalent"
