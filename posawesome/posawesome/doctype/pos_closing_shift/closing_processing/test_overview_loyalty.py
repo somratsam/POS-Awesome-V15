@@ -94,6 +94,10 @@ def _load_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    # Expected Cash comes from the Payment Reconciliation build (covered in
+    # test_cash_movement_integration), which needs the real frappe stubbed
+    # out here; these tests are about other figures.
+    module.drawer_cash_expected = lambda *args: (0.0, 0.0)
     return module
 
 

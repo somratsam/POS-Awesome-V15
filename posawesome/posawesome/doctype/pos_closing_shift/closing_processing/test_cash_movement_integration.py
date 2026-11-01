@@ -80,107 +80,162 @@ class TestClosingShiftCashMovementIntegration(unittest.TestCase):
         self.assertEqual(row.opening_amount, 50)
         self.assertEqual(row.expected_amount, 30)
 
-    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.api.credit_exchange.frappe")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_all")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.db.get_value")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_cached_value")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_doc")
-    def test_overview_includes_cash_movements_and_adjusts_cash_expected(
-        self,
-        mock_get_doc,
-        mock_get_cached_value,
-        mock_db_get_value,
-        mock_get_all,
-        mock_get_pos_invoices,
-        mock_get_payments_entries,
-        mock_get_authorized_pos_profile,
-        mock_exchange_frappe,
-        mock_exchange_auth,
-    ):
-        mock_get_pos_invoices.return_value = []
-        mock_get_payments_entries.return_value = []
-        mock_get_doc.return_value = SimpleNamespace(
-            doctype="POS Opening Shift",
-            name="POS-OPEN-1",
-            pos_profile="POS-PROFILE-1",
-            company="My Co",
+    def test_overview_includes_cash_movements_and_adjusts_cash_expected(self):
+        result, reconciliation = _overview_and_reconciliation(
+            balance={"Cash": 0},
+            invoices=[],
+            movements=[
+                {"movement_type": "Expense", "amount": 35},
+                {"movement_type": "Deposit", "amount": 15},
+            ],
         )
-        mock_get_cached_value.return_value = "USD"
-        mock_db_get_value.side_effect = lambda dt, name, field: (
-            0 if field == "create_pos_invoice_instead_of_sales_invoice" else "Cash"
-        )
-        mock_get_all.return_value = [
-            {"movement_type": "Expense", "amount": 35},
-            {"movement_type": "Deposit", "amount": 15},
-        ]
-
-        _resolve_opening_shift(mock_exchange_frappe)
-        result = overview.get_closing_shift_overview("POS-OPEN-1")
 
         self.assertEqual(result["cash_movements"]["count"], 2)
         self.assertEqual(result["cash_movements"]["company_currency_total"], 50)
+        self.assertEqual(reconciliation["Cash"].expected_amount, -50)
         self.assertEqual(result["cash_expected"]["company_currency_total"], -50)
         by_type = {row["movement_type"]: row["total"] for row in result["cash_movements"]["by_type"]}
         self.assertEqual(by_type["Expense"], 35)
         self.assertEqual(by_type["Deposit"], 15)
 
-    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.api.credit_exchange.frappe")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_all")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.db.get_value")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_cached_value")
-    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe.get_doc")
-    def test_overview_expected_cash_includes_opening_float(
-        self,
-        mock_get_doc,
-        mock_get_cached_value,
-        mock_db_get_value,
-        mock_get_all,
-        mock_get_pos_invoices,
-        mock_get_payments_entries,
-        mock_get_authorized_pos_profile,
-        mock_exchange_frappe,
-        mock_exchange_auth,
-    ):
-        # Same shift as test_make_closing_shift_deducts_cash_movements_from_cash_expected:
-        # 50 opening cash, 20 out as cash movements, no sales. Payment
-        # Reconciliation expects 30 in the drawer; Expected Cash must agree.
-        mock_get_pos_invoices.return_value = []
-        mock_get_payments_entries.return_value = []
-        mock_get_doc.return_value = SimpleNamespace(
-            doctype="POS Opening Shift",
-            name="POS-OPEN-1",
-            pos_profile="POS-PROFILE-1",
-            company="My Co",
-            balance_details=[
-                SimpleNamespace(mode_of_payment="Cash", amount=50),
-                SimpleNamespace(mode_of_payment="Visa", amount=7),
-            ],
+    def test_overview_expected_cash_includes_opening_float(self):
+        # 50 opening cash, 20 out as a cash movement, no sales.
+        result, reconciliation = _overview_and_reconciliation(
+            balance={"Cash": 50, "Visa": 7},
+            invoices=[],
+            movements=[{"movement_type": "Expense", "amount": 20}],
         )
-        mock_get_cached_value.return_value = "USD"
-        mock_db_get_value.side_effect = lambda dt, name, field: (
-            0 if field == "create_pos_invoice_instead_of_sales_invoice" else "Cash"
-        )
-        mock_get_all.return_value = [{"movement_type": "Expense", "amount": 20}]
 
-        _resolve_opening_shift(mock_exchange_frappe)
-        result = overview.get_closing_shift_overview("POS-OPEN-1")
-
+        self.assertEqual(reconciliation["Cash"].expected_amount, 30)
         cash_expected = result["cash_expected"]
         self.assertEqual(cash_expected["company_currency_total"], 30)
         self.assertEqual(cash_expected["opening_amount"], 50)
         self.assertEqual(cash_expected["cash_taken"], -20)
-        self.assertEqual([(row["currency"], row["total"]) for row in cash_expected["by_currency"]], [("USD", 30)])
-        # Payments by Mode stays cash taken, without the float.
+        self.assertEqual([(row["currency"], row["total"]) for row in cash_expected["by_currency"]], [("OMR", 30)])
         cash_payments = [row for row in result["payments_by_mode"] if row["mode_of_payment"] == "Cash"]
         self.assertEqual([row["company_currency_total"] for row in cash_payments], [-20])
+
+    def test_overview_expected_cash_takes_off_change_given(self):
+        # Hand test on staging: 20.000 opening, one 139.300 sale, the customer
+        # paid 150.000 in cash and got 10.700 change. The drawer should hold
+        # 159.300 -- the card used to say 170.000.
+        result, reconciliation = _overview_and_reconciliation(
+            balance={"Cash": 20, "Visa": 0},
+            invoices=[_invoice("SINV-1", 139.3, [("Cash", 150)], change=10.7)],
+        )
+
+        self.assertAlmostEqual(reconciliation["Cash"].expected_amount, 159.3, places=3)
+        cash_expected = result["cash_expected"]
+        self.assertAlmostEqual(cash_expected["company_currency_total"], 159.3, places=3)
+        self.assertEqual(cash_expected["opening_amount"], 20)
+        self.assertAlmostEqual(cash_expected["cash_taken"], 139.3, places=3)
+        self.assertEqual(len(cash_expected["by_currency"]), 1)
+        self.assertAlmostEqual(cash_expected["by_currency"][0]["total"], 159.3, places=3)
+        self.assertAlmostEqual(result["change_returned"]["company_currency_total"], 10.7, places=3)
+
+    def test_overview_expected_cash_matches_reconciliation_with_split_payments_and_returns(self):
+        # Split card + cash with change, a cash-only sale, a credit-only return
+        # (no payment rows) and a cash refund return, plus a cash movement.
+        result, reconciliation = _overview_and_reconciliation(
+            balance={"Cash": 20, "Visa": 0},
+            invoices=[
+                _invoice("SINV-1", 100, [("Visa", 60), ("Cash", 50)], change=10),
+                _invoice("SINV-2", 30, [("Cash", 30)]),
+                _invoice("SINV-RET-1", -20, [], is_return=1),
+                _invoice("SINV-RET-2", -15, [("Cash", -15)], is_return=1),
+            ],
+            movements=[{"movement_type": "Expense", "amount": 5}],
+        )
+
+        # 20 opening + 40 (50 less 10 change) + 30 - 15 refunded - 5 out = 70
+        self.assertAlmostEqual(reconciliation["Cash"].expected_amount, 70, places=3)
+        self.assertAlmostEqual(result["cash_expected"]["company_currency_total"], 70, places=3)
+        self.assertAlmostEqual(result["cash_expected"]["cash_taken"], 50, places=3)
+        self.assertAlmostEqual(reconciliation["Visa"].expected_amount, 60, places=3)
+
+
+OVERVIEW = "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview"
+CREATION = "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation"
+
+
+class _OpeningShift(SimpleNamespace):
+    def as_dict(self):
+        return dict(vars(self))
+
+
+class _ClosingShift(DummyClosingShift):
+    def get(self, key, default=None):
+        return self.tables.get(key, default)
+
+
+class _Row(dict):
+    __getattr__ = dict.get
+
+
+def _invoice(name, grand_total, payments, change=0, is_return=0):
+    return _Row(
+        name=name,
+        currency="OMR",
+        conversion_rate=1,
+        posting_date="2026-11-01",
+        customer="Sample Customer",
+        is_return=is_return,
+        grand_total=grand_total,
+        base_grand_total=grand_total,
+        rounded_total=grand_total,
+        net_total=grand_total,
+        base_net_total=grand_total,
+        total_qty=1,
+        taxes=[],
+        change_amount=change,
+        base_change_amount=change,
+        payments=[_Row(mode_of_payment=mode, amount=amount, base_amount=amount) for mode, amount in payments],
+    )
+
+
+def _overview_and_reconciliation(balance, invoices, movements=()):
+    """Run the closing overview and the Payment Reconciliation build
+    (creation.build_closing_shift, which the closing variance rule uses) on
+    the same shift, so a test can check the two agree."""
+    opening = _OpeningShift(
+        doctype="POS Opening Shift",
+        name="POS-OPEN-1",
+        pos_profile="POS-PROFILE-1",
+        company="My Co",
+        user="cashier@example.com",
+        period_start_date="2026-11-01 08:00:00",
+        balance_details=[{"mode_of_payment": mode, "amount": amount} for mode, amount in balance.items()],
+    )
+    movements = list(movements)
+    with patch(f"{OVERVIEW}.frappe.get_doc", return_value=opening), patch(
+        f"{OVERVIEW}.frappe.get_cached_value", return_value="OMR"
+    ), patch(
+        f"{OVERVIEW}.frappe.db.get_value",
+        side_effect=lambda doctype, name, field, *args, **kwargs: (
+            0 if field == "create_pos_invoice_instead_of_sales_invoice" else "Cash"
+        ),
+    ), patch(f"{OVERVIEW}.frappe.get_all", return_value=movements), patch(
+        f"{OVERVIEW}.fetch_shift_invoices", return_value=invoices
+    ), patch(f"{OVERVIEW}.fetch_shift_payment_entries", return_value=[]), patch(
+        f"{OVERVIEW}.get_authorized_pos_profile"
+    ), patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile"), patch(
+        "posawesome.posawesome.api.credit_exchange.frappe"
+    ) as exchange_frappe, patch(f"{CREATION}.frappe") as creation_frappe, patch(
+        f"{CREATION}.fetch_shift_invoices", return_value=invoices
+    ), patch(f"{CREATION}.fetch_shift_payment_entries", return_value=[]):
+        creation_frappe.get_cached_value.return_value = "OMR"
+        creation_frappe.get_value.return_value = "Cash"
+        creation_frappe.db.get_value.return_value = 0
+        creation_frappe.get_all.return_value = [{"amount": row["amount"]} for row in movements]
+        creation_frappe.utils.get_datetime.return_value = "2026-11-01 20:00:00"
+        creation_frappe.new_doc.side_effect = lambda doctype: _ClosingShift()
+        creation_frappe._dict.side_effect = lambda d: SimpleNamespace(**d)
+        _resolve_opening_shift(exchange_frappe)
+
+        result = overview.get_closing_shift_overview("POS-OPEN-1")
+        closing = creation.build_closing_shift(opening.as_dict())
+    reconciliation = {row.mode_of_payment: row for row in closing.get("payment_reconciliation")}
+    return result, reconciliation
 
 
 if __name__ == "__main__":

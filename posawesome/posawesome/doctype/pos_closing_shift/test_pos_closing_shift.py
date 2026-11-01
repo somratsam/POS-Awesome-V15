@@ -243,6 +243,12 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result[0].invoice, "SINV-RET-0001")
         self.assertEqual(result[0].return_against, "ACC-SINV-2026-00222")
 
+    # Expected Cash comes from the Payment Reconciliation build, covered in
+    # test_cash_movement_integration; these tests are about other figures.
+    @patch(
+        "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.drawer_cash_expected",
+        new=lambda *args: (0.0, 0.0),
+    )
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
@@ -285,6 +291,12 @@ class TestPOSClosingShift(unittest.TestCase):
         )
         mock_exchange_auth.assert_called_once_with("POS-PROFILE-1", company="My Co")
 
+    # Expected Cash comes from the Payment Reconciliation build, covered in
+    # test_cash_movement_integration; these tests are about other figures.
+    @patch(
+        "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.drawer_cash_expected",
+        new=lambda *args: (0.0, 0.0),
+    )
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
@@ -347,6 +359,12 @@ class TestPOSClosingShift(unittest.TestCase):
         self.assertEqual(result["loyalty_redemption"]["count"], 1)
         self.assertEqual(result["payments_by_mode"][0]["company_currency_total"], 90)
 
+    # Expected Cash comes from the Payment Reconciliation build, covered in
+    # test_cash_movement_integration; these tests are about other figures.
+    @patch(
+        "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.drawer_cash_expected",
+        new=lambda *args: (0.0, 0.0),
+    )
     @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
     @patch("posawesome.posawesome.api.credit_exchange.frappe")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
