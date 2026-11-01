@@ -2,9 +2,10 @@ import frappe
 from frappe import _
 from frappe.utils import flt, json
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
+from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.access import authorize_shift_close
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
-    get_pos_invoices,
-    get_payments_entries,
+    fetch_shift_invoices,
+    fetch_shift_payment_entries,
 )
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.invoices import (
     submit_printed_invoices,
@@ -80,7 +81,13 @@ def normalize_pos_payment_references(closing_shift_doc):
 
 @frappe.whitelist()
 def make_closing_shift_from_opening(opening_shift):
-    opening_shift = json.loads(opening_shift)
+    # Only the shift's name is taken from the browser; the closing is built
+    # from the stored opening shift (its user, profile and opening amounts).
+    try:
+        sent = json.loads(opening_shift)
+    except (TypeError, ValueError):
+        sent = opening_shift
+    opening_shift = authorize_shift_close(sent).as_dict()
     use_pos_invoice = frappe.db.get_value(
         "POS Profile",
         opening_shift.get("pos_profile"),
@@ -109,7 +116,7 @@ def make_closing_shift_from_opening(opening_shift):
         or "Cash"
     )
 
-    invoices = get_pos_invoices(opening_shift.get("name"), doctype, submit_printed=0)
+    invoices = fetch_shift_invoices(opening_shift.get("name"), doctype, submit_printed=0)
 
     pos_transactions = []
     taxes = []
@@ -191,7 +198,7 @@ def make_closing_shift_from_opening(opening_shift):
                     )
                 )
 
-    pos_payments = get_payments_entries(opening_shift.get("name"))
+    pos_payments = fetch_shift_payment_entries(opening_shift.get("name"))
 
     for py in pos_payments:
         pos_payments_table.append(build_pos_payment_reference(py))
@@ -246,6 +253,22 @@ def make_closing_shift_from_opening(opening_shift):
 @frappe.whitelist()
 def submit_closing_shift(closing_shift):
     closing_shift = json.loads(closing_shift)
+    opening = authorize_shift_close(closing_shift.get("pos_opening_shift"))
+    # Who and which store the closing is for always come from the opening shift.
+    closing_shift.update(
+        {
+            "doctype": "POS Closing Shift",
+            "pos_opening_shift": opening.name,
+            "user": opening.user,
+            "pos_profile": opening.pos_profile,
+            "company": opening.company,
+        }
+    )
+    existing = closing_shift.get("name") and frappe.db.get_value(
+        "POS Closing Shift", closing_shift.get("name"), ["pos_opening_shift", "docstatus"], as_dict=True
+    )
+    if existing and (existing.pos_opening_shift != opening.name or existing.docstatus != 0):
+        frappe.throw(_("This closing doesn't belong to the shift being closed."), frappe.PermissionError)
     closing_shift_doc = frappe.get_doc(closing_shift)
     closing_shift_doc.flags.ignore_permissions = True
     normalize_pos_payment_references(closing_shift_doc)

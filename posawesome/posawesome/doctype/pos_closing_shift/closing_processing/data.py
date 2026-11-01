@@ -1,7 +1,9 @@
 import frappe
+from frappe import _
 from frappe.utils import cint, cstr, flt, getdate
 from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
+from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.access import authorize_shift_close
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.invoices import (
     submit_printed_invoices,
 )
@@ -19,8 +21,20 @@ def get_cashiers(doctype, txt, searchfield, start, page_len, filters):
     return result
 
 
+SHIFT_INVOICE_DOCTYPES = ("Sales Invoice", "POS Invoice")
+
+
 @frappe.whitelist()
 def get_pos_invoices(pos_opening_shift, doctype=None, submit_printed=1):
+    """Desk closing form: the shift's submitted invoices, for someone allowed to close it."""
+    opening = authorize_shift_close(pos_opening_shift)
+    return fetch_shift_invoices(opening.name, doctype, submit_printed)
+
+
+def fetch_shift_invoices(pos_opening_shift, doctype=None, submit_printed=1):
+    """The shift's submitted invoices. No permission check -- callers authorize."""
+    if doctype and doctype not in SHIFT_INVOICE_DOCTYPES:
+        frappe.throw(_("Invoice type must be Sales Invoice or POS Invoice."))
     if not doctype:
         pos_profile = frappe.db.get_value("POS Opening Shift", pos_opening_shift, "pos_profile")
         use_pos_invoice = frappe.db.get_value(
@@ -209,6 +223,13 @@ def get_payment_mode_counts(sale_invoice_names, return_invoice_names):
 
 @frappe.whitelist()
 def get_payments_entries(pos_opening_shift):
+    """Desk closing form: the shift's Payment Entries, for someone allowed to close it."""
+    opening = authorize_shift_close(pos_opening_shift)
+    return fetch_shift_payment_entries(opening.name)
+
+
+def fetch_shift_payment_entries(pos_opening_shift):
+    """The shift's Payment Entries. No permission check -- callers authorize."""
     return frappe.get_all(
         "Payment Entry",
         filters={

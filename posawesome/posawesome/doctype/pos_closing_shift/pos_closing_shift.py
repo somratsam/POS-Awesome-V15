@@ -5,6 +5,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
+from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.access import check_shift_close_allowed
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
     get_cashiers,
@@ -57,9 +58,20 @@ class POSClosingShift(Document):
                 _("Selected POS Opening Shift should be open."),
                 title=_("Invalid Opening Entry"),
             )
+        self.check_closer()
         self.update_payment_reconciliation()
         self.update_customer_credit_totals()
         self.update_same_shift_exchange_total()
+
+    def check_closer(self):
+        # The same rule as the POS screen, for the Desk closing form too: only
+        # the shift's own cashier, or a POS supervisor, may close it; the
+        # company always follows the opening shift.
+        if frappe.flags.in_install or frappe.flags.in_migrate or frappe.flags.in_patch:
+            return
+        opening = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
+        check_shift_close_allowed(opening, frappe.session.user)
+        self.company = opening.company
 
     def update_payment_reconciliation(self):
         # update the difference values in Payment Reconciliation child table

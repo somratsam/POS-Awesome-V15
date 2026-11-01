@@ -69,8 +69,8 @@ def _install_stubs():
         return float(row.get(amount_field) or 0) * float(conversion_rate or 1)
 
     closing_utils_module.get_base_value = get_base_value
-    closing_data_module.get_payments_entries = lambda *args, **kwargs: []
-    closing_data_module.get_pos_invoices = lambda *args, **kwargs: []
+    closing_data_module.fetch_shift_payment_entries = lambda *args, **kwargs: []
+    closing_data_module.fetch_shift_invoices = lambda *args, **kwargs: []
 
     pos_access_module = types.ModuleType("posawesome.posawesome.api.pos_access")
     pos_access_module.get_authorized_pos_profile = lambda pos_profile=None, company=None: AttrDict(
@@ -103,7 +103,7 @@ class TestClosingOverviewLoyalty(unittest.TestCase):
         self.module = _load_module()
 
     def test_loyalty_redemption_excludes_return_adjustments_from_redeemed_totals(self):
-        self.module.get_pos_invoices = lambda *args, **kwargs: [
+        self.module.fetch_shift_invoices = lambda *args, **kwargs: [
             AttrDict(
                 {
                     "name": "SINV-0001",
@@ -145,7 +145,7 @@ class TestClosingOverviewLoyalty(unittest.TestCase):
         self.assertEqual(result["loyalty_redemption"]["by_currency"][0]["invoice_count"], 1)
 
     def test_customer_credit_redeemed_reports_stored_invoice_print_field(self):
-        self.module.get_pos_invoices = lambda *args, **kwargs: [
+        self.module.fetch_shift_invoices = lambda *args, **kwargs: [
             AttrDict(
                 {
                     "name": "SINV-0001",
