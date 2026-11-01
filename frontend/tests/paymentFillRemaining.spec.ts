@@ -8,6 +8,7 @@ import { usePaymentMethods } from "../src/posapp/composables/pos/payments/usePay
 import { usePaymentCalculations } from "../src/posapp/composables/pos/payments/usePaymentCalculations";
 import { usePaymentSubmission } from "../src/posapp/composables/pos/payments/usePaymentSubmission";
 import PaymentSummary from "../src/posapp/components/pos/payments/PaymentSummary.vue";
+import PaymentMethods from "../src/posapp/components/pos/payments/PaymentMethods.vue";
 import paymentsSource from "../src/posapp/components/pos/Payments.vue?raw";
 import {
 	getUncoveredOverpayment,
@@ -161,6 +162,19 @@ const openPaymentScreen = ({
 					(sequence[a?.mode_of_payment] || 0) - (sequence[b?.mode_of_payment] || 0),
 			});
 		},
+		// Payments.vue clearPaymentLines(): every line 0, staff entries forgotten.
+		clearAll: () => {
+			methods.clear_all_amounts();
+			Object.keys(sequence).forEach((key) => delete sequence[key]);
+			counter = 0;
+		},
+		// Payments.vue removePaymentLine(): this line 0 and no longer staff-entered.
+		remove: (mode: string) => {
+			const payment = byMode(mode);
+			payment.amount = 0;
+			payment.base_amount = 0;
+			delete sequence[mode];
+		},
 		// The summary's own figures, from the real calculations composable.
 		figures: () => {
 			const calc = usePaymentCalculations({
@@ -189,6 +203,25 @@ const openPaymentScreen = ({
 		},
 	};
 	return screen;
+};
+
+const validateAt3 = (payments: any[], total: number) => {
+	const amounts = payments.map((p: any) => p.amount);
+	const { validateSubmission } = usePaymentSubmission({
+		invoiceDoc: ref({ is_return: 0, items: [], payments, rounded_total: total, grand_total: total }),
+		posProfile: ref({ posa_allow_partial_payment: 0 }),
+		stockSettings: ref({}),
+		invoiceType: ref("Invoice"),
+		formatFloat: flt3,
+		currencyPrecision: ref(PRECISION),
+		stores: { toastStore: { show: vi.fn() } },
+		diff_payment: ref(subtractAmounts(total, amounts, PRECISION)) as any,
+		paidChange: ref(Math.max(-subtractAmounts(total, amounts, PRECISION), 0)),
+		creditChange: ref(0),
+		isCashback: ref(true),
+		is_credit_sale: ref(false),
+	});
+	return validateSubmission(true);
 };
 
 describe("fill the remaining amount", () => {
@@ -222,6 +255,251 @@ describe("fill the remaining amount", () => {
 			expect(toMinorUnits(139.3, 3)).toBe(139300);
 			expect(toMinorUnits(12.005, 3)).toBe(12005);
 			expect(toMinorUnits(87.65, 3)).toBe(87650);
+		});
+	});
+
+	describe("139.300: click Visa, type 80, click Maal, then click Cash changes nothing", () => {
+		it.each(["Cash", "Visa", "Master Card"])("Default %s", (defaultMode) => {
+			const screen = openPaymentScreen({ total: 139.3, payments: swanPayments(defaultMode) });
+			screen.click("Visa");
+			expect(screen.amount("Visa")).toBe(139.3);
+			screen.type("Visa", 80);
+			screen.click("Maal");
+
+			const afterMaal = { Cash: 0, Visa: 80, "Master Card": 0, Maal: 59.3 };
+			expect(screen.amounts()).toEqual(afterMaal);
+
+			screen.click("Cash");
+			expect(screen.amounts()).toEqual(afterMaal);
+			const figures = screen.figures();
+			expect(figures.diff).toBe(0);
+			expect(figures.over).toBe(0);
+		});
+	});
+
+	describe("stricter overpayment guard: cash handed back in full is blocked", () => {
+		it("Cash 139.300 on top of cards that already cover 139.300 is blocked, over by 139.300", async () => {
+			const screen = openPaymentScreen({ total: 139.3, payments: swanPayments("Cash") });
+			screen.click("Visa");
+			screen.type("Visa", 80);
+			screen.click("Maal");
+			screen.type("Cash", 139.3);
+
+			expect(screen.amounts()).toEqual({ Cash: 139.3, Visa: 80, "Master Card": 0, Maal: 59.3 });
+			expect(screen.figures().over).toBe(139.3);
+			await expect(validateAt3(screen.invoiceDoc.value.payments, 139.3)).rejects.toThrow(
+				"Over by 139.3: cash would be handed back in full. Reduce a card amount or remove the cash.",
+			);
+		});
+
+		it("Visa 80 + Maal 59.300 + Cash 20 on 139.300 is blocked, over by 20", async () => {
+			const payments = [
+				line("Cash", "Cash", { amount: 20 }),
+				line("Visa", "Bank", { amount: 80 }),
+				line("Maal", "Bank", { amount: 59.3 }),
+			];
+			expect(getUncoveredOverpayment(payments, 20, (p: any) => p.type === "Cash", PRECISION)).toBe(20);
+			await expect(validateAt3(payments, 139.3)).rejects.toThrow(
+				/^Over by 20: cash would be handed back in full/,
+			);
+		});
+
+		it("Cash 120 alone on 100 is allowed with Change 20", async () => {
+			const screen = openPaymentScreen({ total: 100, payments: swanPayments("Cash") });
+			screen.type("Cash", 120);
+
+			const figures = screen.figures();
+			expect(figures.label).toBe("Change (OMR)");
+			expect(figures.diff).toBe(-20);
+			expect(figures.over).toBe(0);
+			await expect(validateAt3(screen.invoiceDoc.value.payments, 100)).resolves.toBe(true);
+		});
+
+		it("Cash 150 + Visa 50 on 100 is allowed with Change 100", async () => {
+			const payments = [line("Cash", "Cash", { amount: 150 }), line("Visa", "Bank", { amount: 50 })];
+			expect(getUncoveredOverpayment(payments, 100, (p: any) => p.type === "Cash", PRECISION)).toBe(0);
+			expect(subtractAmounts(0, [-150, -50, 100], PRECISION)).toBe(100);
+			await expect(validateAt3(payments, 100)).resolves.toBe(true);
+		});
+
+		it("cards over the total with less cash than the excess keeps the card message", async () => {
+			const payments = [line("Cash", "Cash", { amount: 5 }), line("Visa", "Bank", { amount: 150 })];
+			await expect(validateAt3(payments, 139.3)).rejects.toThrow(
+				/^Over by 10\.7: card payments exceed the amount due/,
+			);
+		});
+	});
+
+	describe("Clear payments", () => {
+		const filled = (defaultMode = "Cash", extra: any = {}) => {
+			const screen = openPaymentScreen({ total: 139.3, payments: swanPayments(defaultMode), ...extra });
+			screen.click("Visa");
+			screen.type("Visa", 80);
+			screen.click("Maal");
+			return screen;
+		};
+
+		it("resets every line to 0 and shows the full amount remaining; clicking Cash then fills 139.300", () => {
+			const screen = filled();
+			screen.clearAll();
+
+			expect(screen.amounts()).toEqual({ Cash: 0, Visa: 0, "Master Card": 0, Maal: 0 });
+			expect(screen.sequence).toEqual({});
+			expect(screen.figures().diff).toBe(139.3);
+			expect(screen.figures().label).toBe("Remaining (OMR)");
+
+			screen.click("Cash");
+			expect(screen.amounts()).toEqual({ Cash: 139.3, Visa: 0, "Master Card": 0, Maal: 0 });
+			expect(screen.figures().diff).toBe(0);
+		});
+
+		it("forgets staff entries: the next click fills the full amount, and typing stays card-safe", () => {
+			const screen = filled("Visa");
+			screen.clearAll();
+
+			screen.click("Maal");
+			expect(screen.amount("Maal")).toBe(139.3);
+			screen.type("Master Card", 20);
+			expect(screen.amount("Maal")).toBe(139.3);
+			expect(screen.figures().over).toBe(20);
+		});
+
+		it("leaves a gift card redemption in place: clicking Cash fills 129.300", () => {
+			const screen = filled("Cash", { giftCard: 10 });
+			screen.clearAll();
+			screen.click("Cash");
+
+			expect(screen.amount("Cash")).toBe(129.3);
+			expect(screen.figures().diff).toBe(0);
+		});
+
+		it("leaves loyalty or customer credit in place: clicking Cash fills 129.300", () => {
+			const screen = filled("Cash", { loyaltyOrCredit: 10 });
+			screen.clearAll();
+			screen.click("Cash");
+
+			expect(screen.amount("Cash")).toBe(129.3);
+		});
+	});
+
+	describe("remove (x) on one line", () => {
+		it("sets just that line to 0 and forgets it; Remaining shows what it held", () => {
+			const screen = openPaymentScreen({ total: 139.3, payments: swanPayments("Cash") });
+			screen.type("Visa", 80);
+			screen.click("Maal");
+			screen.remove("Maal");
+
+			expect(screen.amounts()).toEqual({ Cash: 0, Visa: 80, "Master Card": 0, Maal: 0 });
+			expect(screen.sequence.Maal).toBeUndefined();
+			expect(screen.sequence.Visa).toBeGreaterThan(0);
+			expect(screen.figures().diff).toBe(59.3);
+
+			screen.click("Cash");
+			expect(screen.amount("Cash")).toBe(59.3);
+		});
+
+		it("removing a staff-typed card lets the next click take its share", () => {
+			const screen = openPaymentScreen({ total: 139.3, payments: swanPayments("Cash") });
+			screen.type("Visa", 80);
+			screen.click("Maal");
+			screen.remove("Visa");
+			screen.click("Cash");
+
+			expect(screen.amounts()).toEqual({ Cash: 80, Visa: 0, "Master Card": 0, Maal: 59.3 });
+		});
+
+		it("switching to all cash: remove each card, then click Cash", () => {
+			const screen = openPaymentScreen({ total: 139.3, payments: swanPayments("Visa") });
+			screen.type("Visa", 80);
+			screen.click("Maal");
+			screen.remove("Visa");
+			screen.remove("Maal");
+			screen.click("Cash");
+
+			expect(screen.amounts()).toEqual({ Cash: 139.3, Visa: 0, "Master Card": 0, Maal: 0 });
+		});
+
+		it("does not touch a gift card redemption", () => {
+			const screen = openPaymentScreen({ total: 139.3, giftCard: 10, payments: swanPayments("Cash") });
+			screen.type("Visa", 80);
+			screen.click("Maal");
+			expect(screen.amount("Maal")).toBe(49.3);
+			screen.remove("Maal");
+
+			expect(screen.figures().diff).toBe(49.3);
+		});
+	});
+
+	describe("PaymentMethods: the x button", () => {
+		const BtnStub = defineComponent({
+			emits: ["click"],
+			setup(_, { slots, emit, attrs }) {
+				return () =>
+					h(
+						"button",
+						{
+							type: "button",
+							"data-test": attrs["data-test"],
+							"aria-label": attrs["aria-label"],
+							onClick: () => emit("click"),
+						},
+						slots.default?.(),
+					);
+			},
+		});
+		const Box = defineComponent({ setup: (_, { slots }) => () => h("div", slots.default?.()) });
+		const mountMethods = (props: Record<string, any>) =>
+			mount(PaymentMethods, {
+				props: {
+					payments: [
+						{ name: "P1", mode_of_payment: "Cash", type: "Cash", amount: 0, default: 1 },
+						{ name: "P2", mode_of_payment: "Visa", type: "Bank", amount: 80, default: 0 },
+					],
+					currency: "OMR",
+					isReturn: false,
+					requestPaymentField: false,
+					currencySymbol: () => "OMR ",
+					formatCurrency: (value: number) => fmt(value),
+					isNumber: () => true,
+					getVisibleDenominations: () => [],
+					isCashLikePayment: (p: any) => p.type === "Cash",
+					isMpesaC2bPayment: () => false,
+					...props,
+				},
+				global: {
+					components: {
+						VRow: Box,
+						VCol: Box,
+						VBtn: BtnStub,
+						VTextField: defineComponent({ setup: () => () => h("input") }),
+					},
+				},
+			});
+
+		beforeEach(() => {
+			(window as any).__ = (value: string, args?: any[]) =>
+				args?.length
+					? value.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)] ?? ""))
+					: value;
+		});
+
+		it("shows only on lines holding an amount, and emits remove-payment for that line", async () => {
+			const onRemovePayment = vi.fn();
+			const wrapper = mountMethods({ showClearControls: true, onRemovePayment });
+
+			expect(wrapper.find('[data-test="payment-remove-Cash"]').exists()).toBe(false);
+			const remove = wrapper.find('[data-test="payment-remove-Visa"]');
+			expect(remove.exists()).toBe(true);
+			expect(remove.attributes("aria-label")).toBe("Remove Visa amount");
+
+			await remove.trigger("click");
+			expect(onRemovePayment).toHaveBeenCalledTimes(1);
+			expect(onRemovePayment.mock.calls[0][0].mode_of_payment).toBe("Visa");
+		});
+
+		it("is hidden when the parent doesn't enable it (returns, credit sales)", () => {
+			const wrapper = mountMethods({ showClearControls: false });
+			expect(wrapper.find('[data-test="payment-remove-Visa"]').exists()).toBe(false);
 		});
 	});
 
@@ -573,6 +851,35 @@ describe("fill the remaining amount", () => {
 			expect(fnBody("rebalanceOtherPaymentsAfterEdit")).toContain(
 				"amountDue: paymentLinesAmountDue()",
 			);
+		});
+
+		it("shows Clear payments and the x only when the remainder fill applies (sales, not returns or credit sales)", () => {
+			expect(fnBody("paymentClearControlsVisible").replace(/\s+/g, " ")).toContain(
+				"computed(() => canFillRemaining(false))",
+			);
+			const at = source.indexOf('data-test="payment-clear-all"');
+			expect(at).toBeGreaterThan(-1);
+			const header = source.slice(at - 250, at + 100);
+			expect(header).toContain('v-if="paymentClearControlsVisible"');
+			expect(header).toContain('@click="clearPaymentLines"');
+			const tagStart = source.indexOf("<PaymentMethods");
+			const methodsTag = source.slice(tagStart, source.indexOf("/>", tagStart));
+			expect(methodsTag).toContain(':show-clear-controls="paymentClearControlsVisible"');
+			expect(methodsTag).toContain('@remove-payment="removePaymentLine"');
+		});
+
+		it("Clear payments zeroes every line and forgets every staff entry", () => {
+			const body = fnBody("clearPaymentLines");
+			expect(body).toContain("clear_all_amounts();");
+			expect(body).toContain("lastEditedPaymentSequence.value = {};");
+			expect(body).toContain("paymentEditSequenceCounter.value = 0;");
+		});
+
+		it("the x zeroes one line and forgets only that line's staff entry", () => {
+			const body = fnBody("removePaymentLine");
+			expect(body).toContain("payment.amount = 0;");
+			expect(body).toContain("delete lastEditedPaymentSequence.value[payment.mode_of_payment];");
+			expect(body).not.toContain("clear_all_amounts");
 		});
 
 		it("returns and credit sales skip the remainder fill", () => {
