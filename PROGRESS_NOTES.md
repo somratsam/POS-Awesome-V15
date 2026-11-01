@@ -7442,3 +7442,138 @@ first on its own (security fix, Python only: pull + restart). Payment
 commits, in order: `9eea959a`, `76c85f95`, `6bea1869`, `53bcd343`,
 `7a2e9595`, `e229b637` (pull, `bench build --app posawesome`, restart; no
 migrate). Docs commits: `e7100e66`, `e2e81d39` and the one adding this.
+
+## 80. Closing variance rule; everything on `stable`; the one-night deploy (2026-11-01)
+
+**`ed28d06f` (develop-swan) = `da0a0402` (stable) -- a closing off by more
+than the POS Profile's tolerance needs a reason.**
+- Found: a closing whose count didn't match the expected amount submitted
+  silently. Not blocked outright on purpose: a hard block only pushes the
+  cashier to type the expected figure and hides the shortage (standard
+  ERPNext and upstream record the difference and never block).
+- Decisions (user): tolerance per POS Profile, default 0.500; over it a
+  reason is required; supervisor approval is a POS Profile tick box, default
+  off; applies to every payment method.
+- Fields: POS Profile `posa_closing_variance_tolerance` (Currency, 0.5) and
+  `posa_closing_variance_needs_supervisor` (Check, 0), hand-added to
+  `fixtures/custom_field.json` (+108 lines) and listed in `hooks.py`;
+  POS Closing Shift `posa_variance_reason` (Small Text) and
+  `posa_variance_approved_by` (Link User, read only) in the doctype JSON,
+  "Modes of Payment" section.
+- Server (`POSClosingShift.validate`, so POS and Desk alike):
+  `refresh_expected_amounts()` rebuilds the expected amounts from the
+  shift's own invoices, Payment Entries and cash movements
+  (`creation.build_closing_shift`, split out of
+  `make_closing_shift_from_opening` with no side effects) -- the browser's or
+  form's expected figures are ignored, closing the gap `1d8bfdfc` left; a
+  dropped payment row counts as 0. `check_closing_variance()`: any method off
+  by more than the tolerance (either way, whole baisa) needs a reason; with
+  the tick box on, the signed-in user or the terminal's active PIN cashier
+  must be a POS supervisor (`closing_variance_approver`, the below-cost
+  override's rule) and is stored as the approver. The error names the
+  methods, never amounts.
+- Screen: the Close Shift confirmation lists the methods that are off
+  ("Cash: short 2.350"; names only on Hide Expected Amount profiles), asks for
+  the reason, says when a supervisor must be switched in, and keeps Close
+  Shift disabled until satisfied (`utils/closingVariance.ts`).
+- Z Report: Variance Reason (escaped with `|e`; Frappe's XSS filter also
+  strips script on save) and Approved By under Cash Balance.
+- Field placement: the first migrate put the two POS Profile fields in
+  "Sales and Purchase Flows" -- three other custom fields also use
+  `insert_after: hide_expected_amount`, so the order behind it isn't fixed.
+  Re-anchored on `posa_language` (nothing else anchors on it); two further
+  migrates both left them in "Sales and Return Controls", between POS
+  Language and `posa_column_break_112`.
+- Tests: `closing_processing/test_closing_variance.py` (12), 9 fail against
+  the old server code, including the tampered-expected-amount test.
+  `test_closing_security` 6 and 11 now count right (they had counted 0
+  against a real expected 5, which the new rule refuses; what they check is
+  unchanged). Frontend: `closingVariance.spec.ts` (6), 6 new in
+  `closeShiftConfirmDialog.spec.ts`, wiring in
+  `closingDialogConfirmWiring.spec.ts`; reverting the dialog fails 4,
+  reverting ClosingDialog fails 3.
+- Checks: frontend 261/261 files, 1533/1533; `bench build` exit 0; migrate
+  exit 0 three times (layout identical on runs 2 and 3); all closing modules
+  pass; `test_creation` 8 errors and `test_submitted_invoice_shift_security`
+  1 import error as before. Hand-tested by the user on staging.
+
+**`stable` now** (GitHub, tip `da0a0402`): `d4790c72` plus, in order,
+`919c542c` (transfers, section 72), `81e9c509` (shift security, 77),
+`da312652` (= `1d8bfdfc`, closing access), `626dee4b` (= `9eea959a`),
+`a831b6ef` (= `76c85f95`), `6c07bf82` (= `6bea1869`), `7de49327`
+(= `53bcd343`), `bf7b6e9a` (= `7a2e9595`), `133a6b9a` (= `e229b637`),
+`da0a0402` (= `ed28d06f`). Its code equals develop-swan's (`git diff` shows
+only CLAUDE.md and PROGRESS_NOTES.md). This replaces the cherry-pick order in
+section 79.
+
+**Production deploy, one night** (site `site1.local`; from `d4790c72` to
+`da0a0402`). Needs build (frontend, Stock Entry form), migrate (section 72
+fixture/report/workspace, the variance fields, the Z Report) and restart.
+
+*Before*
+1. Ask cashiers to finish sales and close shifts. Snapshot, then
+   `bench --site site1.local backup --with-files`.
+2. `cd apps/posawesome && git status -sb && git log -1 --oneline` -- must be
+   `d4790c72`, no local changes.
+3. Precision parity: System Settings currency/float precision 3 and Banker's
+   Rounding.
+4. Section 72 pre-checks, steps 2-5b (name checks, workspace drift, open
+   transit entries, stock in transit, Stock Settings Property Setters,
+   existing Is Default warehouse permissions).
+5. Section 79 queries: store users without a POS Profile User Permission
+   (expect none); who has POS Awesome Supervisor / System Manager and on
+   which stores -- give POS Awesome Supervisor to anyone who closes others'
+   shifts or approves variances; open shifts.
+6. Tell the stores: a closing off by more than 0.500 on any method now asks
+   for a reason.
+
+*Code*
+7. `git pull <remote> stable`, then `git log -1 --oneline` -- must be
+   `da0a0402 feat: a closing off by more than the POS Profile's tolerance needs a reason`.
+8. `source ~/.nvm/nvm.sh && nvm use 24 && bench build --app posawesome`
+   (exit 0).
+9. Migrate **twice**, both exit 0:
+   `bench --site site1.local migrate` then again.
+10. Field placement, after each migrate (`bench --site site1.local console`):
+    ```
+    f = frappe.get_meta("POS Profile").fields
+    sec = None
+    for i, x in enumerate(f):
+        if x.fieldtype == "Section Break": sec = x.label
+        if x.fieldname in ("posa_closing_variance_tolerance", "posa_closing_variance_needs_supervisor"):
+            print(x.fieldname, "|", sec, "| after", f[i-1].fieldname, "| default", x.default)
+    ```
+    Expected, the same both times:
+    ```
+    posa_closing_variance_tolerance | Sales and Return Controls | after posa_language | default 0.5
+    posa_closing_variance_needs_supervisor | Sales and Return Controls | after posa_closing_variance_tolerance | default 0
+    ```
+    Also in Desk: a POS Profile > "Sales and Return Controls" shows Closing
+    Variance Tolerance (0.500) and Closing Variance Needs Supervisor Approval
+    (unticked) below POS Language.
+11. Z Report re-imported with the new lines:
+    ```
+    bench --site site1.local mariadb -e "SELECT INSTR(html,'variance_reason')>0 FROM \`tabPrint Format\` WHERE name='Z Report'"
+    ```
+    Returns 1.
+12. `sudo supervisorctl restart all`.
+
+*Transfer setup* -- section 72 steps 10-16 (transit warehouse, Default
+In-Transit Warehouse, Stock User role, Warehouse permissions with one Is
+Default, Material Transfer permission, Loyalty Program read, the two Stock
+Settings Property Setters); users reload.
+
+*Post-deploy tests*: a sale (Remaining 0.000 green); a split on 139.300
+(Visa 80, click Maal = 59.300, click Cash = no change; cards full + Cash
+139.300 = "Over by 139.300", refused; Clear payments then Cash = 139.300);
+MAX&Co Cash 80 + Visa 20 submits, Cash 80 alone refused; shift resumes on
+reload, another store's profile refused; own close (empty box shows 0.000,
+saves as 0), a same-store cashier refused in Desk, a supervisor closes in
+Desk; closing off by < 0.500 closes without a reason, by > 0.500 asks for
+one and the Z Report prints it; the Z Report after each close; the section 76
+first-store transfer test.
+
+*Rollback*: `git checkout d4790c72`, build, migrate, restart. Left behind and
+harmless: Destination Store column, Incoming Transfers report record, the
+variance columns. Restore the backup only if data is damaged (loses every
+sale since).
