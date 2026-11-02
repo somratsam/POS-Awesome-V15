@@ -7704,3 +7704,147 @@ add no migrate of their own.
      show the card in full and cash net of change; the card still equals the
      Cash Expected Amount.
 - *Rollback* unchanged: `git checkout d4790c72`, build, migrate, restart.
+
+## 82. Epson TM-T88V left edge (QZ printable width); opening shift shows only the cash float; everything on `stable` (2026-11-02)
+
+Two commits on `develop-swan`, cherry-picked to `stable` in order:
+`f7623756` = `060bc356`, `71ca7e23` = `aa3376b6`. Both hand-tested by the
+user on staging (the Epson at Test Pos for the first) before the
+cherry-pick.
+
+**Epson TM-T88V: clipped left edge and a small, faint Z Report.** Same
+print format and QZ config as the Bixolon, which printed fine. Read from
+QZ Tray 2.2.5's own Java source (`PrintHTML.java`, `WebApp.java`):
+`printHtmlViaQz` sends `size {80mm, height: null}` and zero margins, so QZ
+prints on the driver's *default* paper, forces the zero margins (the
+qz-tray JS always sends `margins`, so the driver's own margins are never
+used) and scales the whole page to fit one sheet of it. Two causes:
+- Small Z Report: Epson's default paper was "Roll Paper 80 x 297 mm"; the
+  Z Report is longer, so QZ shrank it to fit 297 mm. Fixed on the Epson PC,
+  no code: Printing Defaults > paper "Roll Paper 80 x 3276 mm".
+- Clipped left edge ("Total Sales" -> "al Sales", receipts too): QZ draws
+  from the paper's left edge; the TM-T88V prints 72 mm of the 80 mm paper,
+  so about 4 mm is lost.
+
+**`f7623756` -- QZ printable width on the POS Profile.** New field
+`posa_qz_printable_width` (Float, "QZ Printable Width (mm)", Printing and
+Delivery, after QZ Tray Printer Name), hand-added to `custom_field.json`;
+`posa_receipt_logo` re-anchored after it so no two fields share an
+`insert_after` (the ordering trap in `insert_receipt_logo_field_in_print_chain`).
+Blank/0 = the QZ config exactly as before (Bixolon). 72 = 4 mm left and
+right margins and a 76 mm render width (the formats' `body` width), so QZ
+scales 76 -> 72 mm (95%) into the printable area. Read in
+`printDocumentViaQz` from `uiStore.posProfile`, like the profile's default
+printer, so it covers receipts, reprints, the Z Report and Z Report History;
+barcode labels call `printHtmlViaQz` directly and are untouched. Printer
+selection unchanged (`getActiveProfile()` split out of
+`getProfileDefaultPrinterName()`, same results). Tests: 5 in
+`qzTray.spec.ts`, incl. a wiring test (fails when the profile read is
+removed). Migrate twice: field in place, idempotent.
+
+**`71ca7e23` -- opening shift shows only the cash float.**
+- Found: every amount box started at a real 0 staff had to delete;
+  clicking into an untouched box and out turned it red (its rule read
+  `.length` of the number 0 -- confirmed in a real Vuetify 3.12.6 mount);
+  an emptied box (`""`) failed the required `amount` check on the server.
+- Shows the profile's cash mode (`posa_cash_mode_of_payment`, else the mode
+  named "Cash" -- the closing's rule) plus any other Cash-type mode
+  ("Dollar Cash float"); a profile with neither shows every mode.
+- Every mode is still sent, the hidden ones as 0: Payment Reconciliation,
+  the Z Report Cash Balance and the variance rule see the same rows as
+  before (a mode missing from the opening only gets a reconciliation row
+  if it had sales).
+- Box empty with a faint 0.000 (profile decimal precision, else system
+  currency precision); empty is sent as 0. The closing boxes' number rule
+  moved to `utils/closingAmount.ts` (`amountInputRule`) and is shared.
+- Design: 520 px dialog, "Open Shift" / "Start your shift", a summary line
+  when there is one company and profile (pickers otherwise), one
+  "Opening float" box with the hint "Cash in the drawer at the start of the
+  shift.", "Open Shift" button. English only. Checked in Chromium, light and
+  dark.
+- `get_opening_dialog_data` also returns each profile's cash mode and
+  decimal precision and each payment mode's type (own profiles only, test
+  added).
+- Tests: `openingDialogCashOnly.spec.ts` (11; three deliberate breakages each
+  fail it), `test_shifts` 8/8.
+
+**Cash decided by Mode of Payment type** (read-only audit; production had
+Maal as type Cash on MAX&Co and Max Demo, now Bank like Visa and Master
+Card). By type: the payment screen's `isCashLikePaymentLine` (auto-adjust
+of lines, the change-from-cash guard, quick-cash tenders) and, with no
+profile cash mode set (all production profiles), the change Payment
+Entries in `payment.py` (first Cash-type line on the invoice). By profile
+cash mode or the name "Cash" only: Payment Reconciliation, Expected Cash,
+variance rule, Z Report, net-of-change, Cash Movement. Dashboards read the
+current type, so Maal is now card for all dates. Past invoices keep "Cash"
+on their stored Maal lines; nothing in closing reads it.
+
+**Checks.** Frontend 263/263 files, 1557/1557; `bench build` exit 0; migrate
+twice for `f7623756` (none for `71ca7e23`); backend in isolation --
+`test_shifts` 8/8, `test_closing_variance` 12/12, `test_closing_security`
+11/11, `test_pos_closing_shift` 10/10, `test_z_report` 3/3,
+`test_z_report_cash_net_of_change` 5/5, `test_cash_movement_integration` 6/6,
+`test_print_assets` 4/4 and the POS Profile field modules for the fixture.
+
+**`stable` now** (GitHub, tip `aa3376b6`): section 81's list, then
+`060bc356` (= `f7623756`), `aa3376b6` (= `71ca7e23`). `git diff stable
+develop-swan` shows only CLAUDE.md and PROGRESS_NOTES.md.
+
+**Production deploy, one night** -- sections 80-81's plan with these
+changes (site `site1.local`; from `d4790c72` to `aa3376b6`).
+- *Before*, add:
+  (a) Mode types -- only "Cash" may be type Cash:
+  ```
+  bench --site site1.local mariadb -e "SELECT name, type FROM \`tabMode of Payment\` WHERE enabled=1 ORDER BY type, name;"
+  ```
+  (b) Change Payment Entries recorded as Maal while it was type Cash
+  (ordinary Maal sales never create one), read-only, for the record:
+  ```
+  bench --site site1.local mariadb -e "SELECT name, posting_date, payment_type, paid_amount, reference_no FROM \`tabPayment Entry\` WHERE mode_of_payment='Maal' AND docstatus=1;"
+  ```
+  (c) Name check for the new field (expect no row):
+  ```
+  bench --site site1.local mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE name='POS Profile-posa_qz_printable_width';"
+  ```
+  (d) Each **Epson** PC: Printers > EPSON TM-T88V Receipt > Printer
+  properties > Advanced > **Printing Defaults** > Paper Size
+  "Roll Paper 80 x 3276 mm" (Printing Defaults, not Printing Preferences --
+  QZ reads the default). Bixolon PCs: no change.
+  (e) Tell the stores: the opening screen asks only for the Opening float;
+  leave it empty for 0.
+- Step 7: `git log -1 --oneline` must be
+  `aa3376b6 feat: opening shift shows only the cash float, as an empty box like the closing counts`.
+- Step 10, add after each migrate (same console session):
+  ```
+  f = frappe.get_meta("POS Profile").fields
+  sec = None
+  for i, x in enumerate(f):
+      if x.fieldtype == "Section Break": sec = x.label
+      if x.fieldname in ("posa_qz_printable_width", "posa_receipt_logo"):
+          print(x.fieldname, "|", sec, "| after", f[i-1].fieldname)
+  ```
+  Expected, the same both times:
+  ```
+  posa_qz_printable_width | Printing and Delivery | after posa_qz_printer_name
+  posa_receipt_logo | Printing and Delivery | after posa_qz_printable_width
+  ```
+- Step 12 restart also loads the new `shifts.py`.
+- *After restart*: each Epson store's POS Profile > Printing and Delivery >
+  QZ Printable Width (mm) = **72**. The **Bixolon** store's profile stays
+  **blank**. Tills hard-refresh (new build, new profile, Maal's new type).
+- *Post-deploy tests*, add:
+  1. Opening screen (a user with no open shift): "Open Shift", "Start your
+     shift", one **Opening float** box, empty with a faint **0.000** and
+     the hint; click in and out -- **no red border**. Enter the float and
+     Open Shift.
+  2. Desk > that POS Opening Shift: Cash = the float, Visa, Master Card and
+     Maal **saved as 0**.
+  3. At close: Payment Reconciliation **still lists every mode** (card
+     modes opening 0), Expected Cash includes the float; Z Report Cash
+     Balance as before.
+  4. Epson store: a receipt and a Z Report reprint -- "Payment", "Opening",
+     "Total Returns" whole, right-hand figures whole, Z Report normal size.
+  5. Bixolon store: receipt and Z Report exactly as before.
+- *Rollback* unchanged (`git checkout d4790c72`, build, migrate, restart);
+  the `posa_qz_printable_width` column is left behind and harmless. The
+  Epson paper setting can stay.
