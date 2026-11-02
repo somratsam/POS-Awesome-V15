@@ -1,97 +1,83 @@
 <template>
 	<v-row justify="center">
-		<v-dialog v-model="isOpen" persistent max-width="800px" max-height="90vh">
+		<v-dialog v-model="isOpen" persistent max-width="520px" max-height="90vh">
 			<v-card elevation="8" class="opening-dialog-card">
-				<!-- Header Section - White Background with Blue Text -->
 				<v-card-title class="opening-dialog-header">
 					<div class="header-content">
 						<div class="header-icon-wrapper">
 							<v-icon class="header-icon">mdi-cash-plus</v-icon>
 						</div>
 						<div class="header-text">
-							<h5 class="header-title">{{ __("Create POS Opening Shift") }}</h5>
+							<h5 class="header-title">{{ __("Open Shift") }}</h5>
 							<p class="header-subtitle">
-								{{ __("Initialize your shift with opening balances") }}
+								{{ __("Start your shift") }}
 							</p>
 						</div>
 					</div>
 				</v-card-title>
 
-				<!-- Content Section - Optimized for minimal scrolling -->
 				<v-card-text class="opening-dialog-content">
-					<v-container class="pa-0">
-						<v-row>
-							<!-- Company and POS Profile in same row for space efficiency -->
-							<v-col cols="12" md="6" class="form-field">
-								<v-autocomplete
-									:items="companies"
-									:label="frappe._('Company')"
-									v-model="company"
-									required
-									variant="outlined"
-									color="primary"
-									density="compact"
-									prepend-inner-icon="mdi-domain"
-									class="enhanced-field"
-									:class="{ 'field-focused': company }"
-								/>
-							</v-col>
+					<!-- One company and one profile: nothing to choose, just say which. -->
+					<div v-if="!showSelectors" class="opening-summary" data-test="opening-summary">
+						<v-icon size="18" class="summary-icon">mdi-store-outline</v-icon>
+						<span>{{ company }}</span>
+						<span v-if="pos_profile" class="summary-separator">·</span>
+						<span>{{ pos_profile }}</span>
+					</div>
+					<v-row v-else dense class="mb-2">
+						<v-col cols="12" sm="6">
+							<v-autocomplete
+								:items="companies"
+								:label="frappe._('Company')"
+								v-model="company"
+								required
+								variant="outlined"
+								color="primary"
+								density="compact"
+								prepend-inner-icon="mdi-domain"
+								hide-details
+							/>
+						</v-col>
+						<v-col cols="12" sm="6">
+							<v-autocomplete
+								:items="pos_profiles"
+								:label="frappe._('POS Profile')"
+								v-model="pos_profile"
+								required
+								variant="outlined"
+								color="primary"
+								density="compact"
+								prepend-inner-icon="mdi-point-of-sale"
+								hide-details
+							/>
+						</v-col>
+					</v-row>
 
-							<v-col cols="12" md="6" class="form-field">
-								<v-autocomplete
-									:items="pos_profiles"
-									:label="frappe._('POS Profile')"
-									v-model="pos_profile"
-									required
-									variant="outlined"
-									color="primary"
-									density="compact"
-									prepend-inner-icon="mdi-point-of-sale"
-									class="enhanced-field"
-									:class="{ 'field-focused': pos_profile }"
-								/>
-							</v-col>
-
-							<!-- Payment Methods Section - Compact -->
-							<v-col cols="12">
-								<div class="section-header-compact">
-									<h6 class="section-title-compact">
-										<v-icon class="section-icon">mdi-credit-card-multiple</v-icon>
-										{{ __("Payment Methods") }}
-									</h6>
-								</div>
-
-								<v-data-table
-									:headers="payments_methods_headers"
-									:items="payments_methods"
-									item-key="mode_of_payment"
-									class="enhanced-table-compact"
-									:items-per-page="itemsPerPage"
-									hide-default-footer
-									density="compact"
-									:height="'300px'"
-									fixed-header
-								>
-									<template v-slot:item.amount="{ item }">
-										<v-text-field
-											v-model="item.amount"
-											:rules="[max25chars]"
-											type="number"
-											density="compact"
-											variant="outlined"
-											color="primary"
-											hide-details
-											:prefix="currencySymbol(item.currency)"
-											class="amount-input"
-										/>
-									</template>
-								</v-data-table>
-							</v-col>
-						</v-row>
-					</v-container>
+					<v-text-field
+						v-for="(row, index) in visiblePaymentMethods"
+						:key="row.mode_of_payment"
+						:model-value="amountDisplay(row.amount)"
+						@update:model-value="(value) => (row.amount = value)"
+						@focus="selectOnFocus"
+						@blur="row.amount = normalizeClosingAmount(row.amount)"
+						@keydown.enter="submit_dialog"
+						:data-test="`opening-amount-${row.mode_of_payment}`"
+						:label="amountLabel(row)"
+						:hint="showsCashOnly ? __('Cash in the drawer at the start of the shift.') : ''"
+						persistent-hint
+						:rules="[amountRule]"
+						:placeholder="zeroPlaceholder"
+						persistent-placeholder
+						:autofocus="index === 0"
+						type="number"
+						variant="outlined"
+						color="primary"
+						hide-details="auto"
+						:prefix="currencySymbol(row.currency)"
+						class="opening-amount-input"
+					/>
 				</v-card-text>
 
-				<!-- Actions Section -->
 				<v-card-actions class="dialog-actions-container">
 					<v-btn
 						theme="dark"
@@ -116,15 +102,16 @@
 					</v-btn>
 					<v-btn
 						theme="dark"
-						:disabled="is_loading"
+						:disabled="is_loading || hasInvalidAmount"
 						:loading="is_loading"
 						@click="submit_dialog"
 						class="pos-action-btn submit-action-btn"
+						data-test="open-shift"
 						size="large"
 						elevation="2"
 					>
 						<v-icon start>mdi-check-circle-outline</v-icon>
-						<span>{{ __("Submit") }}</span>
+						<span>{{ __("Open Shift") }}</span>
 					</v-btn>
 				</v-card-actions>
 			</v-card>
@@ -133,7 +120,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import {
 	getOpeningDialogStorage,
 	setOpeningDialogStorage,
@@ -146,6 +133,7 @@ import {
 import { createBootstrapSnapshotFromRegisterData } from "../../../../offline/bootstrapSnapshot";
 import authService from "../../../services/authService";
 import { goToDesk } from "../../../services/deskNavigation";
+import { amountInputRule, normalizeClosingAmount } from "../../../utils/closingAmount";
 
 defineOptions({
 	name: "OpeningDialog",
@@ -169,24 +157,65 @@ const pos_profiles = ref([]);
 const pos_profile = ref("");
 const payments_method_data = ref([]);
 const payments_methods = ref([]);
-const payments_methods_headers = [
-	{
-		title: __("Mode of Payment"),
-		align: "start",
-		sortable: false,
-		value: "mode_of_payment",
-	},
-	{
-		title: __("Opening Amount"),
-		value: "amount",
-		align: "center",
-		sortable: false,
-	},
-];
-const itemsPerPage = ref(100);
-const max25chars = (v) => v.length <= 12 || "Input too long!";
 
 const currencySymbol = (currency) => get_currency_symbol?.(currency);
+
+const showSelectors = computed(() => companies.value.length > 1 || pos_profiles.value.length > 1);
+
+const selectedProfile = computed(
+	() => pos_profiles_data.value.find((profile) => profile.name === pos_profile.value) || null,
+);
+
+// Only the cash float matters at opening. Cash is the profile's cash mode
+// (the mode named "Cash" when none is set -- the closing's Expected Cash uses
+// the same rule), plus any other mode of type Cash, since the closing checks
+// each of those rows against its opening too. A profile with neither shows
+// every mode, so there is always a box to fill.
+const profileCashMode = computed(() => selectedProfile.value?.posa_cash_mode_of_payment || "Cash");
+const isCashRow = (row) =>
+	row.mode_of_payment === profileCashMode.value || String(row.type || "").toLowerCase() === "cash";
+const cashPaymentMethods = computed(() => payments_methods.value.filter(isCashRow));
+const showsCashOnly = computed(() => cashPaymentMethods.value.length > 0);
+const visiblePaymentMethods = computed(() =>
+	showsCashOnly.value ? cashPaymentMethods.value : payments_methods.value,
+);
+
+// The profile's cash mode is the "Opening float"; another Cash-type mode is
+// named, e.g. "Dollar Cash float". Without any cash mode, boxes show the mode.
+const amountLabel = (row) => {
+	if (!showsCashOnly.value) return row.mode_of_payment;
+	if (row.mode_of_payment === profileCashMode.value) return __("Opening float");
+	return __("{0} float", [row.mode_of_payment]);
+};
+
+// Decimal places for an amount: the POS Profile's, else the system currency
+// precision -- the same order as the closing screen.
+const amountPrecision = computed(() => {
+	const profilePrecision = parseInt(selectedProfile.value?.posa_decimal_precision);
+	if (!isNaN(profilePrecision)) return profilePrecision;
+	const systemPrecision = parseInt(window.frappe?.defaults?.get_default?.("currency_precision"));
+	return isNaN(systemPrecision) ? 2 : systemPrecision;
+});
+
+// Like the Closing Amount boxes: an amount of 0 shows as an empty box with a
+// faint 0 at the currency precision, and an empty box is sent as 0.
+const zeroPlaceholder = computed(() => (0).toFixed(amountPrecision.value));
+const amountDisplay = (value) => (value === 0 || value === null || value === undefined ? "" : value);
+const amountRule = (value) => amountInputRule(value, amountPrecision.value, __);
+const hasInvalidAmount = computed(() =>
+	visiblePaymentMethods.value.some((row) => amountRule(row.amount) !== true),
+);
+
+const selectOnFocus = (event) => {
+	const input = event?.target;
+	nextTick(() => {
+		try {
+			input?.select?.();
+		} catch {
+			// Some input types don't support selection; nothing to do.
+		}
+	});
+};
 
 watch(
 	() => props.dialog,
@@ -217,6 +246,7 @@ watch(pos_profile, (val) => {
 				mode_of_payment: element.mode_of_payment,
 				amount: 0,
 				currency: element.currency,
+				type: element.type,
 			});
 		}
 	});
@@ -265,7 +295,7 @@ async function get_opening_dialog_data() {
 async function submit_dialog() {
 	// The disabled button already stops a double click; this also stops any
 	// second call while the first is still in flight.
-	if (is_loading.value) {
+	if (is_loading.value || hasInvalidAmount.value) {
 		return;
 	}
 	if (!payments_methods.value.length || !company.value || !pos_profile.value) {
@@ -274,11 +304,18 @@ async function submit_dialog() {
 
 	is_loading.value = true;
 	try {
+		// Every mode is sent, the hidden non-cash ones as 0, so the closing's
+		// Payment Reconciliation and Z Report keep a row for each of them.
+		const balance_details = payments_methods.value.map((row) => ({
+			mode_of_payment: row.mode_of_payment,
+			amount: Number(normalizeClosingAmount(row.amount)) || 0,
+			currency: row.currency,
+		}));
 		// frappe.call returns a jQuery promise (no .finally), so await it.
 		const r = await frappe.call("posawesome.posawesome.api.shifts.create_opening_voucher", {
 			pos_profile: pos_profile.value,
 			company: company.value,
-			balance_details: payments_methods.value,
+			balance_details,
 		});
 		if (r?.message) {
 			emit("register", r.message);
@@ -320,24 +357,18 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Main Dialog Card */
 .opening-dialog-card {
 	border-radius: 16px;
 	overflow: hidden;
-	background: var(--pos-card-bg);
 	border: 1px solid var(--pos-border);
-	transition: all 0.3s ease;
 	max-height: 90vh;
 	display: flex;
 	flex-direction: column;
+	animation: slideInFromTop 0.4s ease-out;
 }
 
-/* Header Section - White Background with Blue Text */
 .opening-dialog-header {
-	background: var(--pos-card-bg);
-	color: var(--pos-primary);
 	padding: 16px 24px;
-	border-bottom: 2px solid rgba(25, 118, 210, 0.1);
 	flex-shrink: 0;
 }
 
@@ -354,7 +385,6 @@ onMounted(() => {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	transition: all 0.3s ease;
 }
 
 .header-icon {
@@ -379,240 +409,51 @@ onMounted(() => {
 	opacity: 0.8;
 	margin: 2px 0 0 0;
 	line-height: 1.3;
-	color: var(--pos-primary);
+	color: var(--pos-text-primary);
 }
 
-/* Content Section - Optimized for minimal scrolling */
 .opening-dialog-content {
-	padding: 20px 24px;
-	background: var(--pos-card-bg);
+	padding: 20px 24px 8px;
 	flex: 1;
 	overflow-y: auto;
 }
 
-.section-header-compact {
-	margin-bottom: 12px;
-}
-
-.section-title-compact {
+.opening-summary {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	font-size: 1rem;
-	font-weight: 600;
-	color: var(--pos-primary);
-	margin-bottom: 0;
-}
-
-.section-icon {
-	color: var(--pos-primary);
-	font-size: 18px;
-}
-
-/* Form Fields - Compact */
-.form-field {
-	margin-bottom: 12px;
-}
-
-.enhanced-field {
-	transition: all 0.3s ease;
-}
-
-.enhanced-field:hover {
-	transform: translateY(-1px);
-}
-
-.field-focused {
-	background: rgba(25, 118, 210, 0.02);
+	gap: 8px;
+	padding: 10px 14px;
+	margin-bottom: 18px;
 	border-radius: 8px;
-}
-
-/* Enhanced Table - Compact */
-.enhanced-table-compact {
-	border-radius: 8px;
-	overflow: hidden;
-	box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
-	border: 1px solid rgba(25, 118, 210, 0.1);
-}
-
-.enhanced-table-compact :deep(.v-data-table__wrapper) {
-	border-radius: 8px;
-}
-
-.enhanced-table-compact :deep(th) {
 	background: var(--pos-table-header-bg);
-	color: var(--pos-primary);
-	font-weight: 600;
-	border-bottom: 1px solid rgba(25, 118, 210, 0.1);
-	padding: 8px 12px;
-}
-
-.enhanced-table-compact :deep(td) {
-	padding: 6px 12px;
-}
-
-.enhanced-table-compact :deep(tr:hover) {
-	background: rgba(25, 118, 210, 0.04);
-}
-
-/* Amount Editor - Compact */
-.amount-editor {
-	width: 100%;
-}
-
-.amount-display-compact {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	/* Add this to center the content horizontally */
-	gap: 4px;
-	padding: 4px 8px;
-	background: rgba(25, 118, 210, 0.05);
-	border-radius: 6px;
-	transition: all 0.3s ease;
-	cursor: pointer;
-	min-height: 32px;
-}
-
-.amount-display-compact:hover {
-	background: rgba(25, 118, 210, 0.1);
-	transform: scale(1.01);
-}
-
-.currency-symbol {
-	font-weight: 600;
-	color: var(--pos-primary);
-	font-size: 0.9rem;
-}
-
-.amount-value {
-	font-weight: 500;
 	color: var(--pos-text-primary);
-	font-size: 0.9rem;
+	font-weight: 500;
 }
 
-.amount-input {
-	margin-top: 4px;
+.summary-icon {
+	color: var(--pos-primary);
 }
 
-/* Actions Section - Compact */
-.opening-dialog-actions-compact {
-	padding: 24px;
-	display: flex;
-	gap: 24px;
+.summary-separator {
+	opacity: 0.5;
 }
 
-.action-btn-revamped {
-	padding: 16px 24px !important;
-	border-radius: 12px !important;
-	font-weight: 700 !important;
-	text-transform: uppercase !important;
-	letter-spacing: 1px !important;
-	font-size: 1.3rem !important;
-	transition: all 0.3s ease !important;
-	position: relative;
-	overflow: hidden;
-	min-width: 180px !important;
-	border: none !important;
+.opening-amount-input {
+	margin-bottom: 12px;
 }
 
-.action-btn-revamped .v-icon {
-	font-size: 1.8rem !important;
+.opening-amount-input :deep(input) {
+	font-size: 1.5rem;
+	font-weight: 600;
 }
 
-.button-text {
-	position: relative;
-	z-index: 2;
-}
-
-.cancel-btn-revamped {
-	background: linear-gradient(135deg, #ff5252 0%, #d32f2f 100%) !important;
-	box-shadow: 0 4px 20px rgba(211, 47, 47, 0.4) !important;
-}
-
-.cancel-btn-revamped:hover {
-	box-shadow: 0 6px 25px rgba(211, 47, 47, 0.6) !important;
-	transform: translateY(-3px);
-}
-
-.cancel-btn-revamped:active {
-	transform: translateY(1px);
-	box-shadow: 0 2px 10px rgba(211, 47, 47, 0.4) !important;
-}
-
-.submit-btn-revamped {
-	background: linear-gradient(135deg, #4caf50 0%, #2e7d32 100%) !important;
-	box-shadow: 0 4px 20px rgba(46, 125, 50, 0.4) !important;
-}
-
-.submit-btn-revamped:hover {
-	box-shadow: 0 6px 25px rgba(46, 125, 50, 0.6) !important;
-	transform: translateY(-3px);
-}
-
-.submit-btn-revamped:hover:before {
+.opening-amount-input :deep(.v-text-field__prefix) {
+	font-size: 1.1rem;
+	font-weight: 600;
+	color: var(--pos-primary);
 	opacity: 1;
 }
 
-.submit-btn-revamped:active {
-	transform: translateY(1px);
-	box-shadow: 0 2px 10px rgba(46, 125, 50, 0.4) !important;
-}
-
-.submit-btn-revamped:disabled {
-	background: linear-gradient(135deg, #9e9e9e 0%, #757575 100%) !important;
-	box-shadow: none !important;
-	transform: none !important;
-	opacity: 0.7;
-}
-
-/* Responsive Design */
-@media (max-width: 768px) {
-	.opening-dialog-header {
-		padding: 12px 16px;
-	}
-
-	.header-content {
-		gap: 8px;
-	}
-
-	.header-title {
-		font-size: 1.2rem;
-	}
-
-	.opening-dialog-content {
-		padding: 16px;
-	}
-
-	.opening-dialog-actions-compact {
-		padding: 12px 16px;
-	}
-
-	.action-btn-compact {
-		padding: 6px 12px;
-		min-width: 70px;
-	}
-}
-
-@media (max-width: 480px) {
-	.header-content {
-		flex-direction: column;
-		text-align: center;
-		gap: 8px;
-	}
-
-	.opening-dialog-content {
-		padding: 12px;
-	}
-
-	.action-btn-compact {
-		margin-left: 4px;
-		padding: 6px 10px;
-		min-width: 60px;
-	}
-}
-
-/* Animation Effects */
 @keyframes slideInFromTop {
 	from {
 		opacity: 0;
@@ -625,33 +466,8 @@ onMounted(() => {
 	}
 }
 
-.opening-dialog-card {
-	animation: slideInFromTop 0.4s ease-out;
-}
-
-/* Focus and Interaction States */
-.enhanced-field :deep(.v-field--focused) {
-	box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.1);
-}
-
-.enhanced-table-compact :deep(.v-data-table-row--clickable:hover) {
-	background: rgba(25, 118, 210, 0.04) !important;
-}
-
-/* Enhanced focus states for form fields */
-.enhanced-field :deep(.v-field--focused .v-field__outline) {
-	border-color: rgba(25, 118, 210, 0.3) !important;
-	border-width: 1px !important;
-}
-
-.enhanced-field :deep(.v-field--focused .v-field__overlay) {
-	background: rgba(25, 118, 210, 0.02);
-}
-
-/* Action buttons with improved naming and styling */
+/* Action buttons */
 .dialog-actions-container {
-	background: var(--pos-card-bg);
-	border-top: 1px solid var(--pos-border);
 	padding: 16px 24px;
 	gap: 12px;
 }
@@ -660,8 +476,8 @@ onMounted(() => {
 	border-radius: 12px;
 	text-transform: none;
 	font-weight: 600;
-	padding: 12px 32px;
-	min-width: 120px;
+	padding: 12px 20px;
+	min-width: 110px;
 	transition: all 0.3s ease;
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
@@ -703,6 +519,18 @@ onMounted(() => {
 .submit-action-btn:disabled {
 	opacity: 0.6;
 	transform: none;
+}
+
+@media (max-width: 480px) {
+	.header-content {
+		flex-direction: column;
+		text-align: center;
+		gap: 8px;
+	}
+
+	.opening-dialog-content {
+		padding: 12px;
+	}
 }
 
 /* Theme-aware dialog styling */

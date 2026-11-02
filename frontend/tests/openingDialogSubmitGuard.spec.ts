@@ -88,7 +88,7 @@ const mountDialog = async (handlers: Record<string, unknown> = {}) => {
 };
 
 const submitButton = (wrapper: any) =>
-	wrapper.findAll("button").find((b: any) => b.text().includes("Submit"));
+	wrapper.findAll("button").find((b: any) => b.text().includes("Open Shift"));
 
 const OPENED = { message: { pos_profile: { name: "Test Pos" }, pos_opening_shift: { name: "OPEN-1" } } };
 
