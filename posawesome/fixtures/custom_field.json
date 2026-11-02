@@ -6687,9 +6687,20 @@
 	{
 		"doctype": "Custom Field",
 		"dt": "POS Profile",
+		"fieldname": "posa_qz_printable_width",
+		"fieldtype": "Float",
+		"insert_after": "posa_qz_printer_name",
+		"label": "QZ Printable Width (mm)",
+		"description": "Leave blank for most printers. Set to the width the receipt printer can actually print on, in mm (72 for an Epson TM-T88V on 80mm paper), if the left edge of QZ Tray receipts and Z Reports is cut off.",
+		"non_negative": 1,
+		"name": "POS Profile-posa_qz_printable_width"
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
 		"fieldname": "posa_receipt_logo",
 		"fieldtype": "Attach Image",
-		"insert_after": "posa_qz_printer_name",
+		"insert_after": "posa_qz_printable_width",
 		"label": "Receipt Logo",
 		"description": "Logo printed at the top of this POS Profile's receipts. Stored locally and embedded directly into the print -- no external image fetch at print time. Leave blank to print no logo.",
 		"name": "POS Profile-posa_receipt_logo"

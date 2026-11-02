@@ -10,6 +10,9 @@ export interface QzPrintHtmlOptions {
 	printerName?: string;
 	widthMm?: number;
 	orientation?: "portrait" | "landscape";
+	// Width the printer can actually print on (e.g. 72 on 80mm paper).
+	// Unset keeps zero margins, printing from the paper's left edge.
+	printableWidthMm?: number | null;
 }
 
 export interface QzPrintDocumentOptions extends QzPrintHtmlOptions {
@@ -26,6 +29,11 @@ const CERT_READY_STORAGE_KEY = "posa_qz_cert_ready";
 const MANUAL_DISCONNECT_STORAGE_KEY = "posa_qz_manual_disconnect";
 const DEFAULT_PRINT_FORMAT = "Standard";
 const PROFILE_PRINTER_FIELD = "posa_qz_printer_name";
+const PROFILE_PRINTABLE_WIDTH_FIELD = "posa_qz_printable_width";
+// Width the receipt and Z Report print formats lay themselves out at
+// (body { width: 76mm }). Fitting to a printable width renders at this
+// width, so the layout doesn't reflow and QZ scales it down to fit.
+const QZ_HTML_CONTENT_WIDTH_MM = 76;
 // qz.websocket.connect() has no built-in timeout: if the QZ Tray desktop
 // app isn't reachable (not running, unresponsive, origin not yet trusted),
 // the connection attempt can hang for a long, browser/OS-dependent time
@@ -139,7 +147,7 @@ function setReconnectPaused(value: boolean) {
 	saveReconnectPaused(value);
 }
 
-function getProfileDefaultPrinterName() {
+function getActiveProfile(): Record<string, any> | null {
 	try {
 		const uiStore = useUIStore();
 		const profile =
@@ -147,19 +155,25 @@ function getProfileDefaultPrinterName() {
 				? uiStore.posProfile.value
 				: uiStore?.posProfile;
 
-		if (!profile || typeof profile !== "object") {
-			return "";
-		}
-
-		const value = profile[PROFILE_PRINTER_FIELD];
-		if (typeof value === "string" && value.trim()) {
-			return value.trim();
-		}
+		return profile && typeof profile === "object" ? profile : null;
 	} catch {
 		// ignore store access issues outside app context
+		return null;
+	}
+}
+
+function getProfileDefaultPrinterName() {
+	const value = getActiveProfile()?.[PROFILE_PRINTER_FIELD];
+	if (typeof value === "string" && value.trim()) {
+		return value.trim();
 	}
 
 	return "";
+}
+
+function getProfilePrintableWidthMm() {
+	const value = Number(getActiveProfile()?.[PROFILE_PRINTABLE_WIDTH_FIELD]);
+	return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function setResolvedQzPrinter(name: string) {
@@ -441,26 +455,38 @@ export async function printHtmlViaQz(html: string, options: QzPrintHtmlOptions =
 
 	const printer = await ensureQzPrinterReady(options.printerName);
 
+	const paperWidthMm = options.widthMm || 80;
+	const printableWidthMm = Number(options.printableWidthMm) || 0;
+	// QZ draws from the paper's left edge when margins are zero, so a printer
+	// whose print head is narrower than the paper (Epson TM-T88V: 72mm on
+	// 80mm) loses the left few mm. Centre the page on the printable area.
+	const fitToPrintable = printableWidthMm > 0 && printableWidthMm < paperWidthMm;
+	const sideMarginMm = fitToPrintable ? (paperWidthMm - printableWidthMm) / 2 : 0;
+
 	const config = qz.configs.create(printer, {
 		size: {
-			width: options.widthMm || 80,
+			width: paperWidthMm,
 			height: null,
 		},
 		units: "mm",
 		orientation: options.orientation || "portrait",
-		margins: { top: 0, right: 0, bottom: 0, left: 0 },
+		margins: { top: 0, right: sideMarginMm, bottom: 0, left: sideMarginMm },
 		colorType: "grayscale",
 		interpolation: "nearest-neighbor",
 	});
 
-	const data = [
-		{
-			type: "pixel",
-			format: "html",
-			flavor: "plain",
-			data: html,
-		},
-	];
+	const pixelData: Parameters<typeof qz.print>[1][number] = {
+		type: "pixel",
+		format: "html",
+		flavor: "plain",
+		data: html,
+	};
+	if (fitToPrintable) {
+		pixelData.options = {
+			pageWidth: Math.min(paperWidthMm, Math.max(printableWidthMm, QZ_HTML_CONTENT_WIDTH_MM)),
+		};
+	}
+	const data = [pixelData];
 
 	await qz.print(config, data);
 }
@@ -540,5 +566,8 @@ export async function printDocumentViaQz(options: QzPrintDocumentOptions) {
 		throw new Error(translate("Unable to load print HTML from server."));
 	}
 
-	await printHtmlViaQz(buildPrintHtml(html, style), options);
+	await printHtmlViaQz(buildPrintHtml(html, style), {
+		...options,
+		printableWidthMm: options.printableWidthMm ?? getProfilePrintableWidthMm(),
+	});
 }

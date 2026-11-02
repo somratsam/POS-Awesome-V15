@@ -166,6 +166,113 @@ describe("qzTray service", () => {
 		expect(qzTray.selectedQzPrinter.value).toBe("Printer A");
 	});
 
+	describe("printable width", () => {
+		const TODAYS_CONFIG = {
+			size: { width: 80, height: null },
+			units: "mm",
+			orientation: "portrait",
+			margins: { top: 0, right: 0, bottom: 0, left: 0 },
+			colorType: "grayscale",
+			interpolation: "nearest-neighbor",
+		};
+
+		function mockPrintHtml() {
+			(globalThis as any).frappe.call = vi.fn(async () => ({
+				message: { html: "<p>Doc</p>", style: "" },
+			}));
+		}
+
+		function printed() {
+			const [, options] = qzMock.createConfig.mock.calls[0];
+			const [, data] = qzMock.print.mock.calls[0] as unknown as [unknown, any[]];
+			return { options, data };
+		}
+
+		beforeEach(() => {
+			qzMock.setActive(true);
+			mockPrintHtml();
+		});
+
+		it("leaves the QZ config exactly as before when the profile has no printable width", async () => {
+			qzMock.posProfile.value = { posa_qz_printer_name: "Bixolon", posa_qz_printable_width: 0 };
+			const qzTray = await import("../src/posapp/services/qzTray");
+
+			await qzTray.printDocumentViaQz({ doctype: "Sales Invoice", name: "SINV-1" });
+
+			const { options, data } = printed();
+			expect(options).toEqual(TODAYS_CONFIG);
+			expect(data).toEqual([
+				{ type: "pixel", format: "html", flavor: "plain", data: expect.any(String) },
+			]);
+			expect(data[0]).not.toHaveProperty("options");
+		});
+
+		it("centres the page on a 72mm printable width with a 76mm render width", async () => {
+			qzMock.posProfile.value = { posa_qz_printer_name: "Epson", posa_qz_printable_width: 72 };
+			const qzTray = await import("../src/posapp/services/qzTray");
+
+			await qzTray.printDocumentViaQz({ doctype: "Sales Invoice", name: "SINV-1" });
+
+			const { options, data } = printed();
+			expect(options).toEqual({
+				...TODAYS_CONFIG,
+				margins: { top: 0, right: 4, bottom: 0, left: 4 },
+			});
+			expect(data[0].options).toEqual({ pageWidth: 76 });
+		});
+
+		it("ignores a printable width that is not narrower than the paper", async () => {
+			qzMock.posProfile.value = { posa_qz_printer_name: "Bixolon", posa_qz_printable_width: 80 };
+			const qzTray = await import("../src/posapp/services/qzTray");
+
+			await qzTray.printDocumentViaQz({ doctype: "Sales Invoice", name: "SINV-1" });
+
+			const { options, data } = printed();
+			expect(options).toEqual(TODAYS_CONFIG);
+			expect(data[0]).not.toHaveProperty("options");
+		});
+
+		it("reaches QZ from the profile for receipts and the Z Report", async () => {
+			qzMock.posProfile.value = { posa_qz_printer_name: "Epson", posa_qz_printable_width: 72 };
+			const { printDocumentViaConfiguredQz, printZReport } = await import(
+				"../src/posapp/services/documentPrint"
+			);
+
+			await printDocumentViaConfiguredQz({
+				doctype: "Sales Invoice",
+				name: "SINV-1",
+				printFormat: "Swan Sales Invoice",
+				profile: qzMock.posProfile.value,
+			});
+			await expect(printZReport("POSA-CS-1")).resolves.toEqual({ ok: true });
+
+			expect(qzMock.createConfig).toHaveBeenCalledTimes(2);
+			for (const [printer, options] of qzMock.createConfig.mock.calls) {
+				expect(printer).toBe("Epson");
+				expect(options.margins).toEqual({ top: 0, right: 4, bottom: 0, left: 4 });
+			}
+			for (const [, data] of qzMock.print.mock.calls as unknown as [unknown, any[]][]) {
+				expect(data[0].options).toEqual({ pageWidth: 76 });
+			}
+			expect((globalThis as any).frappe.call).toHaveBeenCalledWith(
+				expect.objectContaining({
+					args: expect.objectContaining({ doc: "POS Closing Shift", print_format: "Z Report" }),
+				}),
+			);
+		});
+
+		it("does not apply the receipt printable width to direct HTML prints such as labels", async () => {
+			qzMock.posProfile.value = { posa_qz_printer_name: "Epson", posa_qz_printable_width: 72 };
+			const qzTray = await import("../src/posapp/services/qzTray");
+
+			await qzTray.printHtmlViaQz("<p>Label</p>", { widthMm: 50 });
+
+			const { options, data } = printed();
+			expect(options.margins).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+			expect(data[0]).not.toHaveProperty("options");
+		});
+	});
+
 	it("sends raw printer commands using QZ command format", async () => {
 		qzMock.setActive(true);
 		qzMock.findPrinters.mockResolvedValue(["Receipt Printer"]);
