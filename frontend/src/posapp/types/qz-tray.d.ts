@@ -26,6 +26,10 @@ declare module "qz-tray" {
 		format?: string;
 		flavor?: string;
 		data: string;
+		options?: {
+			pageWidth?: number;
+			pageHeight?: number;
+		};
 	}
 
 	interface QzConfigHandle {

@@ -413,6 +413,7 @@ fixtures = [
                     "POS Profile-posa_enable_print_audit",
                     "POS Profile-posa_default_printer_profile",
                     "POS Profile-posa_qz_printer_name",
+                    "POS Profile-posa_qz_printable_width",
                     "POS Profile-posa_receipt_logo",
                     "POS Profile-posa_receipt_address_en",
                     "POS Profile-posa_receipt_address_ar",
