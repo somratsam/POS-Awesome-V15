@@ -63,7 +63,7 @@
 
 <script setup>
 import { computed, inject, nextTick } from "vue";
-import { normalizeClosingAmount } from "../../../utils/closingAmount";
+import { amountInputRule, normalizeClosingAmount } from "../../../utils/closingAmount";
 
 const props = defineProps({
 	payments: Array,
@@ -86,30 +86,7 @@ const props = defineProps({
 const $frappe = inject("frappe", window.frappe);
 const __ = window.__ || ((t) => t);
 
-const closingAmountRule = (v) => {
-	if (v === "" || v === null || v === undefined) {
-		return true;
-	}
-
-	const value = typeof v === "number" ? v : Number(String(v).trim());
-
-	if (!Number.isFinite(value)) {
-		return "Please enter a valid number";
-	}
-
-	const stringValue = String(v);
-	const [integerPart, fractionalPart] = stringValue.split(".");
-
-	if (integerPart.replace(/^-/, "").length > 20) {
-		return "Number is too large";
-	}
-
-	if (fractionalPart && fractionalPart.length > props.currencyPrecision) {
-		return __("Maximum of {0} decimal places", [props.currencyPrecision]);
-	}
-
-	return true;
-};
+const closingAmountRule = (v) => amountInputRule(v, props.currencyPrecision, __);
 
 // An empty box shows a faint 0 at the currency precision (e.g. "0.000").
 const zeroPlaceholder = computed(() => props.formatCurrency(0, props.currencyPrecision));

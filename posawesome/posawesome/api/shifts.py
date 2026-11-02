@@ -19,7 +19,8 @@ def get_opening_dialog_data():
     # Get only POS Profiles where current user is defined in POS Profile User table
     pos_profiles_data = frappe.db.sql(
         """
-        SELECT DISTINCT p.name, p.company, p.currency 
+        SELECT DISTINCT p.name, p.company, p.currency,
+            p.posa_cash_mode_of_payment, p.posa_decimal_precision
         FROM `tabPOS Profile` p
         INNER JOIN `tabPOS Profile User` u ON u.parent = p.name
         WHERE p.disabled = 0 AND u.user = %s
@@ -51,9 +52,11 @@ def get_opening_dialog_data():
         order_by="parent",
         ignore_permissions=True,
     )
-    # set currency from pos profile
+    # set currency from pos profile; the type lets the opening screen show
+    # only the cash modes
     for mode in data["payments_method"]:
         mode["currency"] = frappe.get_cached_value("POS Profile", mode["parent"], "currency")
+        mode["type"] = frappe.get_cached_value("Mode of Payment", mode["mode_of_payment"], "type")
 
     return data
 

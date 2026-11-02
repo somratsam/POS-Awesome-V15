@@ -3,7 +3,11 @@ import json
 import frappe
 from frappe.tests import IntegrationTestCase
 
-from posawesome.posawesome.api.shifts import check_opening_shift, create_opening_voucher
+from posawesome.posawesome.api.shifts import (
+    check_opening_shift,
+    create_opening_voucher,
+    get_opening_dialog_data,
+)
 
 PREFIX = "SHIFT-TEST"
 STORE_A = "shift-store-a@test.invalid"  # assigned to profile A, permissions for A
@@ -91,6 +95,22 @@ class TestShifts(IntegrationTestCase):
     def test_pos_manager_role_alone_is_refused_like_at_sale_time(self):
         with self.assertRaisesRegex(frappe.PermissionError, "can't open a shift on POS Profile"):
             self._open(POS_MANAGER_ONLY, self.profile_a)
+
+    def test_opening_dialog_data_carries_the_cash_rule_inputs_for_own_profiles_only(self):
+        # The opening screen shows only the cash modes: it needs each profile's
+        # cash mode and precision, and each payment mode's type.
+        frappe.set_user(STORE_A)
+        data = get_opening_dialog_data()
+
+        self.assertEqual([p.name for p in data["pos_profiles_data"]], [self.profile_a])
+        profile = data["pos_profiles_data"][0]
+        self.assertIn("posa_cash_mode_of_payment", profile)
+        self.assertIn("posa_decimal_precision", profile)
+
+        modes = [m for m in data["payments_method"] if m["parent"] == self.profile_a]
+        self.assertEqual([m["mode_of_payment"] for m in modes], [self.mode])
+        self.assertEqual(modes[0]["type"], frappe.db.get_value("Mode of Payment", self.mode, "type"))
+        self.assertFalse([m for m in data["payments_method"] if m["parent"] == self.profile_b])
 
     # --- helpers
 
