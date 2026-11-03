@@ -15,7 +15,8 @@
 		<div
 			v-for="(payment, paymentIndex) in payments"
 			:key="payment.name"
-			class="payment-method-card"
+			:class="['payment-method-card', { 'payment-method-card--funded': holdsMoney(payment) }]"
+			:data-funded="holdsMoney(payment) ? '1' : undefined"
 			:data-payment-shortcut-index="
 				showKeyboardShortcuts && paymentIndex < 9 ? paymentIndex + 1 : undefined
 			"
@@ -23,7 +24,17 @@
 			<div class="payment-method-card__header">
 				<div>
 					<p class="payment-method-card__label">{{ frappe._("Method") }}</p>
-					<h4 class="payment-method-card__title">{{ payment.mode_of_payment }}</h4>
+					<h4 class="payment-method-card__title">
+						<v-icon
+							v-if="holdsMoney(payment)"
+							icon="mdi-check-circle"
+							size="18"
+							class="payment-method-card__tick"
+							data-test="payment-method-tick"
+							:aria-label="__('Has an amount')"
+						></v-icon>
+						{{ payment.mode_of_payment }}
+					</h4>
 				</div>
 				<div class="payment-method-card__badges">
 					<span
@@ -65,7 +76,11 @@
 						variant="solo"
 						:color="isReturn ? 'error' : 'primary'"
 						:label="frappe._('Amount')"
-						:class="['sleek-field pos-themed-input', isReturn ? 'pos-themed-input--refund' : '']"
+						:class="[
+							'sleek-field pos-themed-input',
+							isReturn ? 'pos-themed-input--refund' : '',
+							holdsMoney(payment) ? 'payment-method-card__amount--funded' : '',
+						]"
 						hide-details
 						:model-value="amountDisplay(payment)"
 						@change="$emit('update-amount', payment, $event)"
@@ -217,6 +232,11 @@ const handlePrimaryAction = (payment) => {
 const amountDisplay = (payment) =>
 	Number(payment?.amount) ? props.formatCurrency(payment.amount) : "";
 
+// A line holds money exactly when its Amount box shows a figure (a return's
+// refund line holds a negative one). It gets the accent border, tick and bold
+// amount, so the cashier sees which methods are being used.
+const holdsMoney = (payment) => Boolean(Number(payment?.amount));
+
 // Focusing an Amount box first lets the parent fill what's still owed (an
 // empty box only), then selects the whole value once the screen has caught
 // up: typing replaces it, Tab or Enter keeps it.
@@ -298,6 +318,9 @@ const blurTarget = (event) => {
 }
 
 .payment-method-card__title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	margin: 0;
 	font-size: 1rem;
 	line-height: 1.2;
@@ -311,6 +334,23 @@ const blurTarget = (event) => {
 	align-items: center;
 	flex-wrap: wrap;
 	justify-content: flex-end;
+}
+
+/* A line that holds money: accent border, tick, bold amount. Vuetify's
+   success colour is #2e7d32 in light and #4caf50 in dark. The thicker left
+   border keeps the content in place by trimming the padding to match. */
+.payment-method-card--funded {
+	border-color: rgb(var(--v-theme-success));
+	border-left-width: 4px;
+	padding-left: calc(var(--pos-space-3) - 3px);
+}
+
+.payment-method-card__tick {
+	color: rgb(var(--v-theme-success));
+}
+
+:deep(.payment-method-card__amount--funded input) {
+	font-weight: 800;
 }
 
 .payment-method-card__remove {
