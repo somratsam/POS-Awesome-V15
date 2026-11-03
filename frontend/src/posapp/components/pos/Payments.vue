@@ -34,6 +34,7 @@
 							:diff-payment="diff_payment"
 							:change_due="change_due"
 							:uncovered-overpayment="uncovered_overpayment"
+							:allow-credit-change="creditChangeOnSalesAllowed"
 							:paid_change="paid_change"
 							:credit_change="credit_change"
 							:paid_change_rules="paid_change_rules"
@@ -825,6 +826,9 @@ const visiblePaymentMethods = computed(() =>
 );
 
 const creditSaleAllowed = computed(() => parseBooleanSetting(pos_profile.value?.posa_allow_credit_sale));
+const creditChangeOnSalesAllowed = computed(() =>
+	parseBooleanSetting(pos_profile.value?.posa_allow_credit_change_on_sales),
+);
 
 // Confirmed business policy: exchange/credit only for returns, no refund of any
 // kind. When this POS Profile setting is on, "Store as Credit?" is forced on

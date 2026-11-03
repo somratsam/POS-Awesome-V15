@@ -616,6 +616,26 @@ def _enqueue_payload_background_submission(
     )
 
 
+def _assert_credit_change_only_on_returns(invoice, data, pos_profile):
+    """Unless the POS Profile allows Credit Change on sales, customer credit
+    comes only from returns: a sale's overpayment is handed back as change.
+    credit_change on a sale would create an advance Payment Entry for the
+    customer."""
+    if cint((invoice or {}).get("is_return")):
+        return
+    if flt((data or {}).get("credit_change")) <= 0:
+        return
+    if not cint(frappe.get_value("POS Profile", pos_profile, "posa_allow_credit_change_on_sales")):
+        frappe.throw(
+            _(
+                "Credit Change is not allowed on a sale. Customer credit can only "
+                "come from a return; hand the change back to the customer instead. "
+                "(POS Profile setting: Allow Credit Change on Sales.)"
+            ),
+            title=_("Credit Change Not Allowed"),
+        )
+
+
 def _has_post_submit_payment_work(data):
     return bool(
         flt((data or {}).get("redeemed_customer_credit"))
@@ -2126,6 +2146,10 @@ def submit_invoice(invoice, data, submit_in_background=False):
                 permission_type="write",
             )
             invoice["name"] = ledger_invoice.name
+
+    # After the replay returns above, so an invoice that is already submitted
+    # still gets its normal idempotent response.
+    _assert_credit_change_only_on_returns(invoice, data, pos_profile)
 
     authoritative_cashier = _resolve_authoritative_cashier(pos_profile, ledger_doc)
     data["_posa_authoritative_cashier"] = authoritative_cashier
