@@ -7848,3 +7848,53 @@ changes (site `site1.local`; from `d4790c72` to `aa3376b6`).
 - *Rollback* unchanged (`git checkout d4790c72`, build, migrate, restart);
   the `posa_qz_printable_width` column is left behind and harmless. The
   Epson paper setting can stay.
+
+## 83. Credit Change on sales behind a POS Profile tick box (on `stable`); payment rows holding money marked, opening focus off the Cash button (2026-11-03)
+
+Owner report after production moved `d4790c72` -> `aa3376b6`: an editable
+"Credit Change" box next to "Paid Change" on overpaid sales, and a bright
+cyan Cash button on opening the Payments screen while the money sat on Visa.
+
+**Credit Change** -- upstream (release `cd5eba17`), not from our commits;
+`626dee4b` only hid it for card overpayments. Anything typed in it became a
+real customer advance (`payment.py`, "Receive" Payment Entry), against Swan
+policy that credit comes only from returns. `4883be10` (stable `343dcc32`):
+new POS Profile tick box **Allow Credit Change on Sales**
+(`posa_allow_credit_change_on_sales`, Check, default 0, Sales and Return
+Controls after `posa_closing_variance_needs_supervisor`, hand-added to
+`custom_field.json`). Off: the box is read-only on sales and
+`submit_invoice` rejects `credit_change > 0` on a non-return invoice
+("Credit Change is not allowed on a sale..."), read from the server-resolved
+profile, after the replay check and before the ledger. On: as before.
+Returns unchanged. Tests: `test_creation` +5, `paymentSummary.spec` +3.
+Hand-tested OK on staging. Known, pre-existing: any server error on submit
+shows as "Connection problem... Network request failed" (Frappe's 417
+handler passes no status to `api.callEnvelope`), and the outbox resends it.
+
+**Cash highlight** -- regression from `bf7b6e9a`: an empty Amount box is an
+input with Vuetify's `.v-text-field input { opacity: 0 }`, which
+`keyboardNavigation.isElementVisible` reads as hidden, so
+`focusFirstPaymentTarget` skipped Cash's Amount box and focused the Cash
+*button*; theme.css's `.v-btn.bg-primary:focus` rule painted it cyan
+(`:focus`, not `:focus-visible`, so also when opened by mouse). Confirmed in
+headless Chromium on staging (Cash first, Visa default). `e4e1c0fc` (not on
+`stable` yet): every line with an amount (what its Amount box shows; a
+return's refund line too) gets a success-colour left border, a tick and a
+bold amount (#2e7d32 light, #4caf50 dark); on open the focus goes to the
+Amount box of the line holding money (Default first, found by test id via
+`utils/paymentOpeningFocus.ts`), else the payment root (`tabindex="-1"`),
+never a button; a credit-only return still focuses Submit. Live-checked
+light and dark: Visa's Amount box focused with 25.000 selected, highlight
+follows split and cash-only payments, Tab still shows the button focus.
+Tests: `paymentOpeningFocus.spec.ts` (14).
+
+**Checks** (`e4e1c0fc`): frontend 264/264 files, 1574/1574; `bench build`
+exit 0; no backend, fixture or doctype change.
+
+**Production for `343dcc32`** (from `aa3376b6`): backup; name check (no
+row) `SELECT name FROM tabCustom Field WHERE
+name='POS Profile-posa_allow_credit_change_on_sales'`; `git pull <remote>
+stable` -> `343dcc32`; build; migrate twice; field check expects
+`posa_allow_credit_change_on_sales | Sales and Return Controls | after
+posa_closing_variance_needs_supervisor | default 0`; restart; hard-refresh
+tills. Rollback: `git checkout aa3376b6`, build, migrate, restart.
