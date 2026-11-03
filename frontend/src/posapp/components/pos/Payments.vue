@@ -4,6 +4,7 @@
 		ref="paymentRoot"
 		data-pos-keyboard-root="payment"
 		data-testid="payment-root"
+		tabindex="-1"
 		:class="['payment-shell', { 'payment-shell--dialog': dialogMode }]"
 	>
 		<v-card
@@ -357,7 +358,7 @@ import { resolvePaymentPrintFormatDoctypes } from "../../utils/paymentPrintDocty
 import { resolvePaymentPrintFormat } from "../../utils/paymentPrintFormat";
 import { parseBooleanSetting } from "../../utils/stock";
 import { toCompanyCurrency } from "../../utils/erpnextCurrency";
-import { focusFirstKeyboardTarget } from "../../utils/keyboardNavigation";
+import { resolvePaymentOpeningFocus } from "../../utils/paymentOpeningFocus";
 import { resolveCounterGridPaymentShortcut } from "../../utils/counterGridPaymentShortcuts";
 
 // Components
@@ -1468,19 +1469,27 @@ const focusSubmitButton = () => {
 	return true;
 };
 
+// Opening focus goes to the Amount box of the line holding the money, never to
+// a payment method button (a focused Cash button looks selected while the money
+// sits on Visa). See resolvePaymentOpeningFocus.
 const focusFirstPaymentTarget = () => {
 	const root = paymentRoot.value;
-	if (
-		focusFirstKeyboardTarget(
-			root,
-			"[data-pos-keyboard-target='payment-amount'], [data-pos-keyboard-target='payment-action']",
-		)
-	) {
-		highlightSubmit.value = false;
-		return true;
+	const focus = resolvePaymentOpeningFocus(
+		root,
+		invoice_doc.value?.payments,
+		currency_precision.value,
+	);
+	if (focus.kind === "submit") {
+		return focusSubmitButton();
 	}
-
-	return focusSubmitButton();
+	if (focus.kind === "amount") {
+		focus.element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+		focus.element.focus();
+	} else {
+		root.focus({ preventScroll: true });
+	}
+	highlightSubmit.value = false;
+	return true;
 };
 
 const handleShowPayment = () => {
@@ -2494,6 +2503,11 @@ defineExpose({
 
 .payment-shell {
 	padding: 0;
+}
+
+/* Focused only as a neutral starting point when no line holds money. */
+.payment-shell:focus {
+	outline: none;
 }
 
 .payment-shell--dialog {
