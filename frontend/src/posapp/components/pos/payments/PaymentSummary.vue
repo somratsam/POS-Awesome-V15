@@ -77,6 +77,8 @@
 				:prefix="currencySymbol(invoice_doc.currency)"
 				density="compact"
 				type="text"
+				:readonly="!allowCreditChange"
+				data-test="payment-credit-change-field"
 				@change="$emit('update-credit-change', $event)"
 			></v-text-field>
 		</v-col>
@@ -114,6 +116,12 @@ const props = defineProps({
 	uncoveredOverpayment: {
 		type: Number,
 		default: 0,
+	},
+	// POS Profile "Allow Credit Change on Sales". Off: customer credit comes
+	// only from returns, so the Credit Change box is read-only.
+	allowCreditChange: {
+		type: Boolean,
+		default: false,
 	},
 });
 

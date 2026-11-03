@@ -5,6 +5,7 @@ import { defineComponent, h } from "vue";
 import { mount } from "@vue/test-utils";
 
 import PaymentSummary from "../src/posapp/components/pos/payments/PaymentSummary.vue";
+import paymentsSource from "../src/posapp/components/pos/Payments.vue?raw";
 
 const BoxStub = defineComponent({
 	setup(_, { slots }) {
@@ -180,5 +181,34 @@ describe("PaymentSummary", () => {
 		expect(diffField.classes()).not.toContain("payment-summary-field--over");
 		expect(wrapper.find('[data-label="Paid Change"]').exists()).toBe(true);
 		expect(wrapper.find('[data-label="Credit Change"]').exists()).toBe(true);
+	});
+
+	// POS Profile "Allow Credit Change on Sales" off (the default): customer
+	// credit comes only from returns, so the box can't be typed into.
+	it("shows Credit Change read-only on an overpaid cash sale by default", () => {
+		const wrapper = mountWithChange({ uncoveredOverpayment: 0 });
+
+		const creditField = wrapper.find('[data-label="Credit Change"]');
+		expect(creditField.exists()).toBe(true);
+		expect(creditField.attributes("readonly")).toBeDefined();
+	});
+
+	it("keeps Credit Change editable when the POS Profile allows it on sales", () => {
+		const wrapper = mountWithChange({ uncoveredOverpayment: 0, allowCreditChange: true });
+
+		const creditField = wrapper.find('[data-label="Credit Change"]');
+		expect(creditField.exists()).toBe(true);
+		expect(creditField.attributes("readonly")).toBeUndefined();
+	});
+
+	it("is fed the POS Profile setting by Payments.vue", () => {
+		const summaryTag = paymentsSource.slice(
+			paymentsSource.indexOf("<PaymentSummary"),
+			paymentsSource.indexOf("/>", paymentsSource.indexOf("<PaymentSummary")),
+		);
+		expect(summaryTag).toContain(':allow-credit-change="creditChangeOnSalesAllowed"');
+		expect(paymentsSource).toMatch(
+			/creditChangeOnSalesAllowed = computed\(\(\) =>\s*parseBooleanSetting\(pos_profile\.value\?\.posa_allow_credit_change_on_sales\)/,
+		);
 	});
 });

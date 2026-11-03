@@ -1596,6 +1596,119 @@ class TestManualPostingDatePreservation(unittest.TestCase):
         self.assertEqual(invoice_doc.set_posting_time, 1)
         self.assertEqual(result["status"], 1)
 
+    def _submit_with_change(self, invoice_overrides, data, allow_credit_change_on_sales=0):
+        invoice_doc = self._build_invoice_doc(name="ACC-SINV-CHANGE-0001", **invoice_overrides)
+        submit_calls = []
+
+        def submit():
+            submit_calls.append(True)
+            invoice_doc.docstatus = 1
+
+        invoice_doc.submit = submit
+        post_submit_data = []
+        self.creation.frappe.db.exists = lambda doctype, name: name == "ACC-SINV-CHANGE-0001"
+        self.creation.frappe.db.get_value = lambda *args, **kwargs: 0
+        self.creation.frappe.get_value = lambda doctype, name, fieldname, *args, **kwargs: (
+            allow_credit_change_on_sales
+            if fieldname == "posa_allow_credit_change_on_sales"
+            else 0
+        )
+        self.creation.frappe.get_doc = lambda *args: invoice_doc
+        self.creation._save_draft_with_latest_timestamp = lambda doc: doc
+        self.creation._apply_invoice_gift_card_settlement = lambda *args, **kwargs: None
+        self.creation._process_post_submit_payments = (
+            lambda doc, submitted_data, *args, **kwargs: post_submit_data.append(submitted_data)
+        )
+        payload = {
+            "doctype": "Sales Invoice",
+            "name": "ACC-SINV-CHANGE-0001",
+            "pos_profile": "Main POS",
+            "company": "Test Company",
+            "currency": "USD",
+            "customer": "CUST-0001",
+            "items": [],
+            "payments": [],
+        }
+        payload.update(invoice_overrides)
+        call = lambda: self.creation.submit_invoice(
+            json.dumps(payload), json.dumps(data), submit_in_background=0
+        )
+        return call, submit_calls, post_submit_data
+
+    def test_submit_invoice_rejects_credit_change_on_a_sale(self):
+        # A direct API call, bypassing the Payments screen, must not turn a
+        # sale's overpayment into customer credit.
+        call, submit_calls, post_submit_data = self._submit_with_change(
+            {}, {"total_change": 5.1, "paid_change": 0, "credit_change": 5.1}
+        )
+
+        with self.assertRaisesRegex(Exception, "Credit Change is not allowed on a sale"):
+            call()
+
+        self.assertEqual(submit_calls, [])
+        self.assertEqual(post_submit_data, [])
+
+    def test_submit_invoice_accepts_paid_change_on_a_sale(self):
+        call, submit_calls, post_submit_data = self._submit_with_change(
+            {}, {"total_change": 5.1, "paid_change": 5.1, "credit_change": 0}
+        )
+
+        result = call()
+
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(submit_calls, [True])
+        self.assertEqual(post_submit_data[0]["paid_change"], 5.1)
+
+    def test_submit_invoice_leaves_return_credit_change_unchanged(self):
+        call, submit_calls, post_submit_data = self._submit_with_change(
+            {"is_return": 1, "return_against": "ACC-SINV-BASE-0001"},
+            {"credit_change": 4},
+        )
+
+        result = call()
+
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(submit_calls, [True])
+        self.assertEqual(post_submit_data[0]["credit_change"], 4)
+
+    def test_submit_invoice_allows_credit_change_on_a_sale_when_profile_allows_it(self):
+        call, submit_calls, post_submit_data = self._submit_with_change(
+            {},
+            {"total_change": 5.1, "paid_change": 0, "credit_change": 5.1},
+            allow_credit_change_on_sales=1,
+        )
+
+        result = call()
+
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(submit_calls, [True])
+        self.assertEqual(post_submit_data[0]["credit_change"], 5.1)
+
+    def test_credit_change_guard_only_applies_to_sales_when_profile_disallows_it(self):
+        guard = self.creation._assert_credit_change_only_on_returns
+        setting = {"value": 0}
+        lookups = []
+
+        def get_value(doctype, name, fieldname, *args, **kwargs):
+            lookups.append((doctype, name, fieldname))
+            return setting["value"]
+
+        self.creation.frappe.get_value = get_value
+        guard({"is_return": 0}, {"credit_change": 0}, "Main POS")
+        guard({"is_return": 0}, {}, "Main POS")
+        guard({"is_return": 1}, {"credit_change": 10}, "Main POS")
+        self.assertEqual(lookups, [])
+        with self.assertRaisesRegex(Exception, "Credit Change is not allowed on a sale"):
+            guard({"is_return": 0}, {"credit_change": "0.01"}, "Main POS")
+        with self.assertRaisesRegex(Exception, "Credit Change is not allowed on a sale"):
+            guard({}, {"credit_change": 1}, "Main POS")
+        self.assertEqual(
+            lookups[0], ("POS Profile", "Main POS", "posa_allow_credit_change_on_sales")
+        )
+
+        setting["value"] = 1
+        guard({"is_return": 0}, {"credit_change": 5}, "Main POS")
+
     def test_submit_invoice_recalculates_existing_draft_with_non_inclusive_pos_tax(self):
         tax_row = {
             "charge_type": "On Net Total",
