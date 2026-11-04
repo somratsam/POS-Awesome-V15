@@ -311,8 +311,39 @@ def _payment_rows_from_correction(original_doc, correction):
     ]
 
 
+def _validate_corrected_customer(original_doc, correction):
+    """A changed customer must be a real, enabled customer this POS Profile may sell to.
+
+    Checked only when the customer actually changes, so an invoice whose
+    current customer sits outside the profile's groups (e.g. a walk-in) can
+    still have its other fields corrected."""
+    if not isinstance(correction, dict) or "customer" not in correction:
+        return
+    customer = str(correction.get("customer") or "").strip()
+    correction["customer"] = customer
+    if customer == str(original_doc.get("customer") or "").strip():
+        return
+    if not customer:
+        frappe.throw(_("Choose a customer for the corrected invoice."))
+
+    details = frappe.db.get_value("Customer", customer, ["disabled", "customer_group"], as_dict=True)
+    if not details:
+        frappe.throw(_("Customer {0} was not found. Pick a customer from the list.").format(customer))
+    if cint(details.disabled):
+        frappe.throw(_("Customer {0} is disabled.").format(customer))
+
+    from posawesome.posawesome.api.customers import get_customer_groups
+
+    profile_name = original_doc.get("pos_profile")
+    profile = frappe.get_cached_doc("POS Profile", profile_name).as_dict() if profile_name else {}
+    allowed_groups = get_customer_groups(profile)
+    if allowed_groups and details.customer_group not in allowed_groups:
+        frappe.throw(_("Customer {0} is not available in this POS Profile.").format(customer))
+
+
 def build_submitted_invoice_amendment_payload(original_doc, correction_data=None, client_request_id=None):
     correction = _loads(correction_data, {})
+    _validate_corrected_customer(original_doc, correction)
     amended_doc = frappe.copy_doc(original_doc)
     amended = amended_doc.as_dict()
     amended["doctype"] = original_doc.doctype
