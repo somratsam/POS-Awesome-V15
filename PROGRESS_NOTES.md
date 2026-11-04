@@ -7898,3 +7898,215 @@ stable` -> `343dcc32`; build; migrate twice; field check expects
 `posa_allow_credit_change_on_sales | Sales and Return Controls | after
 posa_closing_variance_needs_supervisor | default 0`; restart; hard-refresh
 tills. Rollback: `git checkout aa3376b6`, build, migrate, restart.
+
+## 84. Returns and exchanges: 15-day window enforced on the server, 3-month credit expiry, scan-to-return, credit on after a return (2026-11-04, `35677c5e` on `develop-swan`, NOT on `stable`)
+
+**Status (2026-11-04).** Committed as `35677c5e`. Owner hand-tested "credit on
+after a return"; the rest (15-day window, Return Valid Until, credit expiry,
+receipt barcode, Returns screen) is still being tested -- do not promote to
+`stable` until the owner confirms.
+
+**Found on staging before building.** With Enable Return Validity on and 15
+days, a return against a 90-day-old invoice (ACC-SINV-2026-00001, 5 Aug) was
+accepted: `_validate_return_window` read the original's
+`posa_return_valid_upto`, which is empty on every one of the 114 staging
+sales, and skipped when empty. That date came from the browser (a date
+picker on Payments, shown empty because it got YYYY-MM-DD with a dd-MM-yyyy
+format) and the server kept any value sent. Submitting an existing draft
+never re-ran the check. "Return without Invoice" off only hid the button.
+No credit expiry existed anywhere. After a return the customer reset to
+the profile default ("Test Pos" has none), and "Use Customer Balance" had
+to be switched on by hand. Enter in the Returns Invoice ID box did nothing
+(`search_invoices_by_enter` was never bound).
+
+**Return window** (`invoice_processing/utils.py`): deadline = original
+`posting_date` + days (`get_return_deadline`), checked against today's
+server date (a back-dated return can't reopen it), message "This invoice is
+older than 15 days and cannot be returned." Day 15 after the sale is the
+last allowed day. Days are ignored when Enable is off; Enable with 0 days
+= same day only (unchanged). Run in `update_invoice` and again in
+`submit_invoice`. `_set_return_valid_upto` always overwrites the sale's
+date (cleared when off). `returns.py` flags expired invoices with the same
+rule, so the Returns screen stops before loading one. New
+`_guard_return_without_invoice` refuses an unlinked return when the profile
+has it off. Payments shows "Return/Exchange valid until: <date>" as text.
+
+**Credit expiry** (`payments.py`): `CUSTOMER_CREDIT_VALIDITY_MONTHS = 3`;
+invoice credit (credit notes and credit change on a sale) past
+`posting_date + 3 months` is left out of `get_available_credit`; the last
+day still works. `include_expired=1` returns `{credit, expired}`; Payments
+uses it to show "Store credit of X OMR has expired (expired on D) and can't
+be used. Store credit is valid for 3 months." Advances (Payment Entries,
+M-Pesa) don't expire. New `_validate_customer_credit_sources` in
+`submit_invoice`: every "Invoice" row redeemed must be one of the
+customer's unexpired rows and not more than its balance, and needs
+`customer_credit_redemption_requested` (before, `redeeming_customer_credit`
+booked a JE against any credit-note name sent, and leaving the flag off
+skipped all-or-nothing). Expired credit stays in the GL as a liability; no
+write-off is made.
+
+**Scan to return.** `print_barcode.py`: Code 128 as inline SVG, Jinja
+methods `code128_svg` and `invoice_scan_code` (hooks `jinja`). Only the
+number part is encoded ("2026-00210"): the full name is 264 modules and did
+not decode at 171-180 dpi (Epson TM-T88V, 95% QZ scale); 165 modules
+decoded at 171, 180 and 203 dpi (zxing on Chromium renders). Returns
+focuses Invoice ID on open; Enter searches; a single result whose name is,
+or ends with "-" + the typed value, is loaded at once. Print format "Swan
+Sales Invoice" (DB only, CRLF lines) got, after the Reference line, on
+sales only: the barcode and "Return/Exchange valid until: <date>" (+ Arabic).
+Backup: `sites/staging.local/private/backups/print_format_swan_sales_invoice_before_exchange_20261103.json`.
+
+**Credit on after a return.** A return with no money moved arms
+`customersStore.armExchangeCredit(customer)` and re-selects that customer
+(after a tick, so the cart clear's reset comes first); the next Payments
+open for that customer switches "Use Customer Balance" on once
+(`takeExchangeCredit`). Selecting another customer clears it. Online only.
+
+**Live on staging** (headless Chromium, throwaway cashier, disabled after,
+not deleted: it is `posa_cashier` on the two invoices): old invoice ->
+message; ACC-SINV-2026-00165 by Enter -> loaded, return ACC-SINV-2026-00209
+(-10.000); new sale opened for "test disc", credit 90.820 applied, Visa
+48.480; ACC-SINV-2026-00210 receipt: "Exchange Value -90.820", barcode,
+valid until 18-11-2026; six JEs 90.820 total; Exchanges Today 90.82.
+
+**Checks.** vitest 264/264 files, 1581/1581; vue-tsc clean; `bench build`
+exit 0; migrate exit 0 (no doctype/fixture file changed; print format
+survived). Backend: test_payments 12/12, test_print_barcode 4/4,
+invoice_processing.test_utils 12/12, test_payment 4/4, test_creation 85 run
+with the same 8 pre-existing errors, test_same_shift_exchange 5/5,
+test_pos_closing_shift 10/10, test_customer_credit_invoice_fields 2/2,
+test_return_generic_customer_credit_guard 8/8, test_z_report 3/3,
+test_offline_sync_invoices 4/4, test_stored_value 2/2, test_gift_cards
+14/14, test_m_pesa_security 15/15, test_api_imports 4/4;
+test_submitted_invoice_shift_security fails identically before and after
+(stub lacks `add_days`). New tests fail on the old code.
+
+**Open.** 63 of 114 staging sales are to a shared customer; their returns
+must use Return without Invoice, which has no original and so no 15-day
+check. `get_available_credit` and `get_invoice_for_return` have no POS
+Profile access check (pre-existing). Desk "Create > Return" skips the POS
+checks and copies the payments as a full refund.
+
+## 85. Wrong customer on a sale: duplicate-name investigation; Edit Invoice typing fix and searchable Customer picker (2026-11-04, `8ea09e60` on `develop-swan`, NOT on `stable`)
+
+**Incident.** A cashier could not create a customer whose name already
+existed (different mobile), so she picked the existing customer -- another
+person -- and the sale (and any later credit note) went to the wrong account.
+
+**Found (staging, read-only, changes rolled back).**
+- ERPNext 16 does *not* block duplicate names under Customer Naming By =
+  Customer Name: it renames the new one "Name - 1". POS Awesome blocks
+  them itself (`customers._find_duplicate_customer_records`) unless the
+  POS Profile has **Allow Duplicate Customer Names**
+  (`posa_allow_duplicate_customer_names`). The block shows a browser
+  confirm "An existing customer matches these details: X. Select it
+  instead?" -- OK silently selects the *existing* customer. Mobile, email
+  and tax ID still block with the setting on. Mobile is optional.
+- Naming Series (Option A) tested in-process: duplicate names get
+  `CUST-YYYY-#####` IDs; search by mobile, credit, returns, loyalty,
+  receipt, Z Report and the rewards portal (keyed by
+  `source_customer_id`, matched by mobile + portal code) all work. Only
+  offline customer creation assumes ID == name (`UpdateCustomer.vue`
+  placeholder name; `offline/customers.ts` rewrites queued invoices whose
+  customer equals that name, and invoice sync continues even if the
+  customer failed to sync). Not changed.
+- Data Import runs with `flags.in_import`, so a same-name row fails with
+  DuplicateEntryError instead of getting "- 1"; never import with
+  "Update Existing Records" keyed by name; dedupe by mobile (last 8 digits).
+- Owner then ticked Allow Duplicate Customer Names on staging "Test Pos".
+
+**Fixing a wrong customer on a submitted invoice.** Desk Cancel -> Amend
+fails with "POSA Client Request ID must be unique": the field has
+`no_copy: 1`, but Frappe's Desk `copy_doc(doc, from_amend)` copies no_copy
+fields on amend by design (`create_new.js`). Not changed; the POS route is
+Invoice Management -> pencil (Edit Invoice), which cancels and re-submits
+with a new request ID. It is refused once the shift is closed (the POS
+Closing Shift link blocks the cancel -- confirmed live), after 24 hours,
+for returns and for credit/gift-card payments. The corrected invoice goes
+into the *editor's* open shift (`trusted_invoice_shift_reassignment`).
+
+**`8ea09e60`.**
+- Edit Invoice boxes could not be typed into with a mouse:
+  `handleEditModalClick` called `setEditKeyboardTarget` without
+  `focusRoot: false`, so every click moved focus back to the dialog card
+  (upstream 15.33.0). Click-then-Enter was the only workaround.
+- Customer is a v-autocomplete (name or mobile; result shows name, mobile,
+  ID if different; saves the ID; picked customer's mobile shown as a hint;
+  matches first; current name selected on focus). While the list is open,
+  Enter/arrows/Escape go to the list, not the dialog's capture-phase
+  navigation. `customersStore.lookupCustomers()` is a read-only search
+  that leaves the main customer box's results alone.
+- Server `_validate_corrected_customer`: a changed customer must exist,
+  be enabled and be in the profile's customer groups (an unknown name
+  used to crash with a TypeError, an empty one passed). The dialog shows
+  the server's message.
+- Live (headless Chromium, throwaway cashier): click-and-type works;
+  mobile 93876228 -> "sanju" picked with Enter; 00215 -> 00215-2 on sanju;
+  stock, GL, loyalty (139 points moved), Z Report (counted once), rewards
+  sync all correct.
+
+## 86. Edit Invoice for POS supervisors only (2026-11-04, `22e37d32` on `develop-swan`, NOT on `stable`)
+
+- Load/preview/submit need a **POS Awesome Supervisor**: the signed-in
+  user or the till's active cashier switched in by PIN (same rule as the
+  closing variance and the below-cost override). Otherwise
+  PermissionError "Only a POS supervisor can edit a submitted invoice.
+  Switch the till to a POS supervisor with their PIN, or sign in as one,
+  then try again." Checked inside the locked submit step, before the
+  cancel, after the existing rules. Managers without the role are refused.
+- New Custom Field **Edit Authorized By** (`posa_edit_authorized_by`,
+  Link User, read-only, no_copy, shown only when set) on Sales Invoice and
+  POS Invoice after `posa_client_request_id` (top customer section);
+  hand-added to `custom_field.json` and the hooks fixture list. Needs
+  migrate (staging: twice, second run no change, 357 Custom Fields).
+- POS: grey pencil with the message as tooltip when only a supervisor is
+  missing; a click re-asks the server. A refused click shows the message
+  twice (toast + Frappe's own box) -- cosmetic, left.
+- The till stays switched to the supervisor after an edit until someone
+  switches back; a one-time "supervisor PIN for this edit" prompt does not
+  exist (about a day of work).
+- Role holders on staging: Administrator, Aziz (somratsam2@gmail.com),
+  posa-e2e-credit-gap@test.invalid, posa-exch-test@test.invalid (disabled).
+- Live: cashier -> grey pencil, load/preview/submit API all 403 with the
+  message; till switched by PIN to a throwaway supervisor -> 00216 ->
+  00216-1, `posa_edit_authorized_by` = that supervisor.
+
+**Checks** (each commit's tree tested before committing, in a scratch
+worktree; staged tree hash identical to the tested one):
+`35677c5e` vitest 264/264 files, 1581/1581; `8ea09e60` 266/266, 1599/1599;
+`22e37d32` 267/267, 1605/1605. Backend: test_print_barcode 4/4,
+test_payments 12/12, invoice_processing.test_utils 12/12,
+invoice_processing.test_creation 85 run with the same 8 pre-existing
+errors, test_submitted_invoice_edit_customer 9/9 (also run against the
+`8ea09e60` module), test_submitted_invoice_edit_supervisor 13/13,
+test_pos_access 12/12, test_employees 21/21, test_terminal_state 5/5;
+test_submitted_invoice_shift_security fails as before (stub lacks
+`add_days`). `bench build` exit 0; migrate twice exit 0.
+
+**Stable.** `upstream/stable` = `3c4fc998` (has everything up to
+`e4e1c0fc`). On a detached copy of stable each of these applies cleanly
+and passes vitest: (1) alone 264/1581, (3) alone 265/1580, (2)+(3)
+267/1598, all three 267/1605 (code identical to `develop-swan`). (3) does
+not call anything from (2), but promote (2) with (3): without (2)
+supervisors can't type in the Edit dialog. Order: `35677c5e` (when
+confirmed), `8ea09e60`, `22e37d32`.
+
+**Open (not fixed).**
+- Cancelling an invoice paid with customer credit leaves its credit
+  Journal Entries submitted when Accounts Settings "Unlink Payment on
+  Cancellation of Invoice" is on (staging: on): ERPNext unlinks them
+  before `cancel_posawesome_credit_journal_entries` runs. Check production
+  and fix separately.
+- Staging System Settings Currency/Float Precision are 2 again (last
+  Version, 2026-10-29, set 3; no Version for the change back). Set to 3
+  before testing money on staging.
+- `FrappeTestCase` modules crash on staging ("Standard Buying" Price
+  List); new backend tests use `unittest.TestCase`.
+- The rewards sync never removes cancelled invoices from the portal.
+- `search_customers` takes customer groups from the client's profile JSON
+  (pre-existing).
+- Staging test data: ACC-SINV-2026-00213-2 and -00214 are the owner's;
+  throwaway invoices 00213/00215/00216 chains and shifts
+  POSA-OS-26-0000048/49 cancelled; posa-tmp-editprobe@ and
+  posa-tmp-editsuper@test.invalid disabled (linked from cancelled docs, so
+  not deleted).
