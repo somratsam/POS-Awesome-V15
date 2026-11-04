@@ -1637,17 +1637,43 @@
 				</div>
 
 				<div class="edit-form-grid mb-4">
-					<v-text-field
+					<v-autocomplete
 						v-model="editInvoiceDoc.customer"
+						v-model:menu="editCustomerMenu"
+						:items="editCustomerItems"
+						item-title="customer_name"
+						item-value="name"
+						:custom-filter="() => true"
+						:loading="editCustomerSearching"
+						:no-data-text="__('No matching customer')"
+						auto-select-first
 						variant="outlined"
 						density="compact"
-						hide-details
+						:hide-details="!editCustomerHint"
+						:hint="editCustomerHint"
+						persistent-hint
 						class="edit-key-field"
 						data-edit-nav="customer"
 						data-testid="invoice-edit-customer"
-						:label="__('Customer')"
+						:label="__('Customer (name or mobile)')"
+						@update:search="onEditCustomerSearch"
+						@update:focused="onEditCustomerFocused"
 						@update:model-value="scheduleEditPreview()"
-					/>
+					>
+						<template #item="{ props: itemProps, item }">
+							<v-list-item
+								v-bind="itemProps"
+								:data-testid="`invoice-edit-customer-option-${item.raw.name}`"
+							>
+								<v-list-item-subtitle v-if="item.raw.mobile_no">
+									{{ __("Mobile No") }}: {{ item.raw.mobile_no }}
+								</v-list-item-subtitle>
+								<v-list-item-subtitle v-if="item.raw.customer_name !== item.raw.name">
+									{{ __("ID") }}: {{ item.raw.name }}
+								</v-list-item-subtitle>
+							</v-list-item>
+						</template>
+					</v-autocomplete>
 					<v-text-field
 						v-model.number="editInvoiceDoc.discount_amount"
 						type="number"
@@ -2041,6 +2067,11 @@ export default {
 		editKeyboardTargetKey: "",
 		editKeyboardEditing: false,
 		editKeyboardGeneratedId: 0,
+		editCustomerItems: [],
+		editCustomerMenu: false,
+		editCustomerSearching: false,
+		editCustomerSearchSeq: 0,
+		editCustomerSearchTimer: null,
 		newEditItem: {
 			item_code: "",
 			qty: 1,
@@ -2092,6 +2123,15 @@ export default {
 		],
 	}),
 	computed: {
+		editCustomerHint() {
+			const selected = this.editInvoiceDoc?.customer;
+			const row = (this.editCustomerItems || []).find((customer) => customer.name === selected);
+			if (!row) return "";
+			const parts = [];
+			if (row.mobile_no) parts.push(`${__("Mobile No")}: ${row.mobile_no}`);
+			if (row.customer_name && row.customer_name !== row.name) parts.push(`${__("ID")}: ${row.name}`);
+			return parts.join(" · ");
+		},
 		currentInvoiceDoctype() {
 			return this.posProfile?.create_pos_invoice_instead_of_sales_invoice
 				? "POS Invoice"
@@ -3132,6 +3172,9 @@ export default {
 			this.editInvoiceDoc = null;
 			this.editPreviewDoc = null;
 			this.editEligibility = null;
+			this.clearEditCustomerSearch();
+			this.editCustomerItems = [];
+			this.editCustomerMenu = false;
 			this.newEditItem = { item_code: "", qty: 1, rate: 0 };
 		},
 		editScopeArgs(invoice) {
@@ -3209,6 +3252,103 @@ export default {
 				previewDoc.outstanding_amount = 0;
 			}
 			return targetTotal;
+		},
+		// Customer picker in the edit dialog. Searches the POS's local customer
+		// list (same matching as the main customer box) without touching that
+		// box's own results, and always keeps the selected customer in the list
+		// so the field still shows its name.
+		seedEditCustomerItems(doc) {
+			this.clearEditCustomerSearch();
+			const customer = doc?.customer;
+			this.editCustomerItems = customer
+				? [{ name: customer, customer_name: doc.customer_name || customer }]
+				: [];
+			if (customer) this.runEditCustomerSearch(customer, { enrichOnly: true });
+		},
+		clearEditCustomerSearch() {
+			if (this.editCustomerSearchTimer) {
+				if (typeof window !== "undefined") window.clearTimeout(this.editCustomerSearchTimer);
+				this.editCustomerSearchTimer = null;
+			}
+			this.editCustomerSearchSeq = Number(this.editCustomerSearchSeq || 0) + 1;
+			this.editCustomerSearching = false;
+		},
+		// On focus Vuetify fills the box with the current customer's name and
+		// puts the cursor after it; select it so typing a name or mobile
+		// replaces it instead of being appended.
+		onEditCustomerFocused(focused) {
+			if (!focused) return;
+			// Vuetify writes the name into the box while re-rendering after the
+			// focus change, which would undo an earlier selection.
+			this.$nextTick(() => {
+				window.setTimeout(() => {
+					const input = this.editModalElement()?.querySelector('[data-edit-nav="customer"] input');
+					input?.select?.();
+				}, 0);
+			});
+		},
+		onEditCustomerSearch(term) {
+			const text = String(term || "").trim();
+			const selected = this.editCustomerItems.find((row) => row.name === this.editInvoiceDoc?.customer);
+			// Vuetify puts the selected customer's name into the search box on
+			// selection/focus; that isn't a new search.
+			if (!text || (selected && text === (selected.customer_name || selected.name))) {
+				this.clearEditCustomerSearch();
+				return;
+			}
+			this.clearEditCustomerSearch();
+			this.editCustomerSearchTimer = window.setTimeout(() => {
+				this.editCustomerSearchTimer = null;
+				this.runEditCustomerSearch(text);
+			}, 250);
+		},
+		async runEditCustomerSearch(term, { enrichOnly = false } = {}) {
+			const seq = Number(this.editCustomerSearchSeq || 0) + 1;
+			this.editCustomerSearchSeq = seq;
+			if (!enrichOnly) this.editCustomerSearching = true;
+			try {
+				const results = (await this.customersStore.lookupCustomers(term, 20)) || [];
+				if (seq !== this.editCustomerSearchSeq || !this.editInvoiceDoc) return;
+				const selectedName = this.editInvoiceDoc.customer;
+				const current = this.editCustomerItems.find((row) => row.name === selectedName);
+				const match = results.find((row) => row.name === selectedName);
+				const selectedRow = match || current;
+				if (enrichOnly) {
+					if (match) this.editCustomerItems = [match];
+					return;
+				}
+				// Matches first, so Enter (auto-select-first) picks the top match;
+				// the current customer stays at the end only so the field can
+				// still show its name if nothing new is picked.
+				const rows = results.filter((row) => row?.name);
+				if (selectedRow && !match) rows.push(selectedRow);
+				this.editCustomerItems = rows;
+			} catch (error) {
+				console.error("Error searching customers for invoice edit:", error);
+			} finally {
+				if (seq === this.editCustomerSearchSeq) this.editCustomerSearching = false;
+			}
+		},
+		editErrorMessage(error, fallback) {
+			if (typeof error?.message === "string" && error.message.trim()) return error.message;
+			const raw = error?.responseJSON?._server_messages || error?._server_messages;
+			if (raw) {
+				try {
+					const first = JSON.parse(raw)?.[0];
+					let text = first;
+					try {
+						text = JSON.parse(first)?.message || first;
+					} catch {
+						// plain string message
+					}
+					if (typeof text === "string" && text.trim()) {
+						return frappe?.utils?.strip_html ? frappe.utils.strip_html(text) : text;
+					}
+				} catch {
+					// fall through to the fallback
+				}
+			}
+			return fallback;
 		},
 		clearScheduledEditPreview() {
 			if (this.editPreviewTimer) {
@@ -3434,7 +3574,10 @@ export default {
 		handleEditModalClick(event) {
 			const target = event.target?.closest?.("[data-edit-nav]");
 			if (target) {
-				this.setEditKeyboardTarget(target);
+				// Leave focus where the click put it: focusing the card here
+				// pulled the cursor out of the box just clicked, so nothing could
+				// be typed with a mouse or touch.
+				this.setEditKeyboardTarget(target, { focusRoot: false });
 				this.editKeyboardEditing = Boolean(
 					this.editFocusableElement(target)?.matches(
 						"input, textarea, select, [contenteditable='true']",
@@ -3447,6 +3590,17 @@ export default {
 			if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
 				event.preventDefault();
 				this.submitEditInvoice();
+				return;
+			}
+			// While the customer list is open, Enter picks the highlighted
+			// customer, arrows move through the list and Escape closes it --
+			// leave those keys to the dropdown instead of the dialog's own
+			// box-to-box navigation (this handler runs first, in capture phase).
+			if (
+				this.editCustomerMenu &&
+				["Enter", "Escape", "ArrowUp", "ArrowDown"].includes(event.key) &&
+				event.target?.closest?.('[data-edit-nav="customer"]')
+			) {
 				return;
 			}
 			if (event.key === "Escape") {
@@ -3518,6 +3672,7 @@ export default {
 				this.editEligibility = message?.metadata || null;
 				if (!Array.isArray(this.editInvoiceDoc.items)) this.editInvoiceDoc.items = [];
 				if (!Array.isArray(this.editInvoiceDoc.payments)) this.editInvoiceDoc.payments = [];
+				this.seedEditCustomerItems(this.editInvoiceDoc);
 				this.syncEditPaymentsToCorrectedTotal(
 					this.editInvoiceDoc.rounded_total || this.editInvoiceDoc.grand_total || 0,
 				);
@@ -3641,7 +3796,7 @@ export default {
 			} catch (error) {
 				if (requestId !== this.editPreviewRequestId) return;
 				console.error("Error previewing invoice edit:", error);
-				this.editError = error?.message || __("Unable to recalculate invoice");
+				this.editError = this.editErrorMessage(error, __("Unable to recalculate invoice"));
 				if (!silent) this.toastStore.show({ title: this.editError, color: "error" });
 			} finally {
 				if (requestId === this.editPreviewRequestId) {
@@ -3701,7 +3856,7 @@ export default {
 				await this.refreshAll();
 			} catch (error) {
 				console.error("Error submitting invoice edit:", error);
-				this.editError = error?.message || __("Unable to submit corrected invoice");
+				this.editError = this.editErrorMessage(error, __("Unable to submit corrected invoice"));
 				this.toastStore.show({ title: this.editError, color: "error" });
 			} finally {
 				this.editSubmitting = false;

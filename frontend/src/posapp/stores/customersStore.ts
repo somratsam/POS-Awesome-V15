@@ -594,6 +594,39 @@ export const useCustomersStore = defineStore("customers", () => {
 		}));
 	}
 
+	// Read-only search for customer pickers outside the main customer box
+	// (Invoice Management's edit dialog). Same matching as performSearch,
+	// including the server fallback for mobiles not cached yet, but it never
+	// touches the shared selector state (customers, searchTerm, page).
+	async function lookupCustomers(term = "", limit = 20) {
+		await ensureDatabase();
+		const normalized = normalizeCustomerSearchTerm(term);
+		const isMobileSearch =
+			isCustomerMobileSearchTerm(normalized) &&
+			buildCustomerMobileSearchKeys(normalized).length > 0;
+		let results: CustomerSummary[];
+		if (isMobileSearch) {
+			results = await searchIndexedMobileCustomers(normalized, 0);
+			if (!results.length) {
+				const remoteResults = await fetchServerMobileMatches(normalized);
+				if (remoteResults.length) {
+					await setCustomerStorage(remoteResults);
+					results = remoteResults;
+				}
+			}
+		} else {
+			let collection = db.table("customers");
+			if (normalized) {
+				const searchParts = buildCustomerSearchParts(normalized);
+				collection = collection.filter((customer: CustomerSummary) =>
+					customerMatchesSearchParts(customer, searchParts),
+				);
+			}
+			results = await collection.limit(limit).toArray();
+		}
+		return results.slice(0, limit);
+	}
+
 	async function loadMoreCustomers() {
 		if (loadingCustomers.value) {
 			return 0;
@@ -1044,6 +1077,7 @@ export const useCustomersStore = defineStore("customers", () => {
 		searchCustomers,
 		queueSearch,
 		findLocalDuplicateCustomers,
+		lookupCustomers,
 		loadMoreCustomers,
 		verifyServerCustomerCount,
 		get_customer_names,
