@@ -258,6 +258,25 @@ export const useCustomersStore = defineStore("customers", () => {
 
 	function setSelectedCustomer(name: string | null) {
 		selectedCustomer.value = name || null;
+		if (exchangeCreditCustomer.value && exchangeCreditCustomer.value !== selectedCustomer.value) {
+			exchangeCreditCustomer.value = null;
+		}
+	}
+
+	// Set right after a store-credit return is submitted: the next sale for
+	// that same customer opens Payments with "Use Customer Balance" already
+	// on. Cleared as soon as a different customer is selected, and used at
+	// most once (takeExchangeCredit), so a cashier switching it off stays off.
+	const exchangeCreditCustomer = ref<string | null>(null);
+
+	function armExchangeCredit(name: string | null) {
+		exchangeCreditCustomer.value = name || null;
+	}
+
+	function takeExchangeCredit(name: string | null | undefined) {
+		if (!name || exchangeCreditCustomer.value !== name) return false;
+		exchangeCreditCustomer.value = null;
+		return true;
 	}
 
 	function upsertCustomerSummaryFromInfo(info: CustomerInfo) {
@@ -1007,6 +1026,7 @@ export const useCustomersStore = defineStore("customers", () => {
 	function clearLocalState() {
 		resetPagination();
 		selectedCustomer.value = null;
+		exchangeCreditCustomer.value = null;
 		customerInfo.value = {};
 		loadProgress.value = 0;
 		totalCustomerCount.value = 0;
@@ -1039,6 +1059,9 @@ export const useCustomersStore = defineStore("customers", () => {
 		isLoadComplete,
 		setPosProfile,
 		setSelectedCustomer,
+		exchangeCreditCustomer,
+		armExchangeCredit,
+		takeExchangeCredit,
 		setCustomerInfo,
 		isCustomerInfoFresh,
 		searchCustomers,

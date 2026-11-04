@@ -243,3 +243,70 @@ describe("useRedemptionLogic", () => {
 		).toBeCloseTo(4.411, 6);
 	});
 });
+
+describe("useRedemptionLogic expired store credit", () => {
+	beforeEach(() => {
+		(globalThis as any).__ = (str: string, args: any[] = []) =>
+			str.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)] ?? ""));
+	});
+
+	it("applies only unexpired credit and tells the cashier about the expired part", async () => {
+		const call = vi.fn(async () => ({
+			message: {
+				credit: [{ type: "Invoice", credit_origin: "CN-NEW", total_credit: 20, credit_to_redeem: 0 }],
+				expired: [
+					{ type: "Invoice", credit_origin: "CN-OLD", total_credit: 7.5, expires_on: "2026-10-01" },
+				],
+			},
+		}));
+		(globalThis as any).frappe = { call, datetime: { str_to_user: (d: string) => `user:${d}` } };
+		const toastStore = { show: vi.fn() };
+
+		const { customer_credit_dict, redeemed_customer_credit, get_available_credit } = useRedemptionLogic({
+			invoiceDoc: ref<any>({ customer: "CUST-0001", rounded_total: 100, grand_total: 100, conversion_rate: 1 }),
+			posProfile: ref({ company: "Test Co", currency: "OMR" }),
+			customerInfo: ref({}),
+			currencyPrecision: ref(3),
+			formatFloat: (value: any) => Number(value || 0),
+			stores: { toastStore },
+		});
+
+		get_available_credit(true);
+		await flush();
+
+		expect(call).toHaveBeenCalledWith("posawesome.posawesome.api.payments.get_available_credit", {
+			customer: "CUST-0001",
+			company: "Test Co",
+			include_expired: 1,
+		});
+		expect(customer_credit_dict.value.map((row: any) => row.credit_origin)).toEqual(["CN-NEW"]);
+		expect(redeemed_customer_credit.value).toBe(20);
+		const expiredToast = toastStore.show.mock.calls
+			.map(([payload]: any[]) => payload)
+			.find((payload: any) => payload.key === "customer-credit-expired");
+		expect(expiredToast?.title).toBe(
+			"Store credit of 7.5 OMR has expired (expired on user:2026-10-01) and can't be used. Store credit is valid for 3 months.",
+		);
+		expect(expiredToast?.color).toBe("warning");
+	});
+
+	it("still accepts the old plain-list response", async () => {
+		(globalThis as any).frappe = {
+			call: vi.fn(async () => ({
+				message: [{ type: "Invoice", credit_origin: "CN-1", total_credit: 10, credit_to_redeem: 0 }],
+			})),
+		};
+		const { customer_credit_dict, get_available_credit } = useRedemptionLogic({
+			invoiceDoc: ref<any>({ customer: "CUST-0001", rounded_total: 50, grand_total: 50, conversion_rate: 1 }),
+			posProfile: ref({ company: "Test Co", currency: "OMR" }),
+			customerInfo: ref({}),
+			currencyPrecision: ref(3),
+			formatFloat: (value: any) => Number(value || 0),
+		});
+
+		get_available_credit(true);
+		await flush();
+
+		expect(customer_credit_dict.value.map((row: any) => row.credit_origin)).toEqual(["CN-1"]);
+	});
+});

@@ -14,18 +14,13 @@
 					@update:model-value="$emit('update:newDeliveryDate', $event)"
 				/>
 			</v-col>
-			<v-col cols="6" v-if="returnValidityEnabled && !invoiceDoc.is_return">
-				<VueDatePicker
-					:model-value="returnValidUptoDate"
-					model-type="format"
-					format="dd-MM-yyyy"
-					:min-date="returnValidityMinDate"
-					:enable-time-picker="false"
-					auto-apply
-					class="sleek-field pos-themed-input"
-					:placeholder="$frappe._('Return Valid Until')"
-					@update:model-value="$emit('update:returnValidUptoDate', $event)"
-				/>
+			<!-- Read-only: the server sets the deadline from the POS Profile's
+				Return Validity Days and ignores any value sent from here. -->
+			<v-col cols="6" v-if="returnValidityEnabled && !invoiceDoc.is_return && returnValidUptoDate">
+				<div class="return-valid-until-note">
+					{{ $frappe._("Return/Exchange valid until") }}:
+					<strong>{{ displayReturnValidUpto }}</strong>
+				</div>
 			</v-col>
 			<!-- Shipping Address Selection (if delivery date is set) -->
 			<v-col cols="12" v-if="invoiceDoc.posa_delivery_date">
@@ -115,9 +110,9 @@
 </template>
 
 <script setup>
-import { inject } from "vue";
+import { computed, inject } from "vue";
 
-defineProps({
+const props = defineProps({
 	invoiceDoc: {
 		type: Object,
 		required: true,
@@ -160,10 +155,25 @@ defineEmits(["update:newDeliveryDate", "update:returnValidUptoDate", "new-addres
 
 const $frappe = inject("frappe", window.frappe);
 const $__ = inject("__", window.__);
+
+// returnValidUptoDate arrives as YYYY-MM-DD (or already formatted for display).
+const displayReturnValidUpto = computed(() => {
+	const value = props.returnValidUptoDate;
+	if (!value) return "";
+	if (/^\d{4}-\d{2}-\d{2}$/.test(value) && $frappe?.datetime?.str_to_user) {
+		return $frappe.datetime.str_to_user(value);
+	}
+	return value;
+});
 </script>
 
 <style scoped>
 .pos-themed-input :deep(.v-field__input) {
 	font-weight: 500;
+}
+
+.return-valid-until-note {
+	padding: 8px 4px;
+	font-size: 0.9rem;
 }
 </style>

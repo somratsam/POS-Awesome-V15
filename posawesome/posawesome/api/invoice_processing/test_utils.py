@@ -141,3 +141,77 @@ class TestZeroValuationRateDefaults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReturnWindow(unittest.TestCase):
+    """The 15-day return window is decided on the server from the original
+    sale's posting date -- older invoices have no stored
+    posa_return_valid_upto and used to skip the check silently."""
+
+    def setUp(self):
+        import datetime
+
+        self.get_value_mock = Mock(return_value=None)
+        _install_stubs(self.get_value_mock)
+        self.utils = _load_utils_module()
+        self.today = datetime.date(2026, 11, 3)
+        self.utils.getdate = lambda value=None: (
+            value if isinstance(value, datetime.date) else datetime.date.fromisoformat(str(value))
+        )
+        self.utils.add_days = lambda value, days: value + datetime.timedelta(days=days)
+        self.utils.nowdate = lambda: self.today.isoformat()
+        self.utils.frappe.throw = Mock(side_effect=Exception("blocked"))
+
+    def _return_doc(self, return_against="SINV-OLD"):
+        return types.SimpleNamespace(
+            is_return=1,
+            return_against=return_against,
+            get=lambda key, default=None: {"return_against": return_against}.get(key, default),
+        )
+
+    def test_day_15_is_still_allowed_and_day_16_is_not(self):
+        self.assertFalse(self.utils.is_return_window_expired("2026-10-19", True, 15))
+        self.assertTrue(self.utils.is_return_window_expired("2026-10-18", True, 15))
+
+    def test_switched_off_never_expires(self):
+        self.assertFalse(self.utils.is_return_window_expired("2025-01-01", False, 15))
+
+    def test_old_invoice_without_stored_date_is_blocked_with_plain_message(self):
+        self.get_value_mock.return_value = "2026-08-05"
+
+        with self.assertRaises(Exception):
+            self.utils._validate_return_window(self._return_doc(), "Sales Invoice", True, 15)
+
+        self.utils.frappe.throw.assert_called_once_with(
+            "This invoice is older than 15 days and cannot be returned."
+        )
+        self.get_value_mock.assert_called_with("Sales Invoice", "SINV-OLD", "posting_date")
+
+    def test_recent_invoice_passes(self):
+        self.get_value_mock.return_value = "2026-10-28"
+        self.utils._validate_return_window(self._return_doc(), "Sales Invoice", True, 15)
+        self.utils.frappe.throw.assert_not_called()
+
+    def test_sale_deadline_is_set_by_the_server_not_the_browser(self):
+        import datetime
+
+        sale = types.SimpleNamespace(is_return=0, posa_return_valid_upto="2099-12-31")
+        sale.get = lambda key, default=None: {"posting_date": "2026-11-03"}.get(key, default)
+
+        self.utils._set_return_valid_upto(sale, True, 15)
+        self.assertEqual(sale.posa_return_valid_upto, datetime.date(2026, 11, 18))
+
+        self.utils._set_return_valid_upto(sale, False, 15)
+        self.assertIsNone(sale.posa_return_valid_upto)
+
+    def test_return_without_invoice_refused_when_profile_turns_it_off(self):
+        unlinked = types.SimpleNamespace(get=lambda key, default=None: {"is_return": 1}.get(key, default))
+
+        self.get_value_mock.return_value = 0
+        with self.assertRaises(Exception):
+            self.utils._guard_return_without_invoice(unlinked, "Main POS")
+
+        self.get_value_mock.return_value = 1
+        self.utils.frappe.throw.reset_mock(side_effect=True)
+        self.utils._guard_return_without_invoice(unlinked, "Main POS")
+        self.utils.frappe.throw.assert_not_called()

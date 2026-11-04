@@ -101,6 +101,15 @@ after_migrate = []
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
+# Jinja helpers for print formats: {{ code128_svg(invoice_scan_code(doc.name)) }}
+# prints the invoice-number barcode on the Swan Sales Invoice receipt.
+jinja = {
+    "methods": [
+        "posawesome.posawesome.api.print_barcode.code128_svg",
+        "posawesome.posawesome.api.print_barcode.invoice_scan_code",
+    ],
+}
+
 # Document Events
 # ---------------
 # Hook on document methods and events

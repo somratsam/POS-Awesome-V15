@@ -169,6 +169,7 @@ def _install_dependency_stubs():
     processing_utils = types.ModuleType("posawesome.posawesome.api.invoice_processing.utils")
     processing_utils._get_return_validity_settings = lambda *_args, **_kwargs: (False, 0)
     processing_utils._validate_return_window = lambda *_args, **_kwargs: None
+    processing_utils._guard_return_without_invoice = lambda *_args, **_kwargs: None
     processing_utils._resolve_effective_price_list = lambda *_args, **_kwargs: None
     processing_utils._build_invoice_remarks = lambda *_args, **_kwargs: ""
     processing_utils._set_return_valid_upto = lambda *_args, **_kwargs: None
@@ -342,6 +343,68 @@ class TestCustomerCreditPrintFields(unittest.TestCase):
         )
 
         self.assertEqual(captured_rows[0]["cashier"], "cashier@example.com")
+
+
+class TestCustomerCreditSources(unittest.TestCase):
+    """_validate_customer_credit_sources: redeemed credit notes must be the
+    customer's own, unexpired ones (get_available_credit), never more than
+    their balance, and only through the full-redemption flow."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.frappe, cls.enqueue_calls = _install_framework_stubs()
+        _install_dependency_stubs()
+        _install_package_stubs()
+        cls.creation = _load_module()
+
+    def setUp(self):
+        self.available = [
+            {"type": "Invoice", "credit_origin": "CN-VALID", "total_credit": 40},
+        ]
+
+    def _doc(self):
+        doc = FakeDoc(doctype="Sales Invoice", customer="CUST-0001", company="Test Company", is_return=0)
+        doc.precision = lambda _fieldname: 3
+        return doc
+
+    def _data(self, origin="CN-VALID", amount=40, requested=1, row_type="Invoice"):
+        return {
+            "customer_credit_redemption_requested": requested,
+            "redeemed_customer_credit": amount,
+            "customer_credit_dict": [
+                {"type": row_type, "credit_origin": origin, "total_credit": amount, "credit_to_redeem": amount}
+            ],
+        }
+
+    def _check(self, data):
+        self.creation._validate_customer_credit_sources(self._doc(), data, available_credit_rows=self.available)
+
+    def test_own_unexpired_credit_passes(self):
+        self._check(self._data())
+
+    def test_expired_or_foreign_credit_note_is_refused(self):
+        # An expired credit note is simply absent from get_available_credit().
+        with self.assertRaisesRegex(Exception, "expired or doesn't belong"):
+            self._check(self._data(origin="CN-EXPIRED"))
+
+    def test_more_than_the_credit_note_balance_is_refused(self):
+        with self.assertRaisesRegex(Exception, "more than its remaining balance"):
+            self._check(self._data(amount=41))
+
+    def test_invoice_credit_without_full_redemption_flag_is_refused(self):
+        with self.assertRaisesRegex(Exception, "only be redeemed in full"):
+            self._check(self._data(requested=0))
+
+    def test_advance_rows_are_left_alone(self):
+        # M-Pesa settles against a Payment Entry ("Advance" row) without the flag.
+        self._check(self._data(origin="ACC-PAY-0001", amount=5, requested=0, row_type="Advance"))
+
+    def test_returns_are_skipped(self):
+        doc = self._doc()
+        doc.is_return = 1
+        self.creation._validate_customer_credit_sources(
+            doc, self._data(origin="CN-EXPIRED"), available_credit_rows=self.available
+        )
 
 
 class TestUpdateInvoiceReturnPayments(unittest.TestCase):
@@ -1919,7 +1982,7 @@ class TestManualPostingDatePreservation(unittest.TestCase):
 
         def counting_get_available_credit(customer, company):
             available_credit_calls.append((customer, company))
-            return [{"total_credit": 150}]
+            return [{"type": "Invoice", "credit_origin": "CREDIT-INV-0001", "total_credit": 150}]
 
         self.creation.get_available_credit = counting_get_available_credit
 

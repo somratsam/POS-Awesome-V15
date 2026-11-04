@@ -260,3 +260,38 @@ describe("customersStore profile and customer dto handling", () => {
 		expect(observedCounts).toContain(449);
 	});
 });
+
+describe("customersStore exchange credit after a return", () => {
+	beforeEach(() => {
+		setActivePinia(createPinia());
+	});
+
+	it("is taken once, for the customer of the return only", () => {
+		const store = useCustomersStore();
+		store.setSelectedCustomer("CUST-A");
+		store.armExchangeCredit("CUST-A");
+
+		expect(store.takeExchangeCredit("CUST-B")).toBe(false);
+		expect(store.takeExchangeCredit("CUST-A")).toBe(true);
+		expect(store.takeExchangeCredit("CUST-A")).toBe(false);
+	});
+
+	it("is cleared when a different customer is selected", () => {
+		const store = useCustomersStore();
+		store.setSelectedCustomer("CUST-A");
+		store.armExchangeCredit("CUST-A");
+
+		store.setSelectedCustomer("CUST-B");
+		store.setSelectedCustomer("CUST-A");
+
+		expect(store.takeExchangeCredit("CUST-A")).toBe(false);
+	});
+
+	it("survives re-selecting the same customer", () => {
+		const store = useCustomersStore();
+		store.armExchangeCredit("CUST-A");
+		store.setSelectedCustomer("CUST-A");
+
+		expect(store.takeExchangeCredit("CUST-A")).toBe(true);
+	});
+});
