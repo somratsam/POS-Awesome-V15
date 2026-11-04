@@ -4,7 +4,6 @@ from frappe.utils import (
     add_days,
     cint,
     flt,
-    formatdate,
     getdate,
     nowdate,
     strip_html_tags,
@@ -43,29 +42,64 @@ def _get_return_validity_settings(pos_profile: str | None = None):
     return enable_validity, default_days
 
 
+def get_return_deadline(original_posting_date, default_days):
+    """Last day a sale may still be returned: its own posting date plus the
+    configured days (0 means same day only). Always computed here, never
+    read from the browser -- see _set_return_valid_upto."""
+    return add_days(getdate(original_posting_date), cint(default_days))
+
+
+def is_return_window_expired(original_posting_date, enabled, default_days):
+    if not enabled or not original_posting_date:
+        return False
+    return getdate(nowdate()) > get_return_deadline(original_posting_date, default_days)
+
+
+def return_window_expired_message(default_days):
+    return _("This invoice is older than {0} days and cannot be returned.").format(cint(default_days))
+
+
 def _set_return_valid_upto(invoice_doc, enabled, default_days):
-    if not enabled or invoice_doc.is_return:
+    """Stamp posa_return_valid_upto on a sale for the receipt. The server
+    decides the date: any value the browser sent is overwritten (or cleared
+    when the check is off), so a cashier can't extend it."""
+    if invoice_doc.is_return:
         return
 
-    if invoice_doc.get("posa_return_valid_upto"):
+    if not enabled:
+        invoice_doc.posa_return_valid_upto = None
         return
 
-    posting_date = getdate(invoice_doc.get("posting_date") or nowdate())
-    if default_days:
-        invoice_doc.posa_return_valid_upto = add_days(posting_date, default_days)
-    else:
-        invoice_doc.posa_return_valid_upto = posting_date
+    posting_date = invoice_doc.get("posting_date") or nowdate()
+    invoice_doc.posa_return_valid_upto = get_return_deadline(posting_date, default_days)
 
 
-def _validate_return_window(invoice_doc, doctype, enabled):
+def _validate_return_window(invoice_doc, doctype, enabled, default_days=0):
+    """Block a linked return once the original sale is past its window.
+
+    Counted from the original's posting_date, not its stored
+    posa_return_valid_upto: that field was filled by the browser before and
+    is empty on every older invoice, which used to make this check skip
+    them silently. Today's date is used, not the return's own posting_date,
+    so back-dating a return can't reopen the window."""
     if not enabled or not invoice_doc.is_return or not invoice_doc.get("return_against"):
         return
 
-    original_invoice = frappe.get_doc(doctype, invoice_doc.return_against)
-    validity_date = original_invoice.get("posa_return_valid_upto")
-    return_date = getdate(invoice_doc.get("posting_date") or nowdate())
-    if validity_date and return_date > getdate(validity_date):
-        frappe.throw(_("Returns are only allowed until {0}").format(formatdate(validity_date)))
+    original_posting_date = frappe.db.get_value(doctype, invoice_doc.return_against, "posting_date")
+    if is_return_window_expired(original_posting_date, enabled, default_days):
+        frappe.throw(return_window_expired_message(default_days))
+
+
+def _guard_return_without_invoice(invoice_doc, pos_profile):
+    """"Return without Invoice" off on the POS Profile used to only hide the
+    button; refuse an unlinked return on the server too."""
+    if not cint(invoice_doc.get("is_return")) or invoice_doc.get("return_against"):
+        return
+    if not pos_profile:
+        return
+    if cint(frappe.db.get_value("POS Profile", pos_profile, "posa_allow_return_without_invoice")):
+        return
+    frappe.throw(_("Returns without an original invoice are not allowed for this POS Profile."))
 
 
 def pos_profile_allows_zero_rated_items(pos_profile_name):

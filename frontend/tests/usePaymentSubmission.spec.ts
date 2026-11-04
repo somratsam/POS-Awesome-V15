@@ -2168,3 +2168,88 @@ describe("usePaymentSubmission", () => {
 		});
 	});
 });
+
+describe("usePaymentSubmission exchange after a store-credit return", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.stubGlobal("__", (value: string) => value);
+		vi.stubGlobal("frappe", { utils: { play_sound: vi.fn() } });
+	});
+
+	const submitDoc = async (doc: any) => {
+		const invoiceService = (await import("../src/posapp/services/invoiceService")).default;
+		(invoiceService.submitInvoice as any).mockResolvedValue({
+			name: doc.name,
+			doctype: "Sales Invoice",
+			docstatus: 1,
+		});
+		const invoiceDoc = ref<any>(doc);
+		const customersStore = {
+			setSelectedCustomer: vi.fn(),
+			armExchangeCredit: vi.fn(),
+		};
+		const { submitInvoice } = usePaymentSubmission({
+			invoiceDoc,
+			posProfile: ref({
+				customer: null,
+				posa_allow_submissions_in_background_job: 0,
+				create_pos_invoice_instead_of_sales_invoice: 0,
+			}),
+			stockSettings: ref({}),
+			invoiceType: ref(doc.is_return ? "Return" : "Invoice"),
+			formatFloat: (value) => Number(value || 0),
+			stores: {
+				toastStore: { show: vi.fn() },
+				uiStore: { setLastInvoice: vi.fn(), setLastStockAdjustment: vi.fn() },
+				customersStore,
+				invoiceStore: { invoiceDoc: invoiceDoc.value },
+			},
+			isCashback: ref(false),
+			paidChange: ref(0),
+			creditChange: ref(0),
+			redeemedCustomerCredit: ref(0),
+			customerCreditDict: ref([]),
+			diff_payment: ref(0),
+		});
+		const result = await submitInvoice(false, {
+			onFinishNavigation: vi.fn(),
+			onScheduleBackgroundCheck: vi.fn(),
+		});
+		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		return { customersStore, result };
+	};
+
+	it("keeps the customer and arms their credit for the next sale", async () => {
+		const { customersStore, result } = await submitDoc({
+			name: "ACC-SINV-RET-1",
+			doctype: "Sales Invoice",
+			is_return: 1,
+			customer: "CUST-R",
+			items: [],
+			payments: [{ mode_of_payment: "Cash", amount: 0, type: "Cash" }],
+			rounded_total: -50,
+			grand_total: -50,
+		});
+
+		expect(result?.success).toBe(true);
+		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith("CUST-R");
+		expect(customersStore.armExchangeCredit).toHaveBeenCalledWith("CUST-R");
+	});
+
+	it("does nothing special after a normal sale", async () => {
+		const { customersStore } = await submitDoc({
+			name: "ACC-SINV-SALE-1",
+			doctype: "Sales Invoice",
+			is_return: 0,
+			customer: "CUST-S",
+			items: [],
+			payments: [{ mode_of_payment: "Cash", amount: 100, type: "Cash" }],
+			rounded_total: 100,
+			grand_total: 100,
+		});
+
+		expect(customersStore.armExchangeCredit).not.toHaveBeenCalled();
+		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith(null);
+	});
+});

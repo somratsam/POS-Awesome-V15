@@ -1,3 +1,5 @@
+import calendar
+import datetime
 import importlib.util
 import pathlib
 import sys
@@ -78,6 +80,15 @@ def _install_stubs():
 
     frappe_utils.nowdate = lambda: "2026-03-26"
     frappe_utils.flt = lambda value, precision=None: round(float(value or 0), precision or 2)
+    frappe_utils.getdate = lambda value=None: datetime.date.fromisoformat(str(value or "2026-03-26"))
+    frappe_utils.cint = lambda value: int(float(value or 0))
+
+    def _add_months(date, months):
+        month_index = date.month - 1 + months
+        year, month = date.year + month_index // 12, month_index % 12 + 1
+        return date.replace(year=year, month=month, day=min(date.day, calendar.monthrange(year, month)[1]))
+
+    frappe_utils.add_months = _add_months
 
     frappe_module._ = lambda text: text
     frappe_module._dict = lambda payload=None, **kwargs: FakeChildRow(dict(payload or {}, **kwargs))
@@ -319,6 +330,81 @@ class TestRedeemingCustomerCredit(unittest.TestCase):
         )
 
         self.assertEqual(credits, [])
+
+    def _credit_note(self, name, posting_date, outstanding_amount=-20):
+        return types.SimpleNamespace(
+            name=name,
+            outstanding_amount=outstanding_amount,
+            is_return=1,
+            posting_date=posting_date,
+            docstatus=1,
+            customer="CUST-0001",
+            company="Test Company",
+        )
+
+    def test_get_available_credit_leaves_out_credit_older_than_three_months(self):
+        # Today is 2026-03-26 in these stubs: credit from 2025-12-26 is still
+        # usable today (its last day), credit from 2025-12-25 expired yesterday.
+        self.get_all_responses["Sales Invoice"] = [
+            self._credit_note("CN-LAST-DAY", "2025-12-26"),
+            self._credit_note("CN-EXPIRED", "2025-12-25", outstanding_amount=-7),
+        ]
+        self.get_all_responses["Payment Entry"] = []
+
+        credits = self.payments_module.get_available_credit(
+            customer="CUST-0001",
+            company="Test Company",
+        )
+
+        self.assertEqual(
+            credits,
+            [
+                {
+                    "type": "Invoice",
+                    "credit_origin": "CN-LAST-DAY",
+                    "total_credit": 20.0,
+                    "credit_to_redeem": 0,
+                    "source_type": "Sales Return",
+                    "expires_on": datetime.date(2026, 3, 26),
+                }
+            ],
+        )
+
+    def test_get_available_credit_include_expired_reports_expired_rows(self):
+        self.get_all_responses["Sales Invoice"] = [
+            self._credit_note("CN-VALID", "2026-03-01"),
+            self._credit_note("CN-EXPIRED", "2025-11-30", outstanding_amount=-7),
+        ]
+        self.get_all_responses["Payment Entry"] = []
+
+        result = self.payments_module.get_available_credit(
+            customer="CUST-0001",
+            company="Test Company",
+            include_expired=1,
+        )
+
+        self.assertEqual([row["credit_origin"] for row in result["credit"]], ["CN-VALID"])
+        self.assertEqual([row["credit_origin"] for row in result["expired"]], ["CN-EXPIRED"])
+        self.assertEqual(result["expired"][0]["total_credit"], 7.0)
+        self.assertEqual(result["expired"][0]["expires_on"], datetime.date(2026, 2, 28))
+
+    def test_get_available_credit_advances_do_not_expire(self):
+        self.get_all_responses["Sales Invoice"] = []
+        self.get_all_responses["Payment Entry"] = [
+            types.SimpleNamespace(
+                name="ACC-PAY-OLD",
+                unallocated_amount=5,
+                payment_type="Receive",
+                party_type="Customer",
+                party="CUST-0001",
+                company="Test Company",
+                docstatus=1,
+            ),
+        ]
+
+        credits = self.payments_module.get_available_credit(customer="CUST-0001", company="Test Company")
+
+        self.assertEqual([row["credit_origin"] for row in credits], ["ACC-PAY-OLD"])
 
     def test_repair_overpayment_change_allocations_previews_exact_match(self):
         self.get_all_responses["Sales Invoice"] = [

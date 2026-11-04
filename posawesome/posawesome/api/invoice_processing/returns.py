@@ -5,11 +5,27 @@ from frappe import _
 from frappe.utils import (
     cint,
     flt,
-    getdate,
-    nowdate,
 )
-from posawesome.posawesome.api.invoice_processing.utils import _get_return_validity_settings
+from posawesome.posawesome.api.invoice_processing.utils import (
+    _get_return_validity_settings,
+    get_return_deadline,
+    is_return_window_expired,
+    return_window_expired_message,
+)
 from posawesome.posawesome.api.utils import log_perf_event
+
+
+def _apply_return_window_fields(invoice, enforce_return_validity, return_validity_days):
+    """Same rule as _validate_return_window (counted from posting_date), so
+    the Returns screen flags exactly the invoices the server will refuse."""
+    posting_date = invoice.get("posting_date")
+    expired = is_return_window_expired(posting_date, enforce_return_validity, return_validity_days)
+    invoice["posa_return_expired"] = cint(expired)
+    if enforce_return_validity and posting_date:
+        invoice["posa_return_valid_upto"] = get_return_deadline(posting_date, return_validity_days)
+    invoice["posa_return_expired_message"] = (
+        return_window_expired_message(return_validity_days) if expired else None
+    )
 
 
 @frappe.whitelist()
@@ -50,7 +66,7 @@ def search_invoices_for_return(
         - has_more: Boolean indicating if there are more invoices to load
     """
     started_at = time.perf_counter()
-    enforce_return_validity, _ = _get_return_validity_settings(pos_profile)
+    enforce_return_validity, return_validity_days = _get_return_validity_settings(pos_profile)
 
     # Start with base filters
     filters = {
@@ -190,12 +206,7 @@ def search_invoices_for_return(
     for invoice in invoices_list:
         invoice["doctype"] = doctype
 
-        # Validation checks logic
-        validity_date = invoice.get("posa_return_valid_upto")
-        expired = False
-        if enforce_return_validity and validity_date:
-            expired = getdate(nowdate()) > getdate(validity_date)
-        invoice["posa_return_expired"] = cint(expired)
+        _apply_return_window_fields(invoice, enforce_return_validity, return_validity_days)
 
         data.append(invoice)
 
@@ -222,7 +233,7 @@ def search_invoices_for_return(
 def get_invoice_for_return(invoice_name, pos_profile=None, doctype="Sales Invoice"):
     """Return one invoice with returnable item quantities after past returns."""
     started_at = time.perf_counter()
-    enforce_return_validity, _ = _get_return_validity_settings(pos_profile)
+    enforce_return_validity, return_validity_days = _get_return_validity_settings(pos_profile)
 
     invoice_doc = frappe.get_cached_doc(doctype, invoice_name)
     invoice = {
@@ -248,6 +259,7 @@ def get_invoice_for_return(invoice_name, pos_profile=None, doctype="Sales Invoic
         "currency": invoice_doc.currency,
         "discount_amount": invoice_doc.discount_amount,
         "additional_discount_percentage": invoice_doc.additional_discount_percentage,
+        "posting_date": invoice_doc.get("posting_date"),
         "posa_return_valid_upto": invoice_doc.get("posa_return_valid_upto"),
         "payments": [
             {
@@ -335,11 +347,7 @@ def get_invoice_for_return(invoice_name, pos_profile=None, doctype="Sales Invoic
     invoice["items"] = filtered_items
     invoice["is_fully_returned"] = 1 if (invoice_doc.items and not filtered_items) else 0
 
-    validity_date = invoice.get("posa_return_valid_upto")
-    expired = False
-    if enforce_return_validity and validity_date:
-        expired = getdate(nowdate()) > getdate(validity_date)
-    invoice["posa_return_expired"] = cint(expired)
+    _apply_return_window_fields(invoice, enforce_return_validity, return_validity_days)
 
     log_perf_event(
         "get_invoice_for_return",

@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import json
 import frappe
-from frappe.utils import nowdate, flt
+from frappe.utils import add_months, cint, flt, getdate, nowdate
 from frappe import _
 from erpnext.accounts.utils import reconcile_against_document
 from posawesome.posawesome.api.erpnext_compat import resolve_get_party_bank_account
@@ -428,9 +428,25 @@ def redeeming_customer_credit(invoice_doc, data, is_payment_entry, total_cash, c
     return created_receive_payment_entries
 
 
+# Store credit (a credit note, or credit change left on a sale) can be
+# redeemed for this many months after the date of the invoice that created it.
+CUSTOMER_CREDIT_VALIDITY_MONTHS = 3
+
+
+def get_customer_credit_expiry(posting_date):
+    """Last day credit from an invoice posted on posting_date can be used."""
+    return add_months(getdate(posting_date), CUSTOMER_CREDIT_VALIDITY_MONTHS)
+
+
 @frappe.whitelist()
-def get_available_credit(customer, company):
+def get_available_credit(customer, company, include_expired=0):
+    """Redeemable credit rows for the customer. Invoice credit older than
+    CUSTOMER_CREDIT_VALIDITY_MONTHS is left out; with include_expired the
+    result is {"credit": rows, "expired": rows} so the POS can say why a
+    balance can't be used. Advances (Payment Entries) don't expire."""
     total_credit = []
+    expired_credit = []
+    today = getdate(nowdate())
 
     outstanding_invoices = frappe.get_all(
         "Sales Invoice",
@@ -440,7 +456,7 @@ def get_available_credit(customer, company):
             "customer": customer,
             "company": company,
         },
-        ["name", "outstanding_amount", "is_return"],
+        ["name", "outstanding_amount", "is_return", "posting_date"],
     )
 
     allocations = {}
@@ -474,13 +490,19 @@ def get_available_credit(customer, company):
         if remaining_credit <= 0:
             continue
 
+        expires_on = get_customer_credit_expiry(row.posting_date)
         row = {
             "type": "Invoice",
             "credit_origin": row.name,
             "total_credit": remaining_credit,
             "credit_to_redeem": 0,
             "source_type": "Sales Return" if row.is_return else "Sales Invoice",
+            "expires_on": expires_on,
         }
+
+        if today > expires_on:
+            expired_credit.append(row)
+            continue
 
         total_credit.append(row)
 
@@ -535,6 +557,8 @@ def get_available_credit(customer, company):
 
         total_credit.append(row)
 
+    if cint(include_expired):
+        return {"credit": total_credit, "expired": expired_credit}
     return total_credit
 
 

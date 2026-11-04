@@ -12,6 +12,7 @@ from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_a
 from posawesome.posawesome.api.invoice_processing.utils import (
     _get_return_validity_settings,
     _validate_return_window,
+    _guard_return_without_invoice,
     _resolve_effective_price_list,
     _build_invoice_remarks,
     _set_return_valid_upto,
@@ -1181,6 +1182,58 @@ def _validate_customer_credit_redemption(invoice_doc, data, available_credit_row
         )
 
 
+def _validate_customer_credit_sources(invoice_doc, data, available_credit_rows=None):
+    """Every credit note the payload redeems must be one of this customer's
+    own unexpired credit rows, for no more than its remaining balance.
+
+    redeeming_customer_credit() books a Journal Entry against whatever
+    Sales Invoice name each "Invoice" row of customer_credit_dict carries.
+    Without this, a crafted payload could redeem an expired credit note, or
+    leave customer_credit_redemption_requested off to skip the
+    all-or-nothing check. Only genuine "Use Customer Balance" redemption
+    creates "Invoice" rows (M-Pesa uses "Advance" rows), so those rows
+    require that flag.
+    """
+    if invoice_doc.get("is_return"):
+        return
+    data = data or {}
+    if not flt(data.get("redeemed_customer_credit")):
+        return
+
+    requested_rows = [
+        row
+        for row in (data.get("customer_credit_dict") or [])
+        if hasattr(row, "get")
+        and row.get("type") == "Invoice"
+        and flt(row.get("credit_to_redeem")) > 0
+    ]
+    if not requested_rows:
+        return
+
+    if not cint(data.get("customer_credit_redemption_requested")):
+        frappe.throw(_("Store credit can only be redeemed in full through Use Customer Balance."))
+
+    if available_credit_rows is None:
+        available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
+    available_by_origin = {
+        row.get("credit_origin"): flt(row.get("total_credit"))
+        for row in available_credit_rows
+        if row.get("type") == "Invoice"
+    }
+
+    precision = invoice_doc.precision("grand_total") or 2
+    for row in requested_rows:
+        origin = row.get("credit_origin")
+        if origin not in available_by_origin:
+            frappe.throw(
+                _(
+                    "Store credit from {0} can't be used: it has expired or doesn't belong to this customer."
+                ).format(origin)
+            )
+        if flt(row.get("credit_to_redeem"), precision) > flt(available_by_origin[origin], precision):
+            frappe.throw(_("Store credit from {0} is more than its remaining balance.").format(origin))
+
+
 def _apply_customer_credit_print_fields(invoice_doc, data, available_credit_rows=None):
     """available_credit_rows: see _validate_customer_credit_redemption's
     docstring -- same reuse-across-both-calls purpose."""
@@ -1800,7 +1853,8 @@ def update_invoice(data):
         if not validation.get("valid"):
             frappe.throw(validation.get("message"))
 
-    _validate_return_window(invoice_doc, doctype, return_validity_enabled)
+    _validate_return_window(invoice_doc, doctype, return_validity_enabled, default_validity_days)
+    _guard_return_without_invoice(invoice_doc, pos_profile)
 
     # Ensure customer exists before setting missing values
     customer_name = invoice_doc.get("customer")
@@ -2263,6 +2317,15 @@ def submit_invoice(invoice, data, submit_in_background=False):
 
     set_invoice_client_request_id(invoice_doc, client_request_id)
     _set_authoritative_cashier(invoice_doc, authoritative_cashier)
+
+    # Re-checked here, not only in update_invoice(): an existing draft is
+    # updated from the payload below without going through it, and the
+    # payload could carry its own posa_return_valid_upto.
+    return_validity_enabled, default_validity_days = _get_return_validity_settings(pos_profile)
+    _validate_return_window(invoice_doc, doctype, return_validity_enabled, default_validity_days)
+    _guard_return_without_invoice(invoice_doc, pos_profile)
+    _set_return_valid_upto(invoice_doc, return_validity_enabled, default_validity_days)
+
     if ledger_doc:
         _update_submission_ledger(
             ledger_doc,
@@ -2306,6 +2369,9 @@ def submit_invoice(invoice, data, submit_in_background=False):
         available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
 
     _validate_customer_credit_redemption(
+        invoice_doc, data, available_credit_rows=available_credit_rows
+    )
+    _validate_customer_credit_sources(
         invoice_doc, data, available_credit_rows=available_credit_rows
     )
 

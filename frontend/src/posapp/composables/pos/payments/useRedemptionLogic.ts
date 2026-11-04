@@ -113,6 +113,31 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 		customer_credit_blocked.value = false;
 	};
 
+	// Credit older than its expiry date (3 months, decided by the server) is
+	// left out of the redeemable rows; tell the cashier why it isn't there.
+	const notifyExpiredCredit = (expiredRows: any[]) => {
+		if (!stores?.toastStore) return;
+		const total = normalizeFloat(sumRawCredit(expiredRows));
+		const latest = expiredRows
+			.map((row: any) => String(row?.expires_on || ""))
+			.filter(Boolean)
+			.sort()
+			.pop();
+		const currency = unref(posProfile)?.currency || "";
+		const expiredOn =
+			latest && typeof frappe !== "undefined" && frappe?.datetime?.str_to_user
+				? frappe.datetime.str_to_user(latest)
+				: latest || "";
+		stores.toastStore.show({
+			title: __(
+				"Store credit of {0}{1} has expired (expired on {2}) and can't be used. Store credit is valid for 3 months.",
+				[total, currency ? ` ${currency}` : "", expiredOn],
+			),
+			color: "warning",
+			key: "customer-credit-expired",
+		});
+	};
+
 	// Get available customer credit
 	const get_available_credit = (use_credit: boolean) => {
 		if (options.onClearAmounts) {
@@ -144,10 +169,16 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 					{
 						customer,
 						company,
+						include_expired: 1,
 					},
 				)
 				.then((r: any) => {
-					const data = r.message;
+					const message = r.message;
+					const data = Array.isArray(message) ? message : message?.credit || [];
+					const expired = Array.isArray(message?.expired) ? message.expired : [];
+					if (expired.length) {
+						notifyExpiredCredit(expired);
+					}
 					if (data && data.length) {
 						saveStoredValueSnapshot(customer, company, data);
 						applyCreditRows(data);

@@ -1,4 +1,4 @@
-import { unref, type Ref, type ComputedRef } from "vue";
+import { nextTick, unref, type Ref, type ComputedRef } from "vue";
 import invoiceService from "../../../services/invoiceService";
 import { isApiEnvelopeError, unwrapApiResult } from "../../../services/api";
 import {
@@ -88,6 +88,12 @@ export interface SubmissionCallbacks {
 		waitForInvoiceProcessing?: boolean;
 	}) => void;
 }
+
+// No payment row moved money, so the whole return became store credit.
+const isStoreCreditReturn = (doc: any) =>
+	!(Array.isArray(doc?.payments) ? doc.payments : []).some(
+		(payment: any) => Math.abs(Number(payment?.amount) || 0) > 0,
+	);
 
 export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 	const {
@@ -1364,12 +1370,27 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 				});
 			}
 
+			// Read before the cart is cleared below.
+			const exchangeCustomer =
+				doc?.is_return && isStoreCreditReturn(doc) ? doc.customer : null;
+
 			if (onFinishNavigation) onFinishNavigation(true);
 
 			if (stores?.customersStore?.setSelectedCustomer) {
 				stores.customersStore.setSelectedCustomer(
 					profile?.customer || null,
 				);
+			}
+
+			// Exchange: a return that left store credit goes straight into a
+			// new sale for the same customer, with their credit switched on
+			// when Payments opens. Waits a tick so the cart clear above has
+			// finished resetting the customer first.
+			if (exchangeCustomer && stores?.customersStore?.armExchangeCredit) {
+				void nextTick(() => {
+					stores.customersStore.setSelectedCustomer(exchangeCustomer);
+					stores.customersStore.armExchangeCredit(exchangeCustomer);
+				});
 			}
 
 			if (

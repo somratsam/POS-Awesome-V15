@@ -2414,6 +2414,18 @@ onMounted(() => {
 				get_addresses();
 			}
 			get_sales_person_names();
+
+			// Exchange after a return: same effect as the cashier switching on
+			// "Use Customer Balance" (PaymentOptions.vue), once, for that
+			// customer only -- see customersStore.armExchangeCredit.
+			if (
+				!doc.is_return &&
+				pos_profile.value?.use_customer_credit &&
+				customersStore.takeExchangeCredit(doc.customer)
+			) {
+				redeem_customer_credit.value = true;
+				get_available_credit(true);
+			}
 		});
 
 		eventBus.on("register_pos_profile", (data) => {

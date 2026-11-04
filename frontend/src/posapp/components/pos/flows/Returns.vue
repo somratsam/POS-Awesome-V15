@@ -50,6 +50,8 @@
 								v-model="invoice_name"
 								density="compact"
 								clearable
+								ref="invoiceIdInput"
+								@keydown.enter.prevent="search_invoices_by_enter"
 							></v-text-field>
 						</v-col>
 						<v-col cols="12" sm="3">
@@ -551,17 +553,28 @@ export default {
 			this.has_more_invoices = false;
 			this.searched_once = false;
 		},
-		search_invoices_by_enter(e) {
-			if (e.keyCode === 13) {
-				this.search_invoices();
-			}
+		// Enter in the Invoice ID box searches. A receipt barcode scan types
+		// the number part of the invoice name ("2026-00210" for
+		// ACC-SINV-2026-00210, see print_barcode.invoice_scan_code) plus
+		// Enter, so a single matching invoice is loaded straight away.
+		search_invoices_by_enter() {
+			this.search_invoices({ autoLoadExactMatch: true });
 		},
-		search_invoices() {
+		search_invoices(options = {}) {
 			this.page = 1;
 			this.dialog_data = [];
-			this.perform_search();
+			this.perform_search(options);
 		},
-		perform_search() {
+		autoLoadExactInvoice() {
+			const typed = String(this.invoice_name || "").trim().toUpperCase();
+			if (!typed || this.dialog_data.length !== 1) return;
+			const match = this.dialog_data[0];
+			const name = String(match?.name || "").toUpperCase();
+			if (name !== typed && !name.endsWith(`-${typed}`)) return;
+			this.selectInvoice(match);
+			this.submit_dialog();
+		},
+		perform_search(options = {}) {
 			const vm = this;
 			vm.loading_more = true;
 
@@ -674,6 +687,10 @@ export default {
 
 						// Set flag if there are more invoices to load
 						vm.has_more_invoices = r.message.has_more;
+
+						if (options.autoLoadExactMatch) {
+							vm.autoLoadExactInvoice();
+						}
 					} else {
 						vm.dialog_data = [];
 						vm.has_more_invoices = false;
@@ -733,7 +750,19 @@ export default {
 					return;
 				}
 
-				if (!return_doc || !Array.isArray(return_doc.items) || return_doc.items.length === 0) {
+				// The server refuses this return anyway (_validate_return_window);
+				// stop here so the cashier gets the reason before building it.
+				if (return_doc?.posa_return_expired) {
+					this.toastStore.show({
+						title:
+							return_doc.posa_return_expired_message ||
+							__("This invoice is too old to be returned."),
+						color: "error",
+					});
+					return;
+				}
+
+								if (!return_doc || !Array.isArray(return_doc.items) || return_doc.items.length === 0) {
 					this.toastStore.show({
 						title: __("No returnable items found for this invoice"),
 						color: "warning",
@@ -869,6 +898,10 @@ export default {
 			this.page = 1;
 			this.has_more_invoices = false;
 			this.searched_once = false;
+			// Ready for a receipt barcode scan without a click first.
+			this.$nextTick(() => {
+				setTimeout(() => this.$refs.invoiceIdInput?.focus?.(), 150);
+			});
 		});
 
 		this.$watch(
