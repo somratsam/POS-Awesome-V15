@@ -294,6 +294,8 @@ fixtures = [
                     "POS Invoice-posa_is_printed",
                     "Sales Invoice-posa_is_printed",
                     "Sales Invoice-posa_receipt_synced",
+                    "Sales Invoice-posa_edit_authorized_by",
+                    "POS Invoice-posa_edit_authorized_by",
                     "Sales Invoice Reference-pos_invoice",
                     "POS Profile-posa_local_storage",
                     "POS Profile-posa_force_server_items",

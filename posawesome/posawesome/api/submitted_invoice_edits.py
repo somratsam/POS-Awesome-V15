@@ -205,7 +205,44 @@ def _has_stored_value_settlement(doc):
     return bool(redemptions)
 
 
-def get_submitted_invoice_edit_metadata(doc):
+def supervisor_required_message():
+    return _(
+        "Only a POS supervisor can edit a submitted invoice. Switch the till to a POS supervisor "
+        "with their PIN, or sign in as one, then try again."
+    )
+
+
+def get_submitted_invoice_edit_approver(pos_profile):
+    """The POS supervisor authorizing an Edit Invoice, or None.
+
+    Same rule as an over-tolerance closing and a below-cost sale override: the
+    signed-in user, or the till's active cashier switched in by PIN (terminal
+    state is held server-side per browser session and POS Profile)."""
+    from posawesome.posawesome.api.employees import _get_user_doc, _is_pos_supervisor
+    from posawesome.posawesome.api.terminal_state import get_active_terminal_cashier
+
+    def is_supervisor(user):
+        try:
+            return bool(user) and _is_pos_supervisor(_get_user_doc(user))
+        except (frappe.ValidationError, frappe.DoesNotExistError):
+            frappe.clear_last_message()
+            return False
+
+    session_user = getattr(frappe.session, "user", None)
+    if session_user and session_user != "Guest" and is_supervisor(session_user):
+        return session_user
+    if not pos_profile:
+        return None
+    try:
+        cashier = get_active_terminal_cashier(pos_profile)
+    except (frappe.PermissionError, frappe.ValidationError):
+        # Locked till or no PIN cashier: nobody is switched in.
+        frappe.clear_last_message()
+        return None
+    return cashier if is_supervisor(cashier) else None
+
+
+def get_submitted_invoice_edit_metadata(doc, approver_cache=None):
     root_info = _get_root_invoice_info(doc.doctype, doc)
     window_hours = _get_edit_window_hours(doc.get("pos_profile"))
     age_hours = _hours_since(root_info.get("original_creation"))
@@ -240,9 +277,27 @@ def get_submitted_invoice_edit_metadata(doc):
         can_edit = False
         reason = _("Invoices settled with gift cards or customer credit are not editable here.")
 
+    # Checked last, so an invoice that can't be edited at all still shows why.
+    approver = None
+    requires_supervisor = False
+    if can_edit:
+        profile_name = doc.get("pos_profile")
+        if approver_cache is not None and profile_name in approver_cache:
+            approver = approver_cache[profile_name]
+        else:
+            approver = get_submitted_invoice_edit_approver(profile_name)
+            if approver_cache is not None:
+                approver_cache[profile_name] = approver
+        if not approver:
+            can_edit = False
+            requires_supervisor = True
+            reason = supervisor_required_message()
+
     return {
         "can_edit_submitted_invoice": bool(can_edit),
         "edit_block_reason": reason,
+        "edit_requires_supervisor": requires_supervisor,
+        "edit_authorized_by": approver,
         "edit_window_hours": window_hours,
         "edit_age_hours": age_hours,
         **root_info,
@@ -258,6 +313,8 @@ def assert_submitted_invoice_edit_allowed(doc, pos_profile=None, company=None):
         frappe.throw(_("Invoice {0} does not belong to company {1}.").format(doc.name, company))
 
     metadata = get_submitted_invoice_edit_metadata(doc)
+    if metadata.get("edit_requires_supervisor"):
+        frappe.throw(metadata.get("edit_block_reason"), frappe.PermissionError)
     if not metadata.get("can_edit_submitted_invoice"):
         frappe.throw(metadata.get("edit_block_reason") or _("This invoice cannot be edited."))
     return metadata
@@ -442,10 +499,11 @@ def list_submitted_invoices(
         order_by=order_by,
         limit_page_length=cint(limit_page_length or 0),
     )
+    approver_cache = {}
     for row in rows or []:
         row["doctype"] = doctype
         doc = frappe._dict(row)
-        row.update(get_submitted_invoice_edit_metadata(doc))
+        row.update(get_submitted_invoice_edit_metadata(doc, approver_cache=approver_cache))
     if has_credit_exchange_columns:
         _apply_credit_exchange_badges(rows)
     return rows
@@ -591,6 +649,8 @@ def submit_submitted_invoice_edit(
             )
         amended_doc = frappe.get_doc(response.get("doctype") or doctype, response.get("name"))
         set_invoice_client_request_id(amended_doc, client_request_id)
+        if _has_column(amended_doc.doctype, "posa_edit_authorized_by"):
+            amended_doc.posa_edit_authorized_by = metadata.get("edit_authorized_by")
         amended_doc.db_update()
         return {
             **response,
