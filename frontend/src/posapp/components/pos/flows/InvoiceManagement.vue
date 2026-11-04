@@ -318,13 +318,13 @@
 											@click="viewInvoice(item)"
 										/>
 										<v-btn
-											v-if="canEditSubmittedInvoice(item)"
+											v-if="showEditInvoiceAction(item)"
 											icon="mdi-pencil-outline"
 											variant="text"
 											size="small"
-											color="primary"
+											:color="canEditSubmittedInvoice(item) ? 'primary' : 'grey'"
 											:data-testid="`invoice-management-edit-${item.name}`"
-											:title="__('Edit Invoice')"
+											:title="editInvoiceActionTitle(item)"
 											:aria-label="__('Edit submitted invoice')"
 											@click="openEditInvoice(item)"
 										/>
@@ -489,13 +489,13 @@
 											@click="viewInvoice(invoice)"
 										/>
 										<v-btn
-											v-if="canEditSubmittedInvoice(invoice)"
+											v-if="showEditInvoiceAction(invoice)"
 											icon="mdi-pencil-outline"
 											size="small"
 											variant="text"
-											color="primary"
+											:color="canEditSubmittedInvoice(invoice) ? 'primary' : 'grey'"
 											:data-testid="`invoice-management-edit-${invoice.name}`"
-											:title="__('Edit Invoice')"
+											:title="editInvoiceActionTitle(invoice)"
 											:aria-label="__('Edit submitted invoice')"
 											@click="openEditInvoice(invoice)"
 										/>
@@ -742,13 +742,13 @@
 											@click="openAddPayment(item)"
 										/>
 										<v-btn
-											v-if="canEditSubmittedInvoice(item)"
+											v-if="showEditInvoiceAction(item)"
 											icon="mdi-pencil-outline"
 											variant="text"
 											size="small"
-											color="primary"
+											:color="canEditSubmittedInvoice(item) ? 'primary' : 'grey'"
 											:data-testid="`invoice-management-edit-${item.name}`"
-											:title="__('Edit Invoice')"
+											:title="editInvoiceActionTitle(item)"
 											:aria-label="__('Edit submitted invoice')"
 											@click="openEditInvoice(item)"
 										/>
@@ -900,13 +900,13 @@
 											{{ __("Add Payment") }}
 										</v-btn>
 										<v-btn
-											v-if="canEditSubmittedInvoice(invoice)"
+											v-if="showEditInvoiceAction(invoice)"
 											icon="mdi-pencil-outline"
 											size="small"
 											variant="text"
-											color="primary"
+											:color="canEditSubmittedInvoice(invoice) ? 'primary' : 'grey'"
 											:data-testid="`invoice-management-edit-${invoice.name}`"
-											:title="__('Edit Invoice')"
+											:title="editInvoiceActionTitle(invoice)"
 											:aria-label="__('Edit submitted invoice')"
 											@click="openEditInvoice(invoice)"
 										/>
@@ -2740,6 +2740,15 @@ export default {
 		canEditSubmittedInvoice(invoice) {
 			return Boolean(invoice?.can_edit_submitted_invoice);
 		},
+		// An otherwise-editable invoice that only needs a POS supervisor keeps
+		// a greyed pencil whose tooltip/click explains why.
+		showEditInvoiceAction(invoice) {
+			return this.canEditSubmittedInvoice(invoice) || Boolean(invoice?.edit_requires_supervisor);
+		},
+		editInvoiceActionTitle(invoice) {
+			if (this.canEditSubmittedInvoice(invoice)) return __("Edit Invoice");
+			return invoice?.edit_block_reason || __("Edit Invoice");
+		},
 		sortInvoicesByLatest(items) {
 			return [...items].sort(
 				(left, right) => this.invoiceSortValue(right) - this.invoiceSortValue(left),
@@ -3651,7 +3660,9 @@ export default {
 				});
 				return;
 			}
-			if (!this.canEditSubmittedInvoice(invoice)) {
+			// Supervisor-only blocks are re-checked by the server: the till may
+			// have been switched to a supervisor since the list was loaded.
+			if (!this.canEditSubmittedInvoice(invoice) && !invoice?.edit_requires_supervisor) {
 				this.toastStore.show({
 					title: invoice?.edit_block_reason || __("This invoice cannot be edited"),
 					color: "warning",
@@ -3678,7 +3689,10 @@ export default {
 				);
 			} catch (error) {
 				console.error("Error loading editable invoice:", error);
-				this.editError = error?.message || __("Unable to load editable invoice");
+				this.editError =
+					error?.message ||
+					(invoice?.edit_requires_supervisor ? invoice.edit_block_reason : "") ||
+					__("Unable to load editable invoice");
 				this.toastStore.show({ title: this.editError, color: "error" });
 				this.closeEditInvoice();
 			} finally {
