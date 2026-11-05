@@ -4,10 +4,12 @@
 """Upload Stock Check: everything one catalog upload put into stock, for staff
 to compare against their own sheet.
 
-An upload ends with one submitted Stock Reconciliation (the only step that
-carries warehouse and quantity), so one upload = one Stock Reconciliation.
-Rows are limited to the warehouses the user's Warehouse User Permissions
-allow; the Excel export re-runs execute() as the same user, so it can never
+An upload ends with one submitted Stock Reconciliation or, since quantities
+for items that may already have sold below zero are loaded as receipts, one
+submitted Material Receipt (Stock Entry): one upload = one such voucher, and
+each row says which kind it came from. Rows are limited to the warehouses the
+user's Warehouse User Permissions allow (per voucher doctype, Frappe's own
+rule); the Excel export re-runs execute() as the same user, so it can never
 contain more than the screen shows.
 """
 
@@ -19,6 +21,8 @@ from frappe.utils import cstr, escape_html, flt, format_datetime, get_datetime, 
 
 REPORT_NAME = "Upload Stock Check"
 UPLOAD_DOCTYPE = "Stock Reconciliation"
+RECEIPT_DOCTYPE = "Stock Entry"
+RECEIPT_PURPOSE = "Material Receipt"
 PRICE_LIST = "Standard Selling"
 SIZE_ATTRIBUTES = ("Size",)
 COLOUR_ATTRIBUTES = ("Color", "Colour")
@@ -30,8 +34,11 @@ UPLOAD_LIST_LIMIT = 200
 def execute(filters=None):
     filters = frappe._dict(filters or {})
     upload = cstr(filters.get("upload")).strip()
-    warehouses = narrow_to_chosen(get_permitted_warehouses(), filters.get("warehouse"))
-    if not upload or warehouses == set():
+    source = _upload_source(upload)
+    if not source:
+        return get_columns(), []
+    warehouses = narrow_to_chosen(get_permitted_warehouses(doctype=source["doctype"]), filters.get("warehouse"))
+    if warehouses == set():
         return get_columns(), []
     return get_columns(), get_data(upload, warehouses)
 
@@ -40,6 +47,7 @@ def get_columns():
     return [
         {"label": _("Item Code (Barcode)"), "fieldname": "item_code", "fieldtype": "Data", "width": 160},
         {"label": _("Parent Style Code"), "fieldname": "variant_of", "fieldtype": "Data", "width": 140},
+        {"label": _("Style Name"), "fieldname": "style_name", "fieldtype": "Data", "width": 180},
         {"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 220},
         {"label": _("Description"), "fieldname": "description", "fieldtype": "Data", "width": 200},
         {"label": _("Brand"), "fieldname": "brand", "fieldtype": "Data", "width": 110},
@@ -49,12 +57,14 @@ def get_columns():
         {"label": _("Collection"), "fieldname": "collection", "fieldtype": "Data", "width": 120},
         {"label": _("Price"), "fieldname": "price", "fieldtype": "Float", "precision": 3, "width": 100},
         {"label": _("Quantity"), "fieldname": "qty", "fieldtype": "Float", "width": 90},
+        {"label": _("Voucher Type"), "fieldname": "voucher_type", "fieldtype": "Data", "width": 150},
         {"label": _("Upload Date and Time"), "fieldname": "upload_datetime", "fieldtype": "Datetime", "width": 160},
     ]
 
 
-def get_permitted_warehouses(user=None):
-    """Warehouses the user's Warehouse User Permissions allow, or None when unrestricted.
+def get_permitted_warehouses(user=None, doctype=UPLOAD_DOCTYPE):
+    """Warehouses the user's Warehouse User Permissions allow for `doctype`, or None
+    when unrestricted.
 
     Same rule as Frappe's own list queries (frappe/model/db_query.py): a permission
     counts when it has no "Applicable For" or names the doctype being read; a user
@@ -64,7 +74,7 @@ def get_permitted_warehouses(user=None):
     allowed = {
         p.get("doc")
         for p in permissions
-        if p.get("doc") and (not p.get("applicable_for") or p.get("applicable_for") == UPLOAD_DOCTYPE)
+        if p.get("doc") and (not p.get("applicable_for") or p.get("applicable_for") == doctype)
     }
     return allowed or None
 
@@ -83,43 +93,83 @@ def narrow_to_chosen(permitted, warehouse):
     return {warehouse}
 
 
-def _upload_rows_query(warehouses):
-    sr = frappe.qb.DocType(UPLOAD_DOCTYPE)
-    sri = frappe.qb.DocType("Stock Reconciliation Item")
+def _sources():
+    """The two kinds of upload: (doctype, its row table, the row's warehouse field,
+    the row's stock-UOM quantity field, label, extra condition on the voucher)."""
+    sr, sri = frappe.qb.DocType(UPLOAD_DOCTYPE), frappe.qb.DocType("Stock Reconciliation Item")
+    se, sed = frappe.qb.DocType(RECEIPT_DOCTYPE), frappe.qb.DocType("Stock Entry Detail")
+    return [
+        {
+            "doctype": UPLOAD_DOCTYPE, "label": _("Stock Reconciliation"),
+            "voucher": sr, "row": sri, "warehouse": sri.warehouse, "qty": sri.qty, "extra": None,
+        },
+        {
+            "doctype": RECEIPT_DOCTYPE, "label": _("Material Receipt"),
+            "voucher": se, "row": sed, "warehouse": sed.t_warehouse, "qty": sed.transfer_qty,
+            "extra": se.purpose == RECEIPT_PURPOSE,
+        },
+    ]
+
+
+def _upload_source(upload):
+    """Which kind of upload `upload` names, or None if it is neither a submitted
+    Stock Reconciliation nor a submitted Material Receipt."""
+    if not upload:
+        return None
+    for source in _sources():
+        filters = {"name": upload, "docstatus": 1}
+        if source["doctype"] == RECEIPT_DOCTYPE:
+            filters["purpose"] = RECEIPT_PURPOSE
+        if frappe.db.exists(source["doctype"], filters):
+            return source
+    return None
+
+
+def _upload_rows_query(source, warehouses):
+    voucher, row = source["voucher"], source["row"]
     query = (
-        frappe.qb.from_(sri)
-        .join(sr)
-        .on(sr.name == sri.parent)
-        .where((sr.docstatus == 1) & (sri.parenttype == UPLOAD_DOCTYPE))
+        frappe.qb.from_(row)
+        .join(voucher)
+        .on(voucher.name == row.parent)
+        .where((voucher.docstatus == 1) & (row.parenttype == source["doctype"]))
     )
+    if source["extra"] is not None:
+        query = query.where(source["extra"])
     if warehouses is not None:
-        query = query.where(sri.warehouse.isin(sorted(warehouses)))
-    return query, sr, sri
+        query = query.where(source["warehouse"].isin(sorted(warehouses)))
+    return query, voucher, row
 
 
 def get_data(upload, warehouses):
-    query, sr, sri = _upload_rows_query(warehouses)
+    source = _upload_source(upload)
+    if not source:
+        return []
+    query, voucher, row = _upload_rows_query(source, warehouses)
     item = frappe.qb.DocType("Item")
+    style = frappe.qb.DocType("Item").as_("style")
     item_meta = frappe.get_meta("Item")
     optional = [item[f] for f in OPTIONAL_ITEM_FIELDS if item_meta.has_field(f)]
 
     rows = (
         query.join(item)
-        .on(item.name == sri.item_code)
+        .on(item.name == row.item_code)
+        .left_join(style)
+        .on(style.name == item.variant_of)
         .select(
-            sri.item_code,
+            row.item_code,
             item.variant_of,
+            style.item_name.as_("style_name"),
             item.item_name,
             item.description,
             item.brand,
             item.stock_uom,
-            sri.qty,
-            sr.posting_date,
-            sr.posting_time,
+            source["qty"].as_("qty"),
+            voucher.posting_date,
+            voucher.posting_time,
             *optional,
         )
-        .where(sr.name == upload)
-        .orderby(sri.idx)
+        .where(voucher.name == upload)
+        .orderby(row.idx)
     ).run(as_dict=True)
     if not rows:
         return []
@@ -138,6 +188,7 @@ def get_data(upload, warehouses):
             {
                 "item_code": r.item_code,
                 "variant_of": r.variant_of,
+                "style_name": r.style_name,
                 "item_name": r.item_name,
                 "description": strip_html(cstr(r.description)).strip(),
                 "brand": r.brand,
@@ -147,6 +198,7 @@ def get_data(upload, warehouses):
                 "collection": r.get("custom_collection"),
                 "price": prices.get(r.item_code),
                 "qty": flt(r.qty),
+                "voucher_type": source["label"],
                 "upload_datetime": upload_datetime,
             }
         )
@@ -222,7 +274,9 @@ def get_warehouses():
     """
     _check_report_access()
 
-    permitted = get_permitted_warehouses()
+    # Uploads come from two doctypes; a user unrestricted for either may pick any.
+    per_doctype = [get_permitted_warehouses(doctype=src["doctype"]) for src in _sources()]
+    permitted = None if any(p is None for p in per_doctype) else set().union(*per_doctype)
     filters = {"is_group": 0, "disabled": 0}
     if permitted is not None:
         filters["name"] = ["in", sorted(permitted)]
@@ -238,31 +292,39 @@ def get_uploads(warehouse=None):
 
     Only uploads with rows in the user's permitted warehouses (narrowed to the
     chosen warehouse, if any) are listed, and the count is of those rows only.
-    Reads Stock Reconciliation directly, so store users without access to that
-    form can still pick an upload.
+    Reads the vouchers directly, so store users without access to those forms
+    can still pick an upload. Stock Reconciliations and Material Receipts are
+    merged, newest first, each labelled with its kind.
     """
     _check_report_access()
 
-    warehouses = narrow_to_chosen(get_permitted_warehouses(), warehouse)
-    if warehouses == set():
-        return []
-    query, sr, sri = _upload_rows_query(warehouses)
-    uploads = (
-        query.select(sr.name, sr.posting_date, sr.posting_time, Count(sri.name).as_("item_count"))
-        .groupby(sr.name, sr.posting_date, sr.posting_time)
-        .orderby(sr.posting_date, order=frappe.qb.desc)
-        .orderby(sr.posting_time, order=frappe.qb.desc)
-        .orderby(sr.name, order=frappe.qb.desc)
-        .limit(UPLOAD_LIST_LIMIT)
-    ).run(as_dict=True)
+    uploads = []
+    for source in _sources():
+        warehouses = narrow_to_chosen(get_permitted_warehouses(doctype=source["doctype"]), warehouse)
+        if warehouses == set():
+            continue
+        query, voucher, row = _upload_rows_query(source, warehouses)
+        for u in (
+            query.select(voucher.name, voucher.posting_date, voucher.posting_time, Count(row.name).as_("item_count"))
+            .groupby(voucher.name, voucher.posting_date, voucher.posting_time)
+            .orderby(voucher.posting_date, order=frappe.qb.desc)
+            .orderby(voucher.posting_time, order=frappe.qb.desc)
+            .orderby(voucher.name, order=frappe.qb.desc)
+            .limit(UPLOAD_LIST_LIMIT)
+        ).run(as_dict=True):
+            u.kind = source["label"]
+            uploads.append(u)
+    uploads.sort(key=lambda u: (get_datetime(f"{getdate(u.posting_date)} {u.posting_time}"), u.name), reverse=True)
+    uploads = uploads[:UPLOAD_LIST_LIMIT]
 
     return [
         {
             "value": u.name,
             # Frappe's Select renders option labels as HTML.
-            "label": "{0} · {1} · {2}".format(
+            "label": "{0} · {1} · {2} · {3}".format(
                 escape_html(u.name),
                 format_datetime(f"{getdate(u.posting_date)} {u.posting_time}", "dd-MM-yyyy HH:mm"),
+                escape_html(u.kind),
                 _("1 item")
                 if u.item_count == 1
                 else _("{0} items").format(frappe.format(u.item_count, {"fieldtype": "Int"})),

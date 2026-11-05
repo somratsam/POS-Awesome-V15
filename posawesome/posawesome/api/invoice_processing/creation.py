@@ -1613,10 +1613,27 @@ def _is_return_outstanding_message(message):
     return any(marker in str(text) for marker in RETURN_OUTSTANDING_MESSAGE_MARKERS)
 
 
+# ERPNext's stock ledger shows this (blue, informational) whenever stock comes
+# back in while the balance is below zero. On a POS return it means nothing to
+# a cashier; the return still books the stock back. Desk users still see it.
+NEGATIVE_STOCK_WARNING_TITLE = "Warning on Negative Stock"
+
+
+def _is_negative_stock_warning(message):
+    if isinstance(message, dict):
+        title = message.get("title") or ""
+    else:
+        title = getattr(message, "title", "") or ""
+    return str(title) in {NEGATIVE_STOCK_WARNING_TITLE, _(NEGATIVE_STOCK_WARNING_TITLE)}
+
+
 def _run_without_return_outstanding_prompts(invoice_doc, operation):
-    """Remove only ERPNext's expected linked-credit-note info dialogs."""
-    if not invoice_doc.get("is_return") or not invoice_doc.get("return_against"):
+    """Remove only ERPNext's expected info dialogs on a POS return: the
+    linked-credit-note outstanding notes (returns against an invoice) and the
+    "Warning on Negative Stock" note (any return)."""
+    if not invoice_doc.get("is_return"):
         return operation()
+    linked = bool(invoice_doc.get("return_against"))
 
     local = getattr(frappe, "local", None)
     message_log = getattr(local, "message_log", None)
@@ -1629,7 +1646,8 @@ def _run_without_return_outstanding_prompts(invoice_doc, operation):
             local.message_log = message_log[:start] + [
                 message
                 for message in message_log[start:]
-                if not _is_return_outstanding_message(message)
+                if not _is_negative_stock_warning(message)
+                and not (linked and _is_return_outstanding_message(message))
             ]
 
 

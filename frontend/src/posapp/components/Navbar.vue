@@ -1202,8 +1202,11 @@ export default {
 		},
 		__(text, args = []) {
 			if (window.__) {
+				// Frappe's __(text, replace, context) takes the replacements as one
+				// array; spreading them made the first a "replace" and the second a
+				// "context", so messages showed raw "{0}" placeholders.
 				const nextArgs = Array.isArray(args) ? args : [args];
-				return window.__(text, ...nextArgs);
+				return window.__(text, nextArgs);
 			}
 			return text;
 		},

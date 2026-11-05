@@ -26,7 +26,7 @@ from frappe.core.doctype.user_permission.user_permission import get_user_permiss
 from frappe.desk.doctype.notification_log.notification_log import enqueue_create_notification
 from frappe.permissions import get_role_permissions
 from frappe.share import add_docshare
-from frappe.utils import cint, cstr, escape_html, get_url_to_form
+from frappe.utils import cint, cstr, escape_html, flt, get_url_to_form
 
 DESTINATION_FIELD = "posa_destination_store"
 TRANSIT_WAREHOUSE_TYPE = "Transit"
@@ -78,6 +78,56 @@ def is_transit_warehouse(warehouse):
 
 def has_override_role(user=None):
     return OVERRIDE_ROLE in frappe.get_roles(user or frappe.session.user)
+
+
+def validate_transfer_has_stock(doc, method=None):
+    """Refuse to submit a Material Transfer that would take its sending warehouse
+    below zero.
+
+    Allow Negative Stock is company-wide so a sale is never blocked, but a
+    transfer out of a store that hasn't got the goods would put stock that
+    doesn't exist into the receiving store (or Transit). Checked at submit only,
+    so a draft can be prepared before the goods arrive. Covers sending to
+    Transit and End Transit, both Material Transfers; sales, returns, Material
+    Receipts and Material Issues are not touched.
+    """
+    if doc.purpose != "Material Transfer":
+        return
+    from erpnext.stock.utils import get_stock_balance
+
+    requested = {}
+    for row in doc.get("items") or []:
+        if not row.s_warehouse or not row.item_code:
+            continue
+        if not cint(frappe.get_cached_value("Item", row.item_code, "is_stock_item")):
+            continue
+        qty = flt(row.transfer_qty) or flt(row.qty) * flt(row.conversion_factor or 1)
+        key = (row.item_code, row.s_warehouse)
+        requested[key] = requested.get(key, 0) + qty
+
+    shortages = []
+    for (item_code, warehouse), qty in requested.items():
+        available = flt(get_stock_balance(item_code, warehouse, doc.posting_date, doc.posting_time))
+        if flt(qty, 6) > flt(available, 6):
+            shortages.append(
+                _("{0} from {1}: {2} in stock, {3} to transfer").format(
+                    _bold(item_code), _bold(warehouse), _qty(available), _qty(qty)
+                )
+            )
+    if shortages:
+        frappe.throw(
+            _(
+                "This transfer would take the sending store below zero. Sales may go below zero, "
+                "transfers may not: receive the goods first, or lower the quantity."
+            )
+            + "<br><br>"
+            + "<br>".join(shortages),
+            title=_("Not Enough Stock to Transfer"),
+        )
+
+
+def _qty(value):
+    return frappe.format_value(flt(value), {"fieldtype": "Float"})
 
 
 def validate_destination(doc):

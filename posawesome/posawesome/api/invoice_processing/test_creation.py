@@ -586,6 +586,53 @@ class TestUpdateInvoiceReturnPayments(unittest.TestCase):
 
         self.assertEqual(invoice_doc.update_outstanding_for_self, 0)
 
+    def _run_with_messages(self, invoice_doc, new_messages):
+        original_local = getattr(self.creation.frappe, "local", None)
+        self.creation.frappe.local = types.SimpleNamespace(message_log=[{"message": "Existing message"}])
+
+        def operation():
+            self.creation.frappe.local.message_log.extend(new_messages)
+            return "submitted"
+
+        try:
+            result = self.creation._run_without_return_outstanding_prompts(invoice_doc, operation)
+            return result, list(self.creation.frappe.local.message_log)
+        finally:
+            if original_local is None:
+                del self.creation.frappe.local
+            else:
+                self.creation.frappe.local = original_local
+
+    NEGATIVE_STOCK_NOTE = {
+        "title": "Warning on Negative Stock",
+        "message": "The stock for the item X in the Test - S warehouse was negative on the 04-11-2026.",
+        "indicator": "blue",
+    }
+
+    def test_return_hides_erpnext_negative_stock_note_from_the_cashier(self):
+        for invoice_doc in (
+            FakeDoc(is_return=1, return_against="ACC-SINV-2026-00232"),
+            FakeDoc(is_return=1, return_against=None),  # Return without Invoice
+        ):
+            result, messages = self._run_with_messages(
+                invoice_doc, [dict(self.NEGATIVE_STOCK_NOTE), {"message": "A separate warning that must remain"}]
+            )
+            self.assertEqual(result, "submitted")
+            self.assertEqual(
+                messages,
+                [{"message": "Existing message"}, {"message": "A separate warning that must remain"}],
+            )
+
+    def test_a_sale_keeps_every_message(self):
+        result, messages = self._run_with_messages(FakeDoc(is_return=0), [dict(self.NEGATIVE_STOCK_NOTE)])
+        self.assertEqual(result, "submitted")
+        self.assertIn(self.NEGATIVE_STOCK_NOTE, messages)
+
+    def test_unlinked_return_keeps_outstanding_wording_it_never_filtered(self):
+        note = {"message": "If you want the original invoice updated, uncheck Update Outstanding for Self."}
+        _, messages = self._run_with_messages(FakeDoc(is_return=1, return_against=None), [note])
+        self.assertIn(note, messages)
+
     def test_linked_return_filters_only_erpnext_outstanding_info_messages(self):
         invoice_doc = FakeDoc(
             is_return=1,
