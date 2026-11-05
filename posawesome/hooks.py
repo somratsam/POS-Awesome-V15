@@ -117,6 +117,8 @@ jinja = {
 doc_events = {
     "Stock Entry": {
         "validate": "posawesome.posawesome.api.stock_transit.validate",
+        # Even with Allow Negative Stock on, a transfer may not empty a store below zero.
+        "before_submit": "posawesome.posawesome.api.stock_transit.validate_transfer_has_stock",
         "on_submit": "posawesome.posawesome.api.stock_transit.on_submit",
     },
     # Nothing but End Transit may take stock out of a Transit warehouse.

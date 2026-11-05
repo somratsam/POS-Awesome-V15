@@ -10,6 +10,7 @@ from posawesome.posawesome.api.stock_transit import (
     EMAIL_CONFIG_KEY,
     get_receivers,
     validate_no_stock_out_of_transit,
+    validate_transfer_has_stock,
 )
 from posawesome.posawesome.report.incoming_transfers.incoming_transfers import get_destination_stores
 
@@ -311,6 +312,68 @@ class TestStockTransit(IntegrationTestCase):
         ):
             with self.subTest(doctype=doc.doctype):
                 validate_no_stock_out_of_transit(doc)
+
+    # --- transfers may not take the sending store below zero (Allow Negative Stock is for sales)
+
+    SHORT = "would take the sending store below zero"
+
+    def test_sending_more_than_the_store_has_is_refused_at_submit_but_the_draft_saves(self):
+        frappe.set_user(SENDER)
+        have = self._bin(self.item_1, self.store_a)
+        doc = self._entry(self.store_a, self.transit, {self.item_1: have + 1}, destination=self.store_b)
+        doc.insert()
+        self.assertEqual(doc.docstatus, 0)
+        with self.assertRaisesRegex(frappe.ValidationError, self.SHORT) as caught:
+            doc.submit()
+        self.assertIn(self.item_1, str(caught.exception))
+        self.assertIn(self.store_a, str(caught.exception))
+        self.assertEqual(self._bin(self.item_1, self.store_a), have)
+
+    def test_rows_of_the_same_item_are_added_together(self):
+        frappe.set_user(SENDER)
+        have = self._bin(self.item_1, self.store_a)
+        doc = self._entry(self.store_a, self.transit, {self.item_1: have}, destination=self.store_b)
+        doc.append("items", {"item_code": self.item_1, "qty": 1, "s_warehouse": self.store_a, "t_warehouse": self.transit})
+        doc.insert()
+        with self.assertRaisesRegex(frappe.ValidationError, self.SHORT):
+            doc.submit()
+
+    def test_plain_store_to_store_transfer_from_an_empty_store_is_refused(self):
+        self.assertEqual(self._bin(self.item_2, self.store_c), 0)
+        doc = self._entry(self.store_c, self.store_b, {self.item_2: 1}, destination=None, add_to_transit=0)
+        doc.insert()
+        with self.assertRaisesRegex(frappe.ValidationError, self.SHORT):
+            doc.submit()
+
+    def test_a_transfer_within_stock_still_goes_through_and_is_received(self):
+        before = self._bin(self.item_2, self.store_a)
+        sent = self._send({self.item_2: 1})
+        self.assertEqual(sent.docstatus, 1)
+        self.assertEqual(self._bin(self.item_2, self.store_a), before - 1)
+        self.assertEqual(self._receive(sent, RECEIVER, self.store_b).docstatus, 1)
+
+    def test_end_transit_is_checked_against_the_transit_warehouse(self):
+        sent = self._send({self.item_2: 1})
+        frappe.set_user(RECEIVER)
+        receiving = make_stock_in_entry(sent.name)
+        for row in receiving.items:
+            row.t_warehouse = self.store_b
+        receiving.insert()
+        with patch("erpnext.stock.utils.get_stock_balance", return_value=0) as balance:
+            with self.assertRaisesRegex(frappe.ValidationError, self.SHORT):
+                receiving.submit()
+        self.assertEqual(balance.call_args.args[1], self.transit)
+
+    def test_material_issue_and_receipt_are_not_checked(self):
+        issue = self._issue(self.store_c, {self.item_1: 999})
+        issue.purpose = "Material Issue"
+        receipt = frappe.new_doc("Stock Entry")
+        receipt.update({"stock_entry_type": "Material Receipt", "purpose": "Material Receipt", "company": self.company})
+        receipt.append("items", {"item_code": self.item_1, "qty": 999, "t_warehouse": self.store_c})
+        with patch("erpnext.stock.utils.get_stock_balance") as balance:
+            validate_transfer_has_stock(issue)
+            validate_transfer_has_stock(receipt)
+        balance.assert_not_called()
 
     def test_normal_sales_from_a_store_still_work(self):
         frappe.set_user(REAL_STORE_USER)

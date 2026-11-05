@@ -19,6 +19,7 @@ STORE_B_USER = "usc-store-b@test.invalid"
 SALES_ONLY_USER = "usc-sales-only@test.invalid"
 OTHER_DOCTYPE_USER = "usc-other-doctype@test.invalid"
 TWO_STORES_USER = "usc-two-stores@test.invalid"
+STOCK_ENTRY_ONLY_USER = "usc-stock-entry-only@test.invalid"
 
 
 class TestUploadStockCheck(IntegrationTestCase):
@@ -59,6 +60,14 @@ class TestUploadStockCheck(IntegrationTestCase):
         )
         cls.upload_b_only = cls._upload("BONLY", "2026-08-06", "10:00:00", [(f"{PREFIX}-B1", cls.wh_b, 4)])
         cls.upload_draft = cls._upload("DRAFT", "2026-08-07", "10:00:00", [(f"{PREFIX}-A1", cls.wh_a, 1)], docstatus=0)
+        # Quantities loaded as Material Receipts (Stock Entry) are uploads too.
+        cls.receipt_main = cls._receipt(
+            "MAIN", "2026-08-05", "09:00:00", [(f"{PREFIX}-A2", cls.wh_a, 5), (f"{PREFIX}-B1", cls.wh_b, 2)]
+        )
+        cls.receipt_draft = cls._receipt("DRAFT", "2026-08-08", "10:00:00", [(f"{PREFIX}-A1", cls.wh_a, 1)], docstatus=0)
+        cls.transfer = cls._receipt(
+            "XFER", "2026-08-08", "11:00:00", [(f"{PREFIX}-A1", cls.wh_a, 1)], purpose="Material Transfer"
+        )
 
         cls._user(STORE_A_USER, "Stock User", warehouse=cls.wh_a)
         cls._user(STORE_B_USER, "Stock User", warehouse=cls.wh_b)
@@ -66,6 +75,7 @@ class TestUploadStockCheck(IntegrationTestCase):
         cls._user(OTHER_DOCTYPE_USER, "Stock User", warehouse=cls.wh_b, applicable_for="Sales Invoice")
         cls._user(TWO_STORES_USER, "Stock User", warehouse=cls.wh_a)
         cls._user_permission(TWO_STORES_USER, cls.wh_b)
+        cls._user(STOCK_ENTRY_ONLY_USER, "Stock User", warehouse=cls.wh_a, applicable_for="Stock Entry")
 
     def tearDown(self):
         frappe.set_user("Administrator")
@@ -170,6 +180,41 @@ class TestUploadStockCheck(IntegrationTestCase):
         return name
 
     @classmethod
+    def _receipt(cls, suffix, posting_date, posting_time, rows, docstatus=1, purpose="Material Receipt"):
+        name = f"{PREFIX}-MR-{suffix}"
+        frappe.get_doc(
+            {
+                "doctype": "Stock Entry",
+                "name": name,
+                "company": cls.company,
+                "stock_entry_type": purpose,
+                "purpose": purpose,
+                "posting_date": posting_date,
+                "posting_time": posting_time,
+                "docstatus": docstatus,
+            }
+        ).db_insert()
+        for idx, (item_code, warehouse, qty) in enumerate(rows, start=1):
+            frappe.get_doc(
+                {
+                    "doctype": "Stock Entry Detail",
+                    "parent": name,
+                    "parenttype": "Stock Entry",
+                    "parentfield": "items",
+                    "idx": idx,
+                    "item_code": item_code,
+                    "t_warehouse": warehouse,
+                    "qty": qty,
+                    "transfer_qty": qty,
+                    "conversion_factor": 1,
+                    "uom": "Nos",
+                    "stock_uom": "Nos",
+                    "docstatus": docstatus,
+                }
+            ).db_insert()
+        return name
+
+    @classmethod
     def _user(cls, email, role, warehouse=None, applicable_for=None):
         frappe.get_doc(
             {
@@ -239,12 +284,14 @@ class TestUploadStockCheck(IntegrationTestCase):
         self.assertEqual(
             fieldnames,
             [
-                "item_code", "variant_of", "item_name", "description", "brand", "size", "colour",
-                "season", "collection", "price", "qty", "upload_datetime",
+                "item_code", "variant_of", "style_name", "item_name", "description", "brand", "size", "colour",
+                "season", "collection", "price", "qty", "voucher_type", "upload_datetime",
             ],
         )
         a1, a2 = self._run(self.upload_mixed)[:2]
         self.assertEqual(a1["variant_of"], f"{PREFIX}-STYLE")
+        self.assertEqual(a1["style_name"], f"{PREFIX}-STYLE name")
+        self.assertEqual(a1["voucher_type"], "Stock Reconciliation")
         self.assertEqual(a1["description"], "Wool jacket")
         self.assertEqual((a1["size"], a1["colour"]), ("M", "NAVY"))
         self.assertEqual((a2["size"], a2["colour"]), ("L", "RED"))
@@ -276,7 +323,7 @@ class TestUploadStockCheck(IntegrationTestCase):
         self.assertNotIn(f"{PREFIX}-B1", flat)
         header = next(row for row in rows if row and row[0] == "Item Code (Barcode)")
         self.assertEqual(header[-1], "Upload Date and Time")
-        self.assertEqual(len(header), 12)
+        self.assertEqual(len(header), 14)
 
     def test_upload_list_respects_warehouses_and_counts_permitted_rows(self):
         frappe.set_user(STORE_A_USER)
@@ -294,7 +341,39 @@ class TestUploadStockCheck(IntegrationTestCase):
 
     def test_upload_list_is_newest_first(self):
         values = [v for v in self._upload_values() if v.startswith(PREFIX)]
-        self.assertEqual(values, [self.upload_b_only, self.upload_mixed, self.upload_old])
+        # A receipt at 09:00 sorts after a reconciliation at 13:07 the same day.
+        self.assertEqual(values, [self.upload_b_only, self.upload_mixed, self.receipt_main, self.upload_old])
+
+    # -- Material Receipts ----------------------------------------------------
+
+    def test_material_receipt_rows_say_where_their_quantity_came_from(self):
+        rows = self._run(self.receipt_main)
+        self.assertEqual([r["item_code"] for r in rows], [f"{PREFIX}-A2", f"{PREFIX}-B1"])
+        self.assertEqual([r["qty"] for r in rows], [5, 2])
+        self.assertEqual({r["voucher_type"] for r in rows}, {"Material Receipt"})
+        self.assertEqual(rows[0]["style_name"], f"{PREFIX}-STYLE name")
+        self.assertEqual((rows[0]["size"], rows[0]["colour"]), ("L", "RED"))
+        self.assertEqual(str(rows[0]["upload_datetime"]), "2026-08-05 09:00:00")
+
+    def test_drafts_and_other_stock_entries_are_not_uploads(self):
+        self.assertEqual(self._run(self.receipt_draft), [])
+        self.assertEqual(self._run(self.transfer), [])
+        values = self._upload_values()
+        self.assertNotIn(self.receipt_draft, values)
+        self.assertNotIn(self.transfer, values)
+
+    def test_receipt_rows_and_list_respect_the_users_warehouse(self):
+        frappe.set_user(STORE_A_USER)
+        self.assertEqual(self._codes(self.receipt_main), [f"{PREFIX}-A2"])
+        uploads = {u["value"]: u["label"] for u in get_uploads()}
+        self.assertIn("Material Receipt", uploads[self.receipt_main])
+        self.assertIn("· 1 item", uploads[self.receipt_main])
+        self.assertIn("Stock Reconciliation", uploads[self.upload_mixed])
+
+    def test_a_stock_entry_permission_limits_receipts_but_not_reconciliations(self):
+        frappe.set_user(STOCK_ENTRY_ONLY_USER)
+        self.assertEqual(self._codes(self.receipt_main), [f"{PREFIX}-A2"])
+        self.assertEqual(self._codes(self.upload_mixed), [f"{PREFIX}-A1", f"{PREFIX}-A2", f"{PREFIX}-B1"])
 
     def test_user_without_a_report_role_is_refused(self):
         frappe.set_user(SALES_ONLY_USER)

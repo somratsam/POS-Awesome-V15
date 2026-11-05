@@ -23,6 +23,17 @@ frappe.ui.form.on("Stock Entry", {
 		if (frm.doc.docstatus === 1 && frm.doc.add_to_transit && !can_receive_transit(frm)) {
 			frm.remove_custom_button(__("End Transit"));
 		}
+		// A Material Receipt can be a catalog upload too (as a Stock Reconciliation
+		// is); same shortcut, for the same users.
+		if (
+			frm.doc.docstatus === 1 &&
+			frm.doc.purpose === "Material Receipt" &&
+			frappe.boot.user.all_reports?.["Upload Stock Check"]
+		) {
+			frm.add_custom_button(__("Upload Stock Check"), function () {
+				frappe.set_route("query-report", "Upload Stock Check", { upload: frm.doc.name });
+			});
+		}
 	},
 	add_to_transit: sync_scan_warehouse,
 	from_warehouse: sync_scan_warehouse,
