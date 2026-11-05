@@ -1,0 +1,156 @@
+{#- Swan credit note voucher (72 mm), printed instead of the receipt for a
+    return that refunds no money, so its whole value is store credit. The
+    store's receipt format includes this file:
+
+      {%- if is_credit_note_voucher(doc) -%}
+      {% include "posawesome/templates/print/credit_note_voucher.html" %}
+      {%- else -%} ...receipt... {%- endif -%}
+
+    Kept in the app (git), not in a Print Format record, so migrate never
+    replaces it. Code and checks: posawesome/posawesome/api/credit_voucher.py.
+
+    States: valid (barcode + code), DUPLICATE on a reprint (print_settings
+    is_reprint, sent by the POS reprint routes), USED once the credit has been
+    spent (outstanding back to 0), EXPIRED after the last valid day. Used and
+    expired vouchers print no barcode or code. -#}
+{%- set voucher_code = credit_voucher_code(doc.name) -%}
+{%- set voucher_label = credit_voucher_label(voucher_code) -%}
+{%- set original_value = (doc.grand_total or 0)|abs -%}
+{%- set remaining = (0 - (doc.outstanding_amount or 0)) if (doc.outstanding_amount or 0) < 0 else 0 -%}
+{%- set valid_from = frappe.utils.getdate(doc.posting_date) -%}
+{%- set valid_to = frappe.utils.getdate(credit_voucher_valid_until(doc)) -%}
+{%- set is_used = remaining <= 0 -%}
+{%- set is_expired = (not is_used) and frappe.utils.getdate(frappe.utils.nowdate()) > valid_to -%}
+{%- set is_partly_used = (not is_used) and remaining < original_value - 0.0005 -%}
+{%- set returned_items = doc.items or [] -%}
+{%- set _disc = (doc.discount_amount or 0)|abs -%}
+{#- PDF (Desk Print / download) needs a fixed page height: base length plus
+    about 6 mm per item line (long names take two). Till printing ignores it. -#}
+{%- set _ns = namespace(lines=0) -%}
+{%- for _it in returned_items -%}{%- set _ns.lines = _ns.lines + 1 + (1 if (_it.item_name or "")|length > 22 else 0) -%}{%- endfor -%}
+{%- set _pdf_h = (300 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0))|round(0)|int -%}
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body, .print-format { width: 76mm; font-family: 'Arial', sans-serif; font-size: 14px; color: #000; background: #fff; line-height: 1.5; }
+  .divider { border-top: 1px dashed #000; margin: 12px 0; }
+  .address { font-size: 13px; text-align: center; line-height: 1.8; }
+  .title { font-size: 22px; font-weight: bold; text-align: center; margin: 4px 0 0 0; }
+  .title-ar { font-size: 19px; font-weight: bold; text-align: center; direction: rtl; margin-bottom: 4px; }
+  .banner { font-size: 16px; font-weight: bold; text-align: center; margin: 6px 0; letter-spacing: 2px; }
+  .banner-box { border: 2px solid #000; padding: 4px; margin: 8px 0; }
+  .meta { width: 100%; border-collapse: collapse; font-size: 14px; margin: 4px 0; }
+  .meta td { padding: 2px 0; vertical-align: top; }
+  .meta td.l { white-space: nowrap; padding-right: 6px; }
+  .meta td.v { font-weight: bold; word-break: break-word; }
+  .meta td.ar { direction: rtl; text-align: right; white-space: nowrap; padding-left: 6px; }
+  .worth { font-size: 14px; margin-top: 8px; }
+  .worth-ar { font-size: 14px; direction: rtl; text-align: right; }
+  .amount { font-size: 19px; font-weight: bold; text-align: center; margin: 8px 0; white-space: nowrap; }
+  .original { font-size: 12px; text-align: center; margin-top: -4px; }
+  .use { font-size: 13px; line-height: 1.6; }
+  .use-ar { font-size: 13px; direction: rtl; text-align: right; line-height: 1.7; margin-top: 2px; }
+  .barcode-img { display: block; margin: 6px auto 2px auto; width: 64mm; height: 14mm; }
+  .code { font-size: 16px; font-weight: bold; text-align: center; letter-spacing: 2px; }
+  .ref { font-size: 11px; text-align: center; margin-top: 4px; }
+  .items-head { display: table; width: 100%; font-size: 13px; font-weight: bold; margin-top: 2px; }
+  .items-head > span { display: table-cell; }
+  .items-head > span:last-child { text-align: right; direction: rtl; }
+  .items { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+  .items th { font-weight: bold; text-align: left; border-bottom: 1px solid #000; padding: 2px 0; }
+  .items td { padding: 2px 0; vertical-align: top; }
+  .items .n { text-align: right; white-space: nowrap; padding-left: 6px; }
+  .items .total td { border-top: 1px solid #000; font-weight: bold; }
+  .stamp { margin-top: 20px; display: table; width: 100%; font-size: 13px; }
+  .stamp > span { display: table-cell; }
+  .stamp > span:last-child { text-align: right; direction: rtl; }
+  .stamp-line { border-bottom: 1px solid #000; height: 22mm; margin: 4px 0 8px 0; }
+  .note { font-size: 11px; text-align: center; line-height: 1.5; }
+  .note-ar { font-size: 11px; text-align: center; direction: rtl; line-height: 1.6; }
+  .print-format .meta td { padding: 1px 0 !important; }
+  .print-format .rcpt-feed { display: none; }
+  .print-format { page-width: 80mm; page-height: {{ _pdf_h }}mm; margin: 2mm; }
+</style>
+
+{% set logo_data_uri = frappe.call("posawesome.posawesome.api.print_assets.get_receipt_logo_data_uri", pos_profile=(doc.pos_profile or "")) %}
+{% if logo_data_uri %}
+<div style="text-align:center; margin-bottom:5px;"><img src="{{ logo_data_uri }}" style="width:40mm; height:auto;"></div>
+{% endif %}
+
+{% set store_contact = frappe.db.get_value("POS Profile", doc.pos_profile, ["posa_receipt_address_en", "posa_receipt_address_ar", "posa_receipt_phone"], as_dict=True) or {} %}
+<div class="address">
+  {{ (store_contact.posa_receipt_address_en or "")|e|replace("\n", "<br>")|safe }}<br>
+  {{ (store_contact.posa_receipt_address_ar or "")|e|replace("\n", "<br>")|safe }}<br>
+  TEL: {{ (store_contact.posa_receipt_phone or "")|e }} : رقم التلفون
+</div>
+
+<div class="divider"></div>
+
+<div class="title">Credit note voucher</div>
+<div class="title-ar">قسيمة إشعار دائن</div>
+
+{% if is_used %}
+<div class="banner banner-box">USED — NOT VALID<br>مستخدمة — غير صالحة</div>
+{% elif is_expired %}
+<div class="banner banner-box">EXPIRED — NOT VALID<br>منتهية — غير صالحة</div>
+{% endif %}
+{% if print_settings.get("is_reprint") %}
+<div class="banner">*** DUPLICATE ***</div>
+{% endif %}
+
+<table class="meta">
+  <tr><td class="l">Register:</td><td class="v">{{ (doc.pos_profile or "")|e }}</td><td class="ar">:نقطة البيع</td></tr>
+  <tr><td class="l">Date:</td><td class="v">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }} {{ (doc.posting_time or "")|string|truncate(5, True, '') }}</td><td class="ar">:التاريخ</td></tr>
+  <tr><td class="l">Number:</td><td class="v">{{ voucher_label }}</td><td class="ar">:الرقم</td></tr>
+  <tr><td class="l">Customer:</td><td class="v">{{ (doc.customer_name or doc.customer)|e }}</td><td class="ar">:العميل</td></tr>
+</table>
+
+<div class="worth">This credit note voucher is worth</div>
+<div class="worth-ar">تبلغ قيمة هذه القسيمة</div>
+<div class="amount">**** OMR {{ "%.3f"|format(original_value if is_used else remaining) }} ****</div>
+{% if is_partly_used %}
+<div class="original">Remaining from original OMR {{ "%.3f"|format(original_value) }}<br>المتبقي من القيمة الأصلية</div>
+{% endif %}
+
+<div class="use">Can be used as payment for your next purchase, in one purchase of this value or more.</div>
+<div class="use-ar">يمكن استخدامها كوسيلة دفع في مشترياتك القادمة، دفعة واحدة لمشتريات بهذه القيمة أو أكثر.</div>
+
+<table class="meta" style="margin-top:8px;">
+  <tr><td class="l">Validity starting date:</td><td class="v">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }}</td></tr>
+  <tr><td class="l">Validity ending date:</td><td class="v">{{ valid_to.strftime('%d-%m-%Y') }}</td></tr>
+</table>
+<table class="meta">
+  <tr><td class="ar" style="text-align:right;">تاريخ بداية الصلاحية: <span dir="ltr">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }}</span></td></tr>
+  <tr><td class="ar" style="text-align:right;">تاريخ انتهاء الصلاحية: <span dir="ltr">{{ valid_to.strftime('%d-%m-%Y') }}</span></td></tr>
+</table>
+
+{% if not is_used and not is_expired and voucher_code %}
+{{ code128_svg(voucher_code) }}
+<div class="code">{{ voucher_label }}</div>
+{% endif %}
+<div class="ref">Return {{ doc.name|e }}{% if doc.return_against %} · of invoice {{ doc.return_against|e }}{% endif %}</div>
+
+<div class="divider"></div>
+
+<div class="items-head"><span>Returned items</span><span>الأصناف المرتجعة</span></div>
+<table class="items">
+  <tr><th>Item</th><th class="n">Qty</th><th class="n">Price</th></tr>
+  {%- for it in returned_items %}
+  {%- set _q = (it.qty or 0)|abs %}
+  <tr>
+    <td>{{ (it.item_name or it.item_code)|e }}</td>
+    <td class="n">{{ (_q|int) if _q == (_q|int) else ("%.3f"|format(_q)) }}</td>
+    <td class="n">{{ "%.3f"|format((it.amount or 0)|abs) }}</td>
+  </tr>
+  {%- endfor %}
+  {%- if _disc %}
+  <tr><td>Discount · خصم</td><td class="n"></td><td class="n">-{{ "%.3f"|format(_disc) }}</td></tr>
+  {%- endif %}
+  <tr class="total"><td>Total · الإجمالي</td><td class="n"></td><td class="n">{{ "%.3f"|format(original_value) }}</td></tr>
+</table>
+
+<div class="stamp"><span>Stamp and signature</span><span>الختم والتوقيع</span></div>
+<div class="stamp-line"></div>
+
+<div class="note">Keep this voucher. Present it to use your credit.<br>A lost voucher can only be replaced by a supervisor.</div>
+<div class="note-ar">يرجى الاحتفاظ بهذه القسيمة وتقديمها عند الاستخدام.<br>لا يمكن استبدال القسيمة المفقودة إلا بموافقة المشرف.</div>
+<div class="rcpt-feed"><br><br><br></div>
