@@ -1944,6 +1944,7 @@ import {
 import { isOffline } from "../../../../offline/index";
 import { buildInvoicePdfUrl, shouldDownloadPdfForShareError } from "../../../utils/invoiceSharing";
 import { resolvePaymentPrintFormat } from "../../../utils/paymentPrintFormat";
+import { recordCreditNoteReprint, REPRINT_SETTINGS } from "../../../utils/creditNoteReprint";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
 import {
 	canDeleteDocumentSourceRecord,
@@ -4038,12 +4039,20 @@ export default {
 			const profile = this.posProfile;
 			if (!invoice?.name || !profile) return;
 			const doctype = invoice.doctype || this.currentInvoiceDoctype;
+			// Records who reprinted a credit note voucher; nothing prints if the
+			// server refuses (it has already said why).
+			try {
+				await recordCreditNoteReprint({ doctype, name: invoice.name, posProfile: profile.name });
+			} catch (error) {
+				console.warn("Reprint not recorded, not printing", error);
+				return;
+			}
 			const printFormat = await this.resolveReprintPrintFormat(doctype, profile);
 			const letterHead = profile.letter_head || 0;
 			const debugPrint = isDebugPrintEnabled();
 			const useConfiguredQzPrint = shouldUseConfiguredQzDocumentPrinting(profile);
 			const useRawPrint = shouldUseRawDocumentPrinting(profile);
-			const reprintSettings = JSON.stringify({ is_reprint: 1 });
+			const reprintSettings = REPRINT_SETTINGS;
 			let url =
 				frappe.urllib.get_base_url() +
 				"/printview?doctype=" +

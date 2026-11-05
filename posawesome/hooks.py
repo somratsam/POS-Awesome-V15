@@ -107,6 +107,11 @@ jinja = {
     "methods": [
         "posawesome.posawesome.api.print_barcode.code128_svg",
         "posawesome.posawesome.api.print_barcode.invoice_scan_code",
+        # Credit note voucher (posawesome/templates/print/credit_note_voucher.html)
+        "posawesome.posawesome.api.credit_voucher.credit_voucher_code",
+        "posawesome.posawesome.api.credit_voucher.credit_voucher_label",
+        "posawesome.posawesome.api.credit_voucher.is_credit_note_voucher",
+        "posawesome.posawesome.api.credit_voucher.credit_voucher_valid_until",
     ],
 }
 

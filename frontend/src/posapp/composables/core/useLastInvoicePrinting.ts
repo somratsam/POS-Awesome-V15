@@ -11,6 +11,7 @@ import {
 	shouldUseConfiguredQzDocumentPrinting,
 	shouldUseRawDocumentPrinting,
 } from "../../services/documentPrint";
+import { recordCreditNoteReprint, REPRINT_SETTINGS } from "../../utils/creditNoteReprint";
 
 declare const frappe: any;
 
@@ -47,6 +48,23 @@ export function useLastInvoicePrinting() {
 		const doctype = posProfile.create_pos_invoice_instead_of_sales_invoice
 			? "POS Invoice"
 			: "Sales Invoice";
+		// "Print last invoice" is a reprint: a credit note voucher prints as a
+		// DUPLICATE and the server records who reprinted it. If the server
+		// refuses (e.g. locked till) nothing prints; it has said why.
+		let creditNote = false;
+		try {
+			creditNote = await recordCreditNoteReprint({
+				doctype,
+				name: lastInvoiceId,
+				posProfile: posProfile.name,
+			});
+		} catch (error) {
+			console.warn("Reprint not recorded, not printing", error);
+			return;
+		}
+		const settingsParam = creditNote
+			? "&settings=" + encodeURIComponent(REPRINT_SETTINGS)
+			: "";
 		const debugPrint = isDebugPrintEnabled();
 		const openInNewTab = parseBooleanSetting(
 			posProfile.posa_open_print_in_new_tab,
@@ -67,6 +85,7 @@ export function useLastInvoicePrinting() {
 			"&no_letterhead=" +
 			(letter_head ? "0" : "1");
 
+		url += settingsParam;
 		if (letter_head) {
 			url += "&letterhead=" + encodeURIComponent(letter_head);
 		}
@@ -99,6 +118,7 @@ export function useLastInvoicePrinting() {
 				"&no_letterhead=" +
 				(letter_head ? "0" : "1");
 
+			newTabUrl += settingsParam;
 			if (letter_head) {
 				newTabUrl += "&letterhead=" + encodeURIComponent(letter_head);
 			}
@@ -143,6 +163,7 @@ export function useLastInvoicePrinting() {
 					printFormat: pf || "Standard",
 					letterhead: letter_head || null,
 					noLetterhead: letter_head ? "0" : "1",
+					...(creditNote ? { settings: REPRINT_SETTINGS } : {}),
 				});
 				return;
 			} catch (error) {
