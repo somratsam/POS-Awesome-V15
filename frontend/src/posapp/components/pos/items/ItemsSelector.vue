@@ -15,13 +15,6 @@
 			:details="scanErrorDetails"
 			@acknowledge="acknowledgeScanError"
 		/>
-		<ScanVariantHint
-			:model-value="!!scanVariantHint"
-			:item-name="scanVariantHint ? scanVariantHint.itemName : ''"
-			@update:model-value="(val) => !val && clearScanVariantHint()"
-			@view="viewScanVariantHint"
-			@dismiss="clearScanVariantHint"
-		/>
 		<v-card
 			:class="[
 				'selection selection-card mx-auto my-0 py-0 mt-3 pos-card dynamic-card resizable pos-themed-card',
@@ -346,7 +339,6 @@ import ItemsSelectorTable from "./ItemsSelectorTable.vue";
 import PharmacyItemSearchTable from "./PharmacyItemSearchTable.vue";
 import NewItemDialog from "./NewItemDialog.vue";
 import ScanErrorDialog from "./ScanErrorDialog.vue";
-import ScanVariantHint from "./ScanVariantHint.vue";
 import { isOffline } from "../../../../offline/index";
 
 import { useResponsive } from "../../../composables/core/useResponsive";
@@ -1810,44 +1802,10 @@ const {
 	scanErrorMessage,
 	scanErrorCode,
 	scanErrorDetails,
-	scanVariantHint,
 	acknowledgeScanError,
-	clearScanVariantHint,
 	onBarcodeScanned: onBarcodeScannedFromScannerInput,
 } = scannerInput;
 
-const viewScanVariantHint = async () => {
-	const hint = scanVariantHint.value;
-	if (!hint || !hint.variantOf) return;
-	clearScanVariantHint();
-	// Variants.vue's own "uiStore.variantsData" watcher (deep: true) mutates
-	// this.parentItem in place (attributes_meta watcher), and this.parentItem
-	// IS uiStore.variantsData.value.item -- same reactive object, not a copy.
-	// That mutation re-fires the deep watcher on itself. If items is passed
-	// empty (relying on Variants.vue's own on-demand fetchVariants()), the
-	// stored items array never gets updated by that internal fetch (it only
-	// reassigns the component-local this.items via .concat()), so every
-	// re-fire sees an empty items array again and re-fetches from scratch --
-	// an unbounded loop, visible as the dialog blinking. Pre-fetching here and
-	// passing a populated items/attrsMeta (same contract as the pre-existing
-	// template-item entry point in useItemCreation.ts's handleVariantItem)
-	// keeps items non-empty from the first run, so Variants.vue never calls
-	// fetchVariants() itself and the loop can't start.
-	const message = await useItemAddition().fetchItemVariantsMeta(
-		hint.variantOf,
-		pos_profile.value,
-		active_price_list.value,
-		selectedCustomer.value,
-	);
-	if (!message) return;
-	const variants = message.variants || message || [];
-	uiStore.openVariants({
-		item: { item_code: hint.variantOf },
-		items: Array.isArray(variants) ? variants : [],
-		profile: pos_profile.value,
-		attrsMeta: message.attributes_meta || {},
-	});
-};
 // Check Stock: selling screen only -- not Purchase Orders, Barcode Printing
 // or the counter search dialog (which would stack one modal on another).
 const showStockLookupButton = computed(

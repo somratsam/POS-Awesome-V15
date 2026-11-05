@@ -769,6 +769,33 @@ export async function searchStoredItems({
 	}
 }
 
+// Exact barcode (or item code) match in the stored catalogue -- the rows
+// offline search reads -- for a scan made while offline. With Limit Search
+// on, the scanner's in-memory list only holds the current search results.
+export async function getStoredItemByBarcode(code: unknown = "", scope = "") {
+	const normalized = normalizeSearchValue(code);
+	if (!normalized) return null;
+	try {
+		await checkDbHealth();
+		if (!db.isOpen()) await db.open();
+		const { collection } = await resolveScopedCatalogCollection(
+			normalizeScope(scope).trim(),
+		);
+		const match = await collection
+			.filter(
+				(item: any) =>
+					(Array.isArray(item?.barcodes_lc) &&
+						item.barcodes_lc.includes(normalized)) ||
+					item?.item_code_lc === normalized,
+			)
+			.first();
+		return match || null;
+	} catch (e) {
+		console.error("Failed to look up a stored item by barcode", e);
+		return null;
+	}
+}
+
 export async function getStoredItemsCount() {
 	try {
 		await checkDbHealth();
