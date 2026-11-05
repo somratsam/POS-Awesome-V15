@@ -27,6 +27,7 @@ import {
 	getItemCostFloor,
 	resolveSaleFloorPolicy,
 } from "../../../utils/lossPrevention";
+import { isNoMoneyReturn, type ReturnIntent } from "../../../utils/returnIntent";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -87,13 +88,11 @@ export interface SubmissionCallbacks {
 		waitForPostSubmitPayments?: boolean;
 		waitForInvoiceProcessing?: boolean;
 	}) => void;
+	// The cashier's choice on a no-money return (see utils/returnIntent).
+	// A credit note ends the visit, so no exchange sale is set up after it.
+	returnIntent?: ReturnIntent | null;
 }
 
-// No payment row moved money, so the whole return became store credit.
-const isStoreCreditReturn = (doc: any) =>
-	!(Array.isArray(doc?.payments) ? doc.payments : []).some(
-		(payment: any) => Math.abs(Number(payment?.amount) || 0) > 0,
-	);
 
 export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 	const {
@@ -1372,7 +1371,9 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 
 			// Read before the cart is cleared below.
 			const exchangeCustomer =
-				doc?.is_return && isStoreCreditReturn(doc) ? doc.customer : null;
+				isNoMoneyReturn(doc) && callbacks.returnIntent !== "credit_note"
+					? doc.customer
+					: null;
 
 			if (onFinishNavigation) onFinishNavigation(true);
 
