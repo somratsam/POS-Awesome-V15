@@ -45,6 +45,8 @@
 					:label="__('Barcode or item code')"
 					data-testid="stock-lookup-input"
 					@keydown.enter.prevent="submitTypedCode"
+					@keydown.down.prevent="moveSuggestion(1)"
+					@keydown.up.prevent="moveSuggestion(-1)"
 				/>
 				<v-btn
 					color="primary"
@@ -56,6 +58,30 @@
 				>
 					{{ __("Look up") }}
 				</v-btn>
+			</div>
+
+			<div
+				v-if="suggestions.length"
+				class="stock-lookup__suggestions"
+				role="listbox"
+				:aria-label="__('Matching barcodes')"
+				data-testid="stock-lookup-suggestions"
+			>
+				<button
+					v-for="(suggestion, index) in suggestions"
+					:key="suggestion.barcode"
+					type="button"
+					role="option"
+					:aria-selected="index === suggestionIndex"
+					class="stock-lookup__suggestion"
+					:class="{ 'stock-lookup__suggestion--active': index === suggestionIndex }"
+					:data-testid="`stock-lookup-suggestion-${suggestion.barcode}`"
+					@mousedown.prevent
+					@click="pickSuggestion(suggestion)"
+				>
+					<span class="stock-lookup__suggestion-barcode">{{ suggestion.barcode }}</span>
+					<span class="stock-lookup__suggestion-detail">{{ suggestionDetail(suggestion) }}</span>
+				</button>
 			</div>
 
 			<v-progress-linear v-if="loading" indeterminate color="info" height="2" />
@@ -178,7 +204,7 @@
 									<div class="stock-lookup__meta" :data-testid="`stock-lookup-qty-${item.item_code}`">
 										<v-icon size="x-small">mdi-package-variant-closed</v-icon>
 										<span>
-											{{ formatQty(availableQtyOf(item)) }}
+											{{ formatQty(displayQtyOf(item)) }}
 											{{ availableQtyOf(item) === null ? "" : item.stock_uom || "" }}
 										</span>
 									</div>
@@ -218,9 +244,12 @@ import { useInvoiceStore } from "../../../stores/invoiceStore";
 import { useToastStore } from "../../../stores/toastStore";
 import { isOffline } from "../../../../offline/index";
 import { registerStockLookupScanHandler } from "../../../composables/pos/items/stockLookupScanRoute";
+import { createCodeEntryState, trackCodeEntry } from "../../../composables/pos/items/stockLookupTyping";
 import {
 	getVariantCardAvailableQty,
 	getVariantCardBarcode,
+	getVariantCardDisplayQty,
+	isVariantCardOutOfStock,
 	isVariantCardUnavailable,
 } from "../../../utils/variantCard";
 import placeholderImage from "../placeholder-image.png";
@@ -236,6 +265,11 @@ const __ = window.__ || ((text) => text);
 // only to auto-look-up a code typed by a scanner that sends no Enter.
 const AUTO_LOOKUP_MIN_LENGTH = 7;
 const AUTO_LOOKUP_IDLE_MS = 300;
+// Barcode suggestions while a person types: from this many characters, at
+// most this many (the server caps it too), after this pause.
+const SUGGEST_MIN_LENGTH = 4;
+const SUGGEST_MAX_RESULTS = 8;
+const SUGGEST_IDLE_MS = 200;
 // Same keys the main screen's type-to-search treats as "typing a code".
 const CODE_KEY_PATTERN = /^[\p{L}\p{N}\-._/\\]$/u;
 
@@ -260,6 +294,11 @@ let autoLookupTimer = null;
 let suppressAutoLookup = false;
 let lastRedirectAt = 0;
 let pendingCode = "";
+const codeEntry = createCodeEntryState();
+const suggestions = ref([]);
+const suggestionIndex = ref(-1);
+let suggestSeq = 0;
+let suggestTimer = null;
 let unregisterScanRoute = null;
 
 const posProfile = computed(() => uiStore.posProfile || {});
@@ -287,6 +326,7 @@ const deactivate = () => {
 		unregisterScanRoute = null;
 	}
 	clearAutoLookupTimer();
+	clearSuggestions();
 	lookupSeq += 1; // discard any lookup still in flight
 	pendingCode = "";
 	loading.value = false;
@@ -409,12 +449,19 @@ function handleDialogKeydownCapture(event) {
 
 watch(codeInput, (value) => {
 	clearAutoLookupTimer();
+	const typedAtScannerSpeed = trackCodeEntry(codeEntry, String(value || ""), Date.now());
 	if (suppressAutoLookup) {
 		suppressAutoLookup = false;
+		clearSuggestions();
 		return;
 	}
+	scheduleSuggestions(String(value || "").trim(), typedAtScannerSpeed);
 	const code = String(value || "").trim();
 	if (code.length < AUTO_LOOKUP_MIN_LENGTH || !uiStore.stockLookupDialog) return;
+	// A person typing pauses between keys; looking up (and on a miss,
+	// selecting) the half-typed code wiped it on the next key. They finish
+	// with Enter or Look up instead.
+	if (!typedAtScannerSpeed) return;
 	autoLookupTimer = setTimeout(() => {
 		autoLookupTimer = null;
 		if (String(codeInput.value || "").trim() === code) {
@@ -425,8 +472,93 @@ watch(codeInput, (value) => {
 
 function submitTypedCode() {
 	clearAutoLookupTimer();
+	const picked = suggestions.value[suggestionIndex.value];
+	if (picked) {
+		pickSuggestion(picked);
+		return;
+	}
 	const code = String(codeInput.value || "").trim();
 	if (code) runLookup(code, "enter");
+}
+
+// --- Barcode suggestions ----------------------------------------------------
+// Only while a person types (a scanner's code is complete and is looked up
+// as before); barcodes only. Picking one runs the same lookup as a scan.
+
+function clearSuggestions() {
+	if (suggestTimer) {
+		clearTimeout(suggestTimer);
+		suggestTimer = null;
+	}
+	suggestSeq += 1; // drop any answer still on its way
+	suggestions.value = [];
+	suggestionIndex.value = -1;
+}
+
+function scheduleSuggestions(code, typedAtScannerSpeed) {
+	if (
+		typedAtScannerSpeed ||
+		code.length < SUGGEST_MIN_LENGTH ||
+		!uiStore.stockLookupDialog ||
+		isOffline()
+	) {
+		clearSuggestions();
+		return;
+	}
+	if (suggestTimer) clearTimeout(suggestTimer);
+	suggestSeq += 1; // drop any answer for an older prefix
+	// Keep what still matches on screen until the new answer arrives, so the
+	// list doesn't flicker on every key.
+	const lower = code.toLowerCase();
+	suggestions.value = suggestions.value.filter((row) =>
+		String(row.barcode || "").toLowerCase().startsWith(lower),
+	);
+	suggestionIndex.value = -1;
+	suggestTimer = setTimeout(() => {
+		suggestTimer = null;
+		fetchSuggestions(code);
+	}, SUGGEST_IDLE_MS);
+}
+
+async function fetchSuggestions(code) {
+	const seq = ++suggestSeq;
+	let rows = [];
+	try {
+		const res = await window.frappe.call({
+			method: "posawesome.posawesome.api.items.suggest_item_barcodes",
+			args: { pos_profile: posProfile.value?.name, prefix: code, limit: SUGGEST_MAX_RESULTS },
+		});
+		rows = Array.isArray(res?.message) ? res.message : [];
+	} catch (error) {
+		// Suggestions are a convenience; typing and Enter still work without them.
+		console.warn("Check Stock suggestions failed", error);
+	}
+	if (seq !== suggestSeq || String(codeInput.value || "").trim() !== code) return;
+	suggestions.value = rows.slice(0, SUGGEST_MAX_RESULTS);
+	suggestionIndex.value = -1;
+}
+
+function moveSuggestion(step) {
+	const count = suggestions.value.length;
+	if (!count) return;
+	const next = suggestionIndex.value + step;
+	suggestionIndex.value = next < 0 ? count - 1 : next >= count ? -1 : next;
+}
+
+function suggestionDetail(suggestion) {
+	return [suggestion.item_name, suggestion.size, suggestion.color].filter(Boolean).join(" · ");
+}
+
+function pickSuggestion(suggestion) {
+	const code = String(suggestion?.barcode || "").trim();
+	if (!code) return;
+	clearAutoLookupTimer();
+	clearSuggestions();
+	if (codeInput.value !== code) {
+		suppressAutoLookup = true;
+		codeInput.value = code;
+	}
+	runLookup(code, "enter");
 }
 
 const playTone = (type) => {
@@ -447,6 +579,7 @@ async function runLookup(rawCode, source) {
 	if (loading.value && pendingCode === code) return;
 
 	clearAutoLookupTimer();
+	clearSuggestions();
 	const seq = ++lookupSeq;
 	if (source === "scan" && codeInput.value !== code) {
 		suppressAutoLookup = true;
@@ -562,11 +695,11 @@ function toggleFilter(attribute, value) {
 
 const isScanned = (item) => item?.item_code === result.value?.scanned_item_code;
 const availableQtyOf = (item) => getVariantCardAvailableQty(item);
+// Shown on the card: below zero reads as 0 next to the "Out of Stock" chip,
+// matching the header's "0 in stock". Stock rules and Add use the real balance.
+const displayQtyOf = (item) => getVariantCardDisplayQty(item);
 const barcodeOf = (item) => getVariantCardBarcode(item);
-const isOutOfStock = (item) => {
-	const qty = availableQtyOf(item);
-	return qty !== null && qty <= 0;
-};
+const isOutOfStock = (item) => isVariantCardOutOfStock(item);
 const isUnavailable = (item) => isVariantCardUnavailable(item, posProfile.value, uiStore.stockSettings);
 
 function variantLabel(item) {
@@ -699,6 +832,48 @@ defineExpose({ runLookup, closeDialog });
 	gap: 8px;
 	align-items: center;
 	padding: 12px 16px 8px;
+}
+
+.stock-lookup__suggestions {
+	display: flex;
+	flex-direction: column;
+	margin: 0 16px 8px;
+	border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+.stock-lookup__suggestion {
+	display: flex;
+	gap: 12px;
+	align-items: baseline;
+	padding: 6px 12px;
+	text-align: start;
+	background: transparent;
+	border: 0;
+	cursor: pointer;
+}
+
+.stock-lookup__suggestion + .stock-lookup__suggestion {
+	border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.stock-lookup__suggestion:hover,
+.stock-lookup__suggestion--active {
+	background: rgba(var(--v-theme-info), 0.12);
+}
+
+.stock-lookup__suggestion-barcode {
+	font-family: monospace;
+	font-weight: 600;
+}
+
+.stock-lookup__suggestion-detail {
+	opacity: 0.8;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .stock-lookup__body {

@@ -116,7 +116,7 @@
 													</div>
 												</div>
 											</div>
-											<div v-if="isUnavailable(item)" class="variant-out-of-stock">
+											<div v-if="isUnavailable(item) || isOutOfStock(item)" class="variant-out-of-stock">
 												{{ __("Out of Stock") }}
 											</div>
 										</v-card-text>
@@ -142,6 +142,8 @@ import { useInvoiceStore } from "../../../stores/invoiceStore.js";
 import {
 	getVariantCardAvailableQty,
 	getVariantCardBarcode,
+	getVariantCardDisplayQty,
+	isVariantCardOutOfStock,
 	isVariantCardUnavailable,
 } from "../../../utils/variantCard";
 export default {
@@ -290,7 +292,9 @@ export default {
 			return getVariantCardAvailableQty(item);
 		},
 		formatAvailableQty(item) {
-			const quantity = this.variantAvailableQty(item);
+			// Display only: below zero reads as 0 with "Out of Stock", as in Check
+			// Stock. Whether the card can be picked still follows isUnavailable.
+			const quantity = getVariantCardDisplayQty(item);
 			if (quantity === null) return "—";
 
 			const mixinFn =
@@ -301,6 +305,9 @@ export default {
 			if (mixinFn) return mixinFn.call(this, quantity);
 
 			return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(quantity);
+		},
+		isOutOfStock(item) {
+			return isVariantCardOutOfStock(item);
 		},
 		isUnavailable(item) {
 			return isVariantCardUnavailable(item, this.pos_profile, this.uiStore.stockSettings);

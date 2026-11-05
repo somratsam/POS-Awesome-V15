@@ -509,6 +509,36 @@ describe("Check Stock dialog", () => {
 		wrapper.unmount();
 	});
 
+	it("shows a balance below zero as 0 and Out of Stock, on the card and in the header", async () => {
+		(window as any).frappe.call.mockImplementation(async ({ method }: any) =>
+			method === "posawesome.posawesome.api.items.lookup_item_stock"
+				? {
+						message: {
+							...lookupResponse,
+							items: [
+								{ ...lookupResponse.items[1], actual_qty: -1 },
+								{ ...lookupResponse.items[0], actual_qty: 0 },
+							],
+						},
+					}
+				: { message: null },
+		);
+		const wrapper = mountDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+		await input.setValue("45240197030024");
+		await input.trigger("keydown", { key: "Enter" });
+		await flush();
+
+		const negative = wrapper.get("[data-testid='stock-lookup-qty-45240197030024']").text();
+		expect(negative).toContain("0");
+		expect(negative).not.toContain("-1");
+		expect(wrapper.get("[data-testid='stock-lookup-card-45240197030024']").text()).toContain("Out of Stock");
+		expect(wrapper.get("[data-testid='stock-lookup-summary']").text()).toContain("0 in stock");
+		wrapper.unmount();
+	});
+
 	it("shows a not-found message for an unknown code without touching the cart", async () => {
 		const { scannerInput, addItem } = makeSellingPipeline();
 		(window as any).frappe.call.mockImplementation(async ({ method }: any) =>
@@ -549,6 +579,254 @@ describe("Check Stock dialog", () => {
 		expect(lookupCalls()).toHaveLength(1);
 		expect(lookupCalls()[0][0].args.code).toBe("45240197030024");
 		expect(useUIStore().stockLookupDialog).toBe(true);
+		wrapper.unmount();
+	});
+});
+
+describe("Check Stock dialog: typing a code by hand", () => {
+	const mountTypingDialog = () =>
+		mount(StockLookupDialog, {
+			attachTo: document.body,
+			global: { components: stubs, provide: { eventBus: { emit: vi.fn() } } },
+		});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		offlineSpies.isOffline.mockImplementation(() => false);
+		resetStockLookupScanRoute();
+		setActivePinia(createPinia());
+		(window as any).__ = (text: string, args?: any[]) =>
+			args ? text.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)])) : text;
+		(globalThis as any).__ = (window as any).__;
+		(window as any).frappe = {
+			call: vi.fn(async () => ({ message: { found: false } })),
+			utils: { play_sound: vi.fn() },
+			datetime: { nowdate: () => "2026-10-06" },
+		};
+		(globalThis as any).frappe = (window as any).frappe;
+		useUIStore().setPosProfile({
+			name: "Test Pos",
+			currency: "OMR",
+			warehouse: "Test - S",
+			company: "Test Co",
+			selling_price_list: "Standard Selling",
+		} as any);
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		document.body.innerHTML = "";
+	});
+
+	async function typeInto(input: any, code: string, gapMs: number) {
+		for (let i = 1; i <= code.length; i += 1) {
+			await input.setValue(code.slice(0, i));
+			await vi.advanceTimersByTimeAsync(gapMs);
+		}
+	}
+
+	it("typing slowly is never looked up half-way and the box is not wiped; Enter looks up the full code", async () => {
+		const wrapper = mountTypingDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+
+		await typeInto(input, "43649930030014", 600);
+
+		expect(lookupCalls()).toHaveLength(0);
+		expect((input.element as HTMLInputElement).value).toBe("43649930030014");
+
+		await input.trigger("keydown", { key: "Enter" });
+		await vi.advanceTimersByTimeAsync(10);
+		expect(lookupCalls()).toHaveLength(1);
+		expect(lookupCalls()[0][0].args.code).toBe("43649930030014");
+		wrapper.unmount();
+	});
+
+	it("a scanner that sends no Enter (keys a few ms apart) is still looked up on its own", async () => {
+		const wrapper = mountTypingDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+
+		await typeInto(input, "43649930030014", 8);
+		expect(lookupCalls()).toHaveLength(0);
+		await vi.advanceTimersByTimeAsync(350);
+
+		expect(lookupCalls()).toHaveLength(1);
+		expect(lookupCalls()[0][0].args.code).toBe("43649930030014");
+		wrapper.unmount();
+	});
+
+	it("a scanner that ends with Enter is looked up at once, exactly once", async () => {
+		const wrapper = mountTypingDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+
+		await typeInto(input, "43649930030014", 8);
+		await input.trigger("keydown", { key: "Enter" });
+		await vi.advanceTimersByTimeAsync(400);
+
+		expect(lookupCalls()).toHaveLength(1);
+		expect(lookupCalls()[0][0].args.code).toBe("43649930030014");
+		wrapper.unmount();
+	});
+});
+
+describe("Check Stock dialog: barcode suggestions while typing", () => {
+	const mountSuggestDialog = () =>
+		mount(StockLookupDialog, {
+			attachTo: document.body,
+			global: { components: stubs, provide: { eventBus: { emit: vi.fn() } } },
+		});
+
+	const suggestionRows = Array.from({ length: 10 }, (_, i) => ({
+		barcode: `4364993003001${i}`,
+		item_code: `4364993003001${i}`,
+		item_name: `SWEATER ${i}`,
+		size: ["S", "M", "L"][i % 3],
+		color: "MIDNIGHT BLUE",
+	}));
+
+	const suggestCalls = () =>
+		(window as any).frappe.call.mock.calls.filter(
+			([opts]: any[]) => opts.method === "posawesome.posawesome.api.items.suggest_item_barcodes",
+		);
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		offlineSpies.isOffline.mockImplementation(() => false);
+		resetStockLookupScanRoute();
+		setActivePinia(createPinia());
+		(window as any).__ = (text: string, args?: any[]) =>
+			args ? text.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)])) : text;
+		(globalThis as any).__ = (window as any).__;
+		(window as any).frappe = {
+			call: vi.fn(async ({ method, args }: any) => {
+				if (method === "posawesome.posawesome.api.items.suggest_item_barcodes") {
+					return { message: suggestionRows.filter((r) => r.barcode.startsWith(args.prefix)) };
+				}
+				if (method === "posawesome.posawesome.api.items.lookup_item_stock") {
+					return { message: lookupResponse };
+				}
+				return { message: null };
+			}),
+			utils: { play_sound: vi.fn() },
+			datetime: { nowdate: () => "2026-10-06" },
+		};
+		(globalThis as any).frappe = (window as any).frappe;
+		useUIStore().setPosProfile({
+			name: "Test Pos",
+			currency: "OMR",
+			warehouse: "Test - S",
+			company: "Test Co",
+			selling_price_list: "Standard Selling",
+		} as any);
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		document.body.innerHTML = "";
+	});
+
+	async function typeSlowly(input: any, text: string) {
+		for (let i = 1; i <= text.length; i += 1) {
+			await input.setValue(text.slice(0, i));
+			await vi.advanceTimersByTimeAsync(400);
+		}
+	}
+
+	it("after 4 typed digits, shows at most 8 matching barcodes with name, size and colour -- and looks nothing up", async () => {
+		const wrapper = mountSuggestDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+
+		await typeSlowly(input, "436");
+		expect(suggestCalls()).toHaveLength(0);
+		expect(wrapper.find("[data-testid='stock-lookup-suggestions']").exists()).toBe(false);
+
+		await typeSlowly(input, "4364");
+		expect(suggestCalls()).toHaveLength(1);
+		expect(suggestCalls()[0][0].args).toMatchObject({ pos_profile: "Test Pos", prefix: "4364", limit: 8 });
+		const options = wrapper.findAll("[data-testid^='stock-lookup-suggestion-']");
+		expect(options).toHaveLength(8);
+		expect(options[1].text()).toContain("43649930030011");
+		expect(options[1].text()).toContain("SWEATER 1 · M · MIDNIGHT BLUE");
+		expect(lookupCalls()).toHaveLength(0);
+		wrapper.unmount();
+	});
+
+	it("clicking a suggestion shows its stock (one lookup for that barcode) and closes the list", async () => {
+		const wrapper = mountSuggestDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+		await typeSlowly(input, "4364");
+
+		await wrapper.get("[data-testid='stock-lookup-suggestion-43649930030012']").trigger("click");
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(lookupCalls()).toHaveLength(1);
+		expect(lookupCalls()[0][0].args.code).toBe("43649930030012");
+		expect((input.element as HTMLInputElement).value).toBe("43649930030012");
+		expect(wrapper.find("[data-testid='stock-lookup-suggestions']").exists()).toBe(false);
+		wrapper.unmount();
+	});
+
+	it("Arrow Down then Enter picks the highlighted suggestion; plain Enter still looks up what was typed", async () => {
+		const wrapper = mountSuggestDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+		await typeSlowly(input, "4364");
+
+		await input.trigger("keydown", { key: "ArrowDown" });
+		await input.trigger("keydown", { key: "ArrowDown" });
+		await input.trigger("keydown", { key: "Enter" });
+		await vi.advanceTimersByTimeAsync(500);
+		expect(lookupCalls()).toHaveLength(1);
+		expect(lookupCalls()[0][0].args.code).toBe("43649930030011");
+
+		await typeSlowly(input, "4364");
+		await input.trigger("keydown", { key: "Enter" });
+		await vi.advanceTimersByTimeAsync(500);
+		expect(lookupCalls()).toHaveLength(2);
+		expect(lookupCalls()[1][0].args.code).toBe("4364");
+		wrapper.unmount();
+	});
+
+	it("a scanner's code never asks for suggestions", async () => {
+		const wrapper = mountSuggestDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+
+		for (let i = 1; i <= "43649930030014".length; i += 1) {
+			await input.setValue("43649930030014".slice(0, i));
+			await vi.advanceTimersByTimeAsync(8);
+		}
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(suggestCalls()).toHaveLength(0);
+		expect(lookupCalls()).toHaveLength(1);
+		wrapper.unmount();
+	});
+
+	it("an answer for an older prefix is ignored once more has been typed", async () => {
+		const wrapper = mountSuggestDialog();
+		useUIStore().openStockLookup();
+		await nextTick();
+		const input = wrapper.get("[data-testid='stock-lookup-input']");
+		await typeSlowly(input, "4364");
+		await input.setValue("43649930030015");
+		await vi.advanceTimersByTimeAsync(400);
+
+		const shown = wrapper.findAll("[data-testid^='stock-lookup-suggestion-']").map((o) => o.text());
+		expect(shown.every((t) => t.startsWith("43649930030015"))).toBe(true);
 		wrapper.unmount();
 	});
 });
