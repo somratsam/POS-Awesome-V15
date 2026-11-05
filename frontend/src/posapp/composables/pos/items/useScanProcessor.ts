@@ -5,7 +5,12 @@ import {
 	parseBooleanSetting,
 	shouldBlockSaleForStock,
 } from "../../../utils/stock";
-import { saveItems, savePriceListItems } from "../../../../offline/index";
+import {
+	getStoredItemByBarcode,
+	isOffline,
+	saveItems,
+	savePriceListItems,
+} from "../../../../offline/index";
 import { openItemSelectionDialog } from "../../../utils/itemSelectionDialog";
 import {
 	extractScanAssignmentFromItem,
@@ -389,32 +394,16 @@ export function useScanProcessor(context: ScanProcessorContext) {
 			// successful scan is confirmed by the success tone above and the
 			// item visibly appearing in the cart, not a toast. See
 			// PROGRESS_NOTES.md section 36.
-			const itemName =
-				newItem.item_name ||
-				newItem.item_code ||
-				scannedCode ||
-				__("Item");
-
-			// Surface the "other sizes/colors" hint for a scanned variant, or
-			// clear a stale one from a previous scan -- purely informational,
-			// no fetch happens here (see ScanVariantHint.vue/ItemsSelector.vue
-			// for the on-demand fetch, triggered only if staff taps "View").
-			if (scannerInput.scanVariantHint) {
-				scannerInput.scanVariantHint.value = newItem.variant_of
-					? {
-							itemCode: newItem.item_code,
-							itemName,
-							variantOf: newItem.variant_of,
-						}
-					: null;
-			}
-
 			// Clear search after successful addition and refocus input via context callback
 			if (context.onItemAdded) context.onItemAdded();
 		} finally {
 			awaitingScanResult.value = false;
 		}
 	};
+
+	// Same scope the items store saves and searches the catalogue under.
+	const catalogScope = () =>
+		`${pos_profile.value?.name || "no_profile"}_${pos_profile.value?.warehouse || "no_warehouse"}`;
 
 	const processScannedItem = async (
 		scannedCode: string,
@@ -584,6 +573,20 @@ export function useScanProcessor(context: ScanProcessorContext) {
 			}
 		}
 
+		// Offline the server can't be asked, and with Limit Search on the
+		// in-memory list only holds the current search results -- look the
+		// code up in the stored catalogue (the one offline search reads).
+		if (!foundItem && isOffline()) {
+			foundItem = await getStoredItemByBarcode(searchCode, catalogScope());
+			if (foundItem) {
+				barcodeIndex.indexItem(foundItem);
+				logScanFlow("Offline catalogue item resolved", {
+					item_code: foundItem?.item_code,
+					scannedCode,
+				});
+			}
+		}
+
 		if (foundItem) {
 			const localAssignment = extractScanAssignmentFromItem(
 				foundItem,
@@ -660,8 +663,7 @@ export function useScanProcessor(context: ScanProcessorContext) {
 					searchCache.value.clear();
 				}
 
-				const profileScope = `${pos_profile.value?.name || "no_profile"}_${pos_profile.value?.warehouse || "no_warehouse"}`;
-				await saveItems(items.value, profileScope);
+				await saveItems(items.value, catalogScope());
 				await savePriceListItems(
 					customer_price_list.value,
 					items.value,

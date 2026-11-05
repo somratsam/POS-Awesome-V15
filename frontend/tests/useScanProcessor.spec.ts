@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computed, ref } from "vue";
 
+const offlineMocks = vi.hoisted(() => ({
+	isOffline: vi.fn(() => false),
+	getStoredItemByBarcode: vi.fn(async () => null),
+}));
+
 vi.mock("../src/offline/index", () => ({
 	saveItems: vi.fn(async () => {}),
 	savePriceListItems: vi.fn(async () => {}),
+	isOffline: offlineMocks.isOffline,
+	getStoredItemByBarcode: offlineMocks.getStoredItemByBarcode,
 }));
 
 vi.mock("../src/posapp/stores/toastStore", () => ({
@@ -86,7 +93,6 @@ const makeContext = (
 			scanErrorMessage: ref(""),
 			scanErrorCode: ref(""),
 			scanErrorDetails: ref(""),
-			scanVariantHint: ref<any>(null),
 		},
 		searchCache: ref(new Map()),
 		eventBus: {
@@ -434,63 +440,7 @@ describe("useScanProcessor serial scan handling", () => {
 		expect(addedItem.conversion_factor).toBe(12);
 	});
 
-	it("sets the scan-variant hint after scan-adding an item that belongs to a variant family", async () => {
-		const ctx = makeContext();
-		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
-
-		await addScannedItemToInvoice(
-			createScannableItem({
-				item_code: "ITEM-BLUE-M",
-				item_name: "Style 123 - Blue - Medium",
-				variant_of: "STYLE-123",
-			}),
-			"BARCODE-BLUE-M",
-		);
-
-		expect(ctx.scannerInput.scanVariantHint.value).toEqual({
-			itemCode: "ITEM-BLUE-M",
-			itemName: "Style 123 - Blue - Medium",
-			variantOf: "STYLE-123",
-		});
-	});
-
-	it("does not set a scan-variant hint for a plain (non-variant) item, and clears a stale one from an earlier scan", async () => {
-		const ctx = makeContext();
-		ctx.scannerInput.scanVariantHint.value = {
-			itemCode: "ITEM-BLUE-M",
-			itemName: "Style 123 - Blue - Medium",
-			variantOf: "STYLE-123",
-		};
-		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
-
-		await addScannedItemToInvoice(
-			createScannableItem({ item_code: "ITEM-PLAIN", variant_of: undefined }),
-			"BARCODE-PLAIN",
-		);
-
-		expect(ctx.scannerInput.scanVariantHint.value).toBeNull();
-	});
-
-	it("replaces the scan-variant hint (not accumulates) when a second variant item is scanned", async () => {
-		const ctx = makeContext();
-		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
-
-		await addScannedItemToInvoice(
-			createScannableItem({ item_code: "ITEM-BLUE-M", variant_of: "STYLE-123" }),
-			"BARCODE-BLUE-M",
-		);
-		await addScannedItemToInvoice(
-			createScannableItem({ item_code: "ITEM-RED-L", variant_of: "STYLE-999" }),
-			"BARCODE-RED-L",
-		);
-
-		expect(ctx.scannerInput.scanVariantHint.value).toMatchObject({
-			itemCode: "ITEM-RED-L",
-			variantOf: "STYLE-999",
-		});
-	});
-
-	it("still adds a variant item to the invoice normally -- the hint is additive, not a gate", async () => {
+	it("scanning a variant item adds it to the invoice with no 'other sizes/colors' prompt", async () => {
 		const ctx = makeContext();
 		const { addScannedItemToInvoice } = useScanProcessor(ctx as any);
 
@@ -501,5 +451,52 @@ describe("useScanProcessor serial scan handling", () => {
 
 		expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
 		expect(ctx.itemAddition.addItem.mock.calls[0][0].item_code).toBe("ITEM-BLUE-M");
+	});
+
+	describe("offline scan", () => {
+		beforeEach(() => {
+			offlineMocks.isOffline.mockReset().mockReturnValue(false);
+			offlineMocks.getStoredItemByBarcode.mockReset().mockResolvedValue(null);
+		});
+
+		it("offline, adds an item found in the stored catalogue that isn't in the current search results", async () => {
+			const ctx = makeContext();
+			offlineMocks.isOffline.mockReturnValue(true);
+			offlineMocks.getStoredItemByBarcode.mockResolvedValue(
+				createScannableItem({ item_code: "OFF-1", barcode: "99000000000031" }),
+			);
+
+			const { processScannedItem } = useScanProcessor(ctx as any);
+			await processScannedItem("99000000000031", "low");
+
+			expect(offlineMocks.getStoredItemByBarcode).toHaveBeenCalledWith("99000000000031", "Test Pos_Main Warehouse");
+			expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
+			expect(ctx.itemAddition.addItem.mock.calls[0][0].item_code).toBe("OFF-1");
+			expect(itemServiceMocks.getItemsFromBarcodeData).not.toHaveBeenCalled();
+		});
+
+		it("offline, a code not in the stored catalogue behaves as before (silent for low confidence, dialog for high)", async () => {
+			offlineMocks.isOffline.mockReturnValue(true);
+			const low = makeContext();
+			await useScanProcessor(low as any).processScannedItem("NOPE-1", "low");
+			expect(low.itemAddition.addItem).not.toHaveBeenCalled();
+			expect(low.scannerInput.scanErrorDialog.value).toBe(false);
+
+			const high = makeContext();
+			await useScanProcessor(high as any).processScannedItem("NOPE-1", "high");
+			expect(high.itemAddition.addItem).not.toHaveBeenCalled();
+			expect(high.scannerInput.scanErrorDialog.value).toBe(true);
+		});
+
+		it("online, the stored catalogue is not consulted -- the server lookup is used as before", async () => {
+			const ctx = makeContext();
+			itemServiceMocks.getItemsFromBarcodeData.mockResolvedValueOnce(
+				createScannableItem({ item_code: "ON-1", barcode: "99000000000032" }),
+			);
+			await useScanProcessor(ctx as any).processScannedItem("99000000000032", "low");
+			expect(offlineMocks.getStoredItemByBarcode).not.toHaveBeenCalled();
+			expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledTimes(1);
+			expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
+		});
 	});
 });
