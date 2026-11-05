@@ -93,6 +93,80 @@ def _single_item_rows(item_code, profile_name, price_list, customer):
     return rows
 
 
+SUGGEST_MIN_PREFIX_LENGTH = 4
+SUGGEST_MAX_RESULTS = 8
+SIZE_ATTRIBUTES = ("Size",)
+COLOR_ATTRIBUTES = ("Color", "Colour")
+
+
+def _like_prefix_pattern(prefix):
+    """A LIKE pattern matching values that start with `prefix` literally:
+    % and _ typed by staff are not wildcards."""
+    escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
+@frappe.whitelist()
+def suggest_item_barcodes(pos_profile, prefix, limit=SUGGEST_MAX_RESULTS):
+    """Registered barcodes starting with what has been typed, for Check
+    Stock's suggestion list: barcode, item name, size and colour only -- the
+    stock comes from lookup_item_stock once one is picked.
+
+    Same authorization as lookup_item_stock (the user must be allowed this
+    POS Profile); only the typed text comes from the browser."""
+
+    get_authorized_pos_profile(pos_profile)
+
+    prefix = cstr(prefix).strip()
+    if len(prefix) < SUGGEST_MIN_PREFIX_LENGTH or len(prefix) > MAX_LOOKUP_CODE_LENGTH:
+        return []
+    limit = max(1, min(cint(limit) or SUGGEST_MAX_RESULTS, SUGGEST_MAX_RESULTS))
+
+    rows = frappe.db.sql(
+        """
+        select ib.barcode, ib.parent as item_code, i.item_name
+        from `tabItem Barcode` ib
+        inner join `tabItem` i on i.name = ib.parent
+        where ib.parenttype = 'Item'
+            and ib.barcode like %(pattern)s
+            and i.disabled = 0
+        order by ib.barcode
+        limit %(limit)s
+        """,
+        {"pattern": _like_prefix_pattern(prefix), "limit": limit},
+        as_dict=True,
+    )
+    if not rows:
+        return []
+
+    attributes = frappe.get_all(
+        "Item Variant Attribute",
+        filters={
+            "parenttype": "Item",
+            "parent": ["in", list({row.item_code for row in rows})],
+            "attribute": ["in", [*SIZE_ATTRIBUTES, *COLOR_ATTRIBUTES]],
+        },
+        fields=["parent", "attribute", "attribute_value"],
+    )
+    by_item = {}
+    for attr in attributes:
+        by_item.setdefault(attr.parent, {})[attr.attribute] = attr.attribute_value
+
+    suggestions = []
+    for row in rows:
+        values = by_item.get(row.item_code, {})
+        suggestions.append(
+            {
+                "barcode": row.barcode,
+                "item_code": row.item_code,
+                "item_name": row.item_name,
+                "size": next((values[a] for a in SIZE_ATTRIBUTES if values.get(a)), None),
+                "color": next((values[a] for a in COLOR_ATTRIBUTES if values.get(a)), None),
+            }
+        )
+    return suggestions
+
+
 @frappe.whitelist()
 def lookup_item_stock(pos_profile, code, price_list=None, customer=None):
     """Return the item family (or single item) for a scanned/typed code."""

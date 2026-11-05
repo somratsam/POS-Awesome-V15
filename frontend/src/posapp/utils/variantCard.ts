@@ -61,6 +61,21 @@ export function getVariantCardAvailableQty(
 }
 
 /** Keep popup selection aligned with the shared cart stock policy. */
+/**
+ * The quantity to show on a card: a balance below zero (sold before the stock
+ * was loaded) reads as 0. Display only -- stock rules use the real balance.
+ */
+export function getVariantCardDisplayQty(item: VariantCardItem): number | null {
+	const quantity = getVariantCardAvailableQty(item);
+	return quantity === null ? null : Math.max(quantity, 0);
+}
+
+/** Shown as "Out of Stock": nothing left, or below zero. Display only. */
+export function isVariantCardOutOfStock(item: VariantCardItem): boolean {
+	const quantity = getVariantCardAvailableQty(item);
+	return quantity !== null && quantity <= 0;
+}
+
 export function isVariantCardUnavailable(
 	item: VariantCardItem,
 	posProfile: Record<string, any> | null | undefined,

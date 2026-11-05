@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	getVariantCardDisplayQty,
+	isVariantCardOutOfStock,
 	getVariantCardAvailableQty,
 	getVariantCardBarcode,
 	isVariantCardUnavailable,
@@ -63,5 +65,33 @@ describe("variant card presentation", () => {
 		expect(isVariantCardUnavailable({ is_stock_item: 1 }, {}, {})).toBe(
 			false,
 		);
+	});
+});
+
+describe("variant card display below zero (Check Stock and the size picker)", () => {
+	it("shows 0, never a negative number", () => {
+		expect(getVariantCardDisplayQty({ actual_qty: -2 })).toBe(0);
+		expect(getVariantCardDisplayQty({ actual_qty: 0 })).toBe(0);
+		expect(getVariantCardDisplayQty({ actual_qty: 7 })).toBe(7);
+		expect(getVariantCardDisplayQty({ available_qty: -1, actual_qty: 5 })).toBe(0);
+		expect(getVariantCardDisplayQty({})).toBeNull();
+	});
+
+	it("marks 0 and below as Out of Stock", () => {
+		expect(isVariantCardOutOfStock({ actual_qty: -2 })).toBe(true);
+		expect(isVariantCardOutOfStock({ actual_qty: 0 })).toBe(true);
+		expect(isVariantCardOutOfStock({ actual_qty: 1 })).toBe(false);
+		expect(isVariantCardOutOfStock({})).toBe(false);
+	});
+
+	it("leaves whether a card can be picked to the real stock rules", () => {
+		const below = { actual_qty: -2, is_stock_item: 1 };
+		expect(isVariantCardOutOfStock(below)).toBe(true);
+		expect(
+			isVariantCardUnavailable(below, { posa_block_sale_beyond_available_qty: 0 }, { allow_negative_stock: 1 }),
+		).toBe(false);
+		expect(
+			isVariantCardUnavailable(below, { posa_block_sale_beyond_available_qty: 1 }, { allow_negative_stock: 0 }),
+		).toBe(true);
 	});
 });
