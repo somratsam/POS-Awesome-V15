@@ -2176,7 +2176,7 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 		vi.stubGlobal("frappe", { utils: { play_sound: vi.fn() } });
 	});
 
-	const submitDoc = async (doc: any) => {
+	const submitDoc = async (doc: any, returnIntent: "exchange" | "credit_note" | null = null) => {
 		const invoiceService = (await import("../src/posapp/services/invoiceService")).default;
 		(invoiceService.submitInvoice as any).mockResolvedValue({
 			name: doc.name,
@@ -2211,9 +2211,10 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 			customerCreditDict: ref([]),
 			diff_payment: ref(0),
 		});
-		const result = await submitInvoice(false, {
+		const result = await submitInvoice(returnIntent === "credit_note", {
 			onFinishNavigation: vi.fn(),
 			onScheduleBackgroundCheck: vi.fn(),
+			returnIntent,
 		});
 		await Promise.resolve();
 		await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2235,6 +2236,30 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 		expect(result?.success).toBe(true);
 		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith("CUST-R");
 		expect(customersStore.armExchangeCredit).toHaveBeenCalledWith("CUST-R");
+	});
+
+	const creditReturn = (name: string) => ({
+		name,
+		doctype: "Sales Invoice",
+		is_return: 1,
+		customer: "CUST-R",
+		items: [],
+		payments: [{ mode_of_payment: "Cash", amount: 0, type: "Cash" }],
+		rounded_total: -50,
+		grand_total: -50,
+	});
+
+	it("Exchange: continue to new sale keeps the customer and arms their credit", async () => {
+		const { customersStore } = await submitDoc(creditReturn("ACC-SINV-RET-2"), "exchange");
+		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith("CUST-R");
+		expect(customersStore.armExchangeCredit).toHaveBeenCalledWith("CUST-R");
+	});
+
+	it("Credit note issue ends the visit: no exchange sale is set up", async () => {
+		const { customersStore, result } = await submitDoc(creditReturn("ACC-SINV-RET-3"), "credit_note");
+		expect(result?.success).toBe(true);
+		expect(customersStore.armExchangeCredit).not.toHaveBeenCalled();
+		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith(null);
 	});
 
 	it("does nothing special after a normal sale", async () => {

@@ -1,6 +1,48 @@
 <template>
 	<v-card flat :class="['cards mb-0 mt-3 pa-0', { compact }]">
 		<v-row align="start" no-gutters>
+			<!-- A return that refunds no money: the cashier says whether it is an
+			     exchange (no slip) or a credit note (printed). See utils/returnIntent. -->
+			<template v-if="returnChoice">
+				<v-col cols="12" sm="6">
+					<v-btn
+						block
+						size="large"
+						color="primary"
+						variant="flat"
+						class="payment-submit-btn payment-footer-btn"
+						data-pos-keyboard-target="payment-submit-exchange"
+						data-testid="payment-submit-exchange"
+						:aria-keyshortcuts="showKeyboardShortcuts ? 'Control+Enter Meta+Enter' : undefined"
+						@click="$emit('submit-exchange')"
+						:loading="loading"
+						:disabled="loading || validatePayment"
+						:class="{ 'submit-highlight': highlightSubmit }"
+					>
+						<span>{{ __("Exchange: continue to new sale") }}</span>
+						<kbd v-if="showKeyboardShortcuts" class="payment-footer-btn__shortcut">
+							Ctrl/⌘+Enter
+						</kbd>
+					</v-btn>
+				</v-col>
+				<v-col cols="12" sm="6" class="payment-action-col">
+					<v-btn
+						block
+						size="large"
+						color="success"
+						variant="flat"
+						class="payment-submit-print-btn payment-footer-btn"
+						data-pos-keyboard-target="payment-submit-credit-note"
+						data-testid="payment-submit-credit-note"
+						@click="$emit('submit-credit-note')"
+						:loading="loading"
+						:disabled="loading || validatePayment"
+					>
+						<span>{{ __("Credit note issue") }}</span>
+					</v-btn>
+				</v-col>
+			</template>
+			<template v-else>
 			<v-col cols="12" sm="6">
 				<v-btn
 					ref="submitButton"
@@ -45,6 +87,7 @@
 					</kbd>
 				</v-btn>
 			</v-col>
+			</template>
 			<v-col cols="12">
 				<v-btn
 					block
@@ -70,9 +113,10 @@ defineProps({
 	highlightSubmit: Boolean,
 	compact: Boolean,
 	showKeyboardShortcuts: Boolean,
+	returnChoice: Boolean,
 });
 
-defineEmits(["submit", "submit-and-print", "cancel"]);
+defineEmits(["submit", "submit-and-print", "submit-exchange", "submit-credit-note", "cancel"]);
 
 const __ = window.__;
 </script>

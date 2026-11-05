@@ -266,11 +266,19 @@
 				:highlightSubmit="highlightSubmit"
 				:compact="dialogMode"
 				:show-keyboard-shortcuts="counterGridMode"
+				:return-choice="noMoneyReturn"
 				@submit="submit"
 				@submit-and-print="submit(undefined, false, true)"
+				@submit-exchange="submitReturnAs('exchange')"
+				@submit-credit-note="submitReturnAs('credit_note')"
 				@cancel="back_to_invoice"
 			/>
 		</div>
+		<ReturnIntentDialog
+			:model-value="returnIntentDialog"
+			@choose="settleReturnIntent"
+			@cancel="settleReturnIntent(null)"
+		/>
 		<!-- Dialogs Section (Custom Days, Phone Payment) -->
 		<PaymentDialogs
 			:custom-days-dialog="custom_days_dialog"
@@ -374,6 +382,8 @@ import PaymentCustomerCreditDetails from "./payments/PaymentCustomerCreditDetail
 import PaymentOptions from "./payments/PaymentOptions.vue";
 import PaymentSelectionFields from "./payments/PaymentSelectionFields.vue";
 import PaymentDialogs from "./payments/PaymentDialogs.vue";
+import ReturnIntentDialog from "./payments/ReturnIntentDialog.vue";
+import { isNoMoneyReturn, resolveReturnSubmit } from "../../utils/returnIntent";
 
 const props = defineProps({
 	dialogMode: {
@@ -1915,9 +1925,47 @@ const submit = async (_event, payment_received = false, print = false) => {
 	});
 };
 
+// A return that refunds no money: "Exchange: continue to new sale" (no print)
+// or "Credit note issue" (prints). See utils/returnIntent.
+const noMoneyReturn = computed(() => isNoMoneyReturn(invoice_doc.value));
+const returnIntentDialog = ref(false);
+let resolveReturnIntent = null;
+const askReturnIntent = () =>
+	new Promise((resolve) => {
+		resolveReturnIntent = resolve;
+		returnIntentDialog.value = true;
+	});
+const settleReturnIntent = (intent) => {
+	returnIntentDialog.value = false;
+	const resolve = resolveReturnIntent;
+	resolveReturnIntent = null;
+	resolve?.(intent || null);
+};
+const submitReturnAs = (intent) =>
+	submitInvoiceWrapper(intent === "credit_note", undefined, { returnIntent: intent });
+
 const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {}) => {
-	if (submissionInFlight.value) {
+	if (submissionInFlight.value || returnIntentDialog.value) {
 		return;
+	}
+
+	// Every submit route arrives here, so the exchange / credit note choice
+	// can't be skipped by a keyboard shortcut.
+	const decision = resolveReturnSubmit({
+		noMoneyReturn: noMoneyReturn.value,
+		print: Boolean(print),
+		intent: options.returnIntent || null,
+	});
+	let returnIntent = null;
+	if (decision.action === "ask") {
+		returnIntent = await askReturnIntent();
+		if (!returnIntent || submissionInFlight.value) {
+			return;
+		}
+		print = returnIntent === "credit_note";
+	} else {
+		print = decision.print;
+		returnIntent = decision.intent;
 	}
 
 	submissionInFlight.value = true;
@@ -1960,6 +2008,7 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 				scheduleBackgroundStatusCheck(payload);
 			},
 			...callbackOverrides,
+			returnIntent,
 		});
 	} catch (error) {
 		console.error("Submission failed propagate:", error);
@@ -1981,6 +2030,7 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 // Keyboard Shortcuts
 const handlePaymentShortcut = (event) => {
 	if (event.defaultPrevented || submissionInFlight.value || loading.value) return;
+	if (returnIntentDialog.value) return;
 	if (event.repeat) return;
 	if (!paymentVisible.value) return;
 
@@ -2031,13 +2081,19 @@ const handlePaymentShortcut = (event) => {
 
 const handleSubmitPaymentShortcut = ({ print = false, amount = null } = {}) => {
 	if (!paymentVisible.value || submissionInFlight.value || loading.value) return;
+	if (returnIntentDialog.value) return;
 	const submitShortcut = () => {
 		nextTick(() => {
 			submit(null, false, print);
 		});
 	};
 
-	if (amount !== null) {
+	// The invoice screen's "Open Payments?" box offers the return total as an
+	// amount. A credit-only store never refunds, so that amount must not become
+	// a refund line: the return stays a no-money return, and its Exchange /
+	// Credit note issue choice applies (a print key asks).
+	const refundBlocked = Boolean(invoice_doc.value?.is_return) && returnsCreditOnlyPolicy.value;
+	if (amount !== null && !refundBlocked) {
 		const shortcutAmount = Number(amount);
 		if (!invoice_doc.value?.is_return && Number.isFinite(shortcutAmount) && shortcutAmount === 0) {
 			if (!enableShortcutCreditSale()) {
