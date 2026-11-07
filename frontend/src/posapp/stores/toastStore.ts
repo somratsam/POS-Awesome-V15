@@ -89,6 +89,7 @@ export const useToastStore = defineStore("toast", () => {
 		) {
 			mergeNotifications(currentNotification.value, notification);
 			updateActiveState();
+			restartDisplayTimer();
 			return;
 		}
 
@@ -238,6 +239,19 @@ export const useToastStore = defineStore("toast", () => {
 		}
 
 		return `${baseText}${multiplier}`;
+	}
+
+	// A message merged into the one on screen gets its own full display
+	// time: the snackbar only restarts its timer when `timeout` changes, so
+	// pause it (-1 = no timer) and set it back on the next tick.
+	function restartDisplayTimer() {
+		if (!visible.value || !currentNotification.value) return;
+		timeout.value = -1;
+		setTimeout(() => {
+			if (currentNotification.value) {
+				timeout.value = currentNotification.value.timeout;
+			}
+		}, 0);
 	}
 
 	function updateActiveState() {

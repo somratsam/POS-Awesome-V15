@@ -1945,6 +1945,7 @@ import { isOffline } from "../../../../offline/index";
 import { buildInvoicePdfUrl, shouldDownloadPdfForShareError } from "../../../utils/invoiceSharing";
 import { resolvePaymentPrintFormat } from "../../../utils/paymentPrintFormat";
 import { recordCreditNoteReprint, REPRINT_SETTINGS } from "../../../utils/creditNoteReprint";
+import { voucherErrorToast } from "../../../utils/voucherMessages";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
 import {
 	canDeleteDocumentSourceRecord,
@@ -4040,11 +4041,12 @@ export default {
 			if (!invoice?.name || !profile) return;
 			const doctype = invoice.doctype || this.currentInvoiceDoctype;
 			// Records who reprinted a credit note voucher; nothing prints if the
-			// server refuses (it has already said why).
+			// server refuses (e.g. a locked till), and the cashier is told why.
 			try {
 				await recordCreditNoteReprint({ doctype, name: invoice.name, posProfile: profile.name });
 			} catch (error) {
 				console.warn("Reprint not recorded, not printing", error);
+				this.toastStore?.show(voucherErrorToast(error?.message || __("This invoice can't be reprinted now.")));
 				return;
 			}
 			const printFormat = await this.resolveReprintPrintFormat(doctype, profile);

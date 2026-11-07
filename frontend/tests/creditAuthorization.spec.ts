@@ -15,6 +15,7 @@ import { useRedemptionLogic } from "../src/posapp/composables/pos/payments/useRe
 import PaymentOptions from "../src/posapp/components/pos/payments/PaymentOptions.vue";
 import CreditVoucherCustomerDialog from "../src/posapp/components/pos/payments/CreditVoucherCustomerDialog.vue";
 import paymentsSource from "../src/posapp/components/pos/Payments.vue?raw";
+import navbarSource from "../src/posapp/components/Navbar.vue?raw";
 import {
 	callWithoutDialog,
 	serverMessageOf,
@@ -412,5 +413,13 @@ describe("voucherMessages", () => {
 	it("voucher problems are red, 8 seconds, and replace each other instead of queueing", () => {
 		expect(voucherErrorToast("x")).toEqual({ title: "x", color: "red-darken-3", timeout: 8000, key: "credit-voucher-message" });
 		expect(voucherSuccessToast("y").key).toBe("credit-voucher-message");
+	});
+});
+
+describe("toasts sit above dialogs", () => {
+	it("the app's snackbar has a z-index above every Vuetify dialog", () => {
+		const snackbar = navbarSource.slice(navbarSource.indexOf("<v-snackbar"), navbarSource.indexOf("</v-snackbar>"));
+		expect(snackbar).toContain('class="posa-toast"');
+		expect(navbarSource).toMatch(/<style>\s*[\s\S]*?\.v-overlay\.v-snackbar\.posa-toast \{\s*z-index: 10000 !important;/);
 	});
 });

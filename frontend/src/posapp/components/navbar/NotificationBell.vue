@@ -60,7 +60,7 @@
 					<v-list v-else density="compact" class="notification-items">
 						<v-list-item v-for="item in notifications" :key="item.id" class="notification-item">
 							<template #prepend>
-								<div class="notification-icon" :class="item.color || 'error'">
+								<div class="notification-icon" :class="item.color && !item.color.startsWith('red') ? item.color : 'error'">
 									<v-icon size="18">mdi-bell-alert-outline</v-icon>
 								</div>
 							</template>

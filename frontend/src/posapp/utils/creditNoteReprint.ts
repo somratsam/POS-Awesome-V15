@@ -3,10 +3,13 @@
 // records which PIN-verified cashier reprinted it, and the POS then prints it
 // as a DUPLICATE. Other invoices: nothing is recorded.
 //
-// Throws when the server refuses (no access, or a locked till for a voucher);
-// Frappe has already shown its message, and the caller must not print.
+// Throws when the server refuses (no access, or a locked till for a voucher)
+// with the server's reason as the message; the caller shows it as a red
+// toast (Frappe's own message box would open behind Invoice Management) and
+// must not print.
 
-declare const frappe: any;
+import { callWithoutDialog } from "./voucherMessages";
+import { isOffline } from "../../offline/index";
 
 export const CREDIT_NOTE_REPRINT_METHOD =
 	"posawesome.posawesome.api.credit_voucher.record_credit_note_reprint";
@@ -22,9 +25,13 @@ export async function recordCreditNoteReprint({
 	name: string;
 	posProfile?: string | null;
 }): Promise<boolean> {
-	const response = await frappe.call({
-		method: CREDIT_NOTE_REPRINT_METHOD,
-		args: { doctype, name, pos_profile: posProfile || null },
+	// Offline the POS prints its own offline copy, which carries no voucher
+	// code, so there is nothing to record (as before).
+	if (isOffline()) return false;
+	const result: any = await callWithoutDialog(CREDIT_NOTE_REPRINT_METHOD, {
+		doctype,
+		name,
+		pos_profile: posProfile || null,
 	});
-	return Boolean(response?.message?.credit_note);
+	return Boolean(result?.credit_note);
 }

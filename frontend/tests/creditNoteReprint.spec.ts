@@ -34,6 +34,11 @@ vi.mock("../src/posapp/stores/uiStore", () => ({
 	useUIStore: () => ui,
 }));
 
+const toast = vi.hoisted(() => ({ show: vi.fn() }));
+vi.mock("../src/posapp/stores/toastStore", () => ({
+	useToastStore: () => toast,
+}));
+
 import {
 	CREDIT_NOTE_REPRINT_METHOD,
 	recordCreditNoteReprint,
@@ -47,18 +52,34 @@ const profile = { name: "Test Pos", print_format: "Swan Sales Invoice", letter_h
 let openSpy: ReturnType<typeof vi.fn>;
 let events: string[];
 
+// The reprint check is a direct server call (no Frappe message box).
+let fetchSpy: ReturnType<typeof vi.fn>;
 function serverSays(creditNote: boolean | "refuse") {
-	(globalThis as any).frappe.call = vi.fn(async (opts: any) => {
-		events.push(`call:${opts.method}`);
-		if (creditNote === "refuse") throw new Error("This POS terminal is locked.");
-		return { message: { credit_note: creditNote } };
+	fetchSpy = vi.fn(async (url: string, init: any) => {
+		const method = url.replace("/api/method/", "");
+		events.push(`call:${method}`);
+		(fetchSpy as any).lastBody = JSON.parse(init.body);
+		if (creditNote === "refuse") {
+			return {
+				ok: false,
+				status: 403,
+				json: async () => ({
+					_server_messages: JSON.stringify([
+						JSON.stringify({ message: "This POS terminal is locked. Verify a cashier PIN to continue." }),
+					]),
+				}),
+			};
+		}
+		return { ok: true, status: 200, json: async () => ({ message: { credit_note: creditNote } }) };
 	});
+	vi.stubGlobal("fetch", fetchSpy);
 }
 
 beforeEach(() => {
 	events = [];
 	(globalThis as any).__ = (text: string) => text;
-	(globalThis as any).frappe = { urllib: { get_base_url: () => "http://pos" } };
+	(globalThis as any).frappe = { urllib: { get_base_url: () => "http://pos" }, csrf_token: "t" };
+	toast.show.mockReset();
 	openSpy = vi.fn((url: string) => {
 		events.push(`open:${url}`);
 		return {};
@@ -78,23 +99,24 @@ describe("recordCreditNoteReprint", () => {
 		await expect(
 			recordCreditNoteReprint({ doctype: "Sales Invoice", name: "SINV-1", posProfile: "Test Pos" }),
 		).resolves.toBe(true);
-		expect((globalThis as any).frappe.call).toHaveBeenCalledWith({
-			method: CREDIT_NOTE_REPRINT_METHOD,
-			args: { doctype: "Sales Invoice", name: "SINV-1", pos_profile: "Test Pos" },
-		});
+		expect(events).toEqual([`call:${CREDIT_NOTE_REPRINT_METHOD}`]);
+		expect((fetchSpy as any).lastBody).toEqual({ doctype: "Sales Invoice", name: "SINV-1", pos_profile: "Test Pos" });
 		serverSays(false);
 		await expect(recordCreditNoteReprint({ doctype: "Sales Invoice", name: "SINV-2" })).resolves.toBe(false);
 	});
 
 	it("passes a refusal on", async () => {
 		serverSays("refuse");
-		await expect(recordCreditNoteReprint({ doctype: "Sales Invoice", name: "SINV-1" })).rejects.toThrow();
+		await expect(recordCreditNoteReprint({ doctype: "Sales Invoice", name: "SINV-1" })).rejects.toThrow(
+			"This POS terminal is locked. Verify a cashier PIN to continue.",
+		);
 	});
 });
 
 describe("Invoice Management reprint", () => {
 	const reprint = (invoice: any) => {
 		const ctx = {
+			toastStore: toast,
 			posProfile: profile,
 			currentInvoiceDoctype: "Sales Invoice",
 			resolveReprintPrintFormat: async () => "Swan Sales Invoice",
@@ -110,10 +132,17 @@ describe("Invoice Management reprint", () => {
 		expect(events[1]).toContain(`settings=${REPRINT}`);
 	});
 
-	it("prints nothing when the server refuses", async () => {
+	it("prints nothing when the server refuses, and says why in red", async () => {
 		serverSays("refuse");
 		await reprint({ name: "ACC-SINV-2026-00247" });
 		expect(openSpy).not.toHaveBeenCalled();
+		expect(toast.show).toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: "This POS terminal is locked. Verify a cashier PIN to continue.",
+				color: "red-darken-3",
+				timeout: 8000,
+			}),
+		);
 	});
 
 	it("sends the reprint flag to QZ too", async () => {
@@ -154,10 +183,11 @@ describe("Print last invoice", () => {
 		expect(qz.print.mock.calls[1][0]).not.toHaveProperty("settings");
 	});
 
-	it("prints nothing when the server refuses", async () => {
+	it("prints nothing when the server refuses, and says why in red", async () => {
 		serverSays("refuse");
 		await useLastInvoicePrinting().printLastInvoice();
 		expect(openSpy).not.toHaveBeenCalled();
 		expect(qz.print).not.toHaveBeenCalled();
+		expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ color: "red-darken-3", timeout: 8000 }));
 	});
 });
