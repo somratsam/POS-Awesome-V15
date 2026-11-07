@@ -15,7 +15,15 @@
 			<!-- Item Name Column -->
 			<td v-if="column.key === 'item_name'" v-bind="getCellAttrs('item_name', 'text-start')">
 				<div class="posa-cart-item-row__item-cell">
-					<span class="posa-cart-item-row__item-name">{{ item.item_name }}</span>
+					<span
+						class="posa-cart-item-row__item-name"
+						:title="item.item_name"
+						data-testid="cart-item-name"
+						><span class="posa-cart-item-row__item-name-head">{{ itemNameParts.head }}</span
+						><span v-if="itemNameParts.tail" class="posa-cart-item-row__item-name-tail">{{
+							itemNameParts.tail
+						}}</span></span
+					>
 					<v-chip v-if="item.is_bundle" color="secondary" size="x-small" class="ml-1">
 						{{ __("Bundle") }}
 					</v-chip>
@@ -464,6 +472,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { getCartGridCellId, getCartGridRowId } from "../../../utils/cartFieldFocus";
 import { normalizeCartEditQuantity } from "../../../utils/cartQuantity";
+import { splitCartItemName } from "../../../utils/cartItemName";
 import {
 	getItemLossRisk,
 	resolveSaleFloorPolicy,
@@ -629,6 +638,9 @@ const selectedSerialCount = computed(() => {
 const serialSelectionComplete = computed(
 	() => selectedSerialCount.value === requiredSerialCount.value,
 );
+
+// Long names are cut in the middle so the size at the end stays visible.
+const itemNameParts = computed(() => splitCartItemName(props.item.item_name));
 
 const rowDomId = computed(() => (props.rowIndex >= 0 ? getCartGridRowId(props.rowIndex) : undefined));
 
@@ -1143,9 +1155,28 @@ td[data-column-key="item_name"] {
 	text-align: left;
 }
 
+/* One line, cut in the middle: the start shrinks to "…" and the last part
+   (the size, see utils/cartItemName.ts) always shows -- "JACKET-BROWN PA…-40".
+   Full name on hover, in the item details, the receipt and the invoice.
+   flex-basis 0 lets the name take the space beside any chips/buttons instead
+   of pushing them to the next line. */
 .posa-cart-item-row__item-name {
+	display: flex;
+	flex: 1 1 0;
+	min-width: 3ch;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+.posa-cart-item-row__item-name-head {
+	flex: 0 1 auto;
 	min-width: 0;
-	overflow-wrap: anywhere;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.posa-cart-item-row__item-name-tail {
+	flex: none;
 }
 
 .posa-cart-item-row__tracking-stack {
