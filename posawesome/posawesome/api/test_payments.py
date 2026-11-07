@@ -340,6 +340,7 @@ class TestRedeemingCustomerCredit(unittest.TestCase):
             docstatus=1,
             customer="CUST-0001",
             company="Test Company",
+            posa_pos_opening_shift="SHIFT-1",
         )
 
     def test_get_available_credit_leaves_out_credit_older_than_three_months(self):
@@ -366,6 +367,8 @@ class TestRedeemingCustomerCredit(unittest.TestCase):
                     "credit_to_redeem": 0,
                     "source_type": "Sales Return",
                     "expires_on": datetime.date(2026, 3, 26),
+                    # the return's shift, so the POS can use a same-shift exchange without a voucher
+                    "pos_opening_shift": "SHIFT-1",
                 }
             ],
         )

@@ -204,6 +204,8 @@
 							:redeemed-customer-credit="redeemed_customer_credit"
 							:customer-credit-sources="customer_credit_dict.length"
 							:customer-credit-blocked="customer_credit_blocked"
+							:credit-vouchers="Object.values(credit_vouchers)"
+							:voucher-error="voucherError"
 							:format-currency="formatCurrency"
 							@update:is-write-off-change="is_write_off_change = $event"
 							@update:is-credit-sale="is_credit_sale = $event"
@@ -220,6 +222,8 @@
 							@apply-due-preset="applyDuePreset"
 							@update:redeem-customer-credit="redeem_customer_credit = $event"
 							@get-available-credit="get_available_credit"
+							@redeem-voucher="redeemCreditVoucher"
+							@clear-voucher-error="voucherError = ''"
 						/>
 						<PaymentCustomerCreditDetails
 							:invoice-doc="invoice_doc"
@@ -274,6 +278,13 @@
 				@cancel="back_to_invoice"
 			/>
 		</div>
+		<CreditVoucherCustomerDialog
+			:model-value="voucherCustomerDialog"
+			:voucher="pendingVoucher"
+			:current-customer="invoice_doc?.customer_name || invoice_doc?.customer || ''"
+			@confirm="settleVoucherCustomer(true)"
+			@cancel="settleVoucherCustomer(false)"
+		/>
 		<ReturnIntentDialog
 			:model-value="returnIntentDialog"
 			@choose="settleReturnIntent"
@@ -383,6 +394,12 @@ import PaymentOptions from "./payments/PaymentOptions.vue";
 import PaymentSelectionFields from "./payments/PaymentSelectionFields.vue";
 import PaymentDialogs from "./payments/PaymentDialogs.vue";
 import ReturnIntentDialog from "./payments/ReturnIntentDialog.vue";
+import CreditVoucherCustomerDialog from "./payments/CreditVoucherCustomerDialog.vue";
+import {
+	callWithoutDialog,
+	voucherErrorToast,
+	voucherSuccessToast,
+} from "../../utils/voucherMessages";
 import { isNoMoneyReturn, resolveReturnSubmit } from "../../utils/returnIntent";
 
 const props = defineProps({
@@ -652,6 +669,9 @@ const {
 	customer_credit_dict,
 	customer_credit_redemption_requested,
 	customer_credit_blocked,
+	credit_vouchers,
+	addCreditVoucher,
+	clearCreditVouchers,
 	available_customer_credit,
 	available_points_amount,
 	get_available_credit,
@@ -663,7 +683,99 @@ const {
 	formatFloat: (val, prec) => flt(val, prec),
 	stores: { toastStore },
 	onClearAmounts: () => {},
+	getAuthorizationContext: () => ({
+		shift: invoiceStore.invoiceDoc?.posa_pos_opening_shift || null,
+		supervisor: Boolean(currentCashier.value?.is_supervisor),
+	}),
+	creditVouchers: storeToRefs(customersStore).creditVouchers,
+	onCreditMessage: (message) => {
+		voucherError.value = message;
+	},
 });
+
+// Credit note voucher scanned or typed in Payments: the server checks it
+// (lookup_credit_voucher), the sale switches to the voucher's customer if
+// needed, and its credit is applied. Checked again by the server at submit.
+const CREDIT_VOUCHER_LOOKUP = "posawesome.posawesome.api.credit_voucher.lookup_credit_voucher";
+const voucherCustomerDialog = ref(false);
+const pendingVoucher = ref(null);
+let resolveVoucherCustomer = null;
+const askVoucherCustomer = (voucher) =>
+	new Promise((resolve) => {
+		pendingVoucher.value = voucher;
+		resolveVoucherCustomer = resolve;
+		voucherCustomerDialog.value = true;
+	});
+const settleVoucherCustomer = (confirmed) => {
+	voucherCustomerDialog.value = false;
+	const resolve = resolveVoucherCustomer;
+	resolveVoucherCustomer = null;
+	resolve?.(Boolean(confirmed));
+};
+const waitForSaleCustomer = async (customer, timeoutMs = 5000) => {
+	const started = Date.now();
+	while (Date.now() - started < timeoutMs) {
+		if (invoice_doc.value?.customer === customer) return true;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return invoice_doc.value?.customer === customer;
+};
+// A voucher problem is shown twice: a red toast above the Payments screen
+// and a red line under the voucher box (voucherError), until the next try.
+const voucherError = ref("");
+const showVoucherError = (message) => {
+	voucherError.value = message;
+	toastStore.show(voucherErrorToast(message));
+};
+const redeemCreditVoucher = async (code) => {
+	if (!code || invoice_doc.value?.is_return) return;
+	voucherError.value = "";
+	if (isOffline()) {
+		showVoucherError(__("Store credit can only be used while the POS is online."));
+		return;
+	}
+	let voucher;
+	try {
+		voucher = await callWithoutDialog(CREDIT_VOUCHER_LOOKUP, {
+			code,
+			pos_profile: pos_profile.value?.name,
+		});
+	} catch (error) {
+		// Wrong number, used, expired, shared customer, too many tries...
+		showVoucherError(error?.message || __("This voucher can't be used."));
+		return;
+	}
+	if (!voucher?.credit_origin) return;
+
+	const current = invoice_doc.value?.customer || "";
+	if (current !== voucher.customer) {
+		const isDefaultCustomer = !current || current === pos_profile.value?.customer;
+		if (!isDefaultCustomer && !(await askVoucherCustomer(voucher))) return;
+		customersStore.setSelectedCustomer(voucher.customer);
+		if (!(await waitForSaleCustomer(voucher.customer))) {
+			showVoucherError(
+				__("Couldn't switch the sale to {0}. Select the customer, then scan the voucher again.", [
+					voucher.customer_name || voucher.customer,
+				]),
+			);
+			return;
+		}
+	}
+	addCreditVoucher(voucher);
+	redeem_customer_credit.value = true;
+	get_available_credit(true);
+	// Changing the customer re-prices the cart and leaves Payments; the
+	// voucher is applied again when Payments reopens.
+	const backOnInvoice = !isPaymentOpen.value;
+	const amount = formatCurrency(voucher.amount);
+	const who = voucher.customer_name || voucher.customer;
+	const applied = voucher.approved_by
+		? __("Credit note {0} ({1}) approved by a supervisor for {2}.", [voucher.voucher, amount, who])
+		: __("Voucher {0} ({1}) will be used for {2}.", [voucher.voucher, amount, who]);
+	toastStore.show(
+		voucherSuccessToast(backOnInvoice ? `${applied} ${__("Press PAY to continue.")}` : applied),
+	);
+};
 
 const { loadPrintPage, printOfflineInvoice } = usePaymentPrinting({
 	invoiceDoc: computed(() => invoiceStore.invoiceDoc),
@@ -1995,6 +2107,7 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 			},
 			onSuccess: () => {
 				customer_credit_dict.value = [];
+				clearCreditVouchers();
 				redeem_customer_credit.value = false;
 				is_cashback.value = true;
 				show_change_dialog.value = true;
@@ -2413,6 +2526,7 @@ watch(
 watch(selectedCustomer, (newCustomer, oldCustomer) => {
 	if (newCustomer === oldCustomer) return;
 	customer_credit_dict.value = [];
+	clearCreditVouchers(newCustomer);
 	redeem_customer_credit.value = false;
 	is_cashback.value = true;
 	is_credit_return.value = false;
@@ -2474,11 +2588,16 @@ onMounted(() => {
 			// Exchange after a return: same effect as the cashier switching on
 			// "Use Customer Balance" (PaymentOptions.vue), once, for that
 			// customer only -- see customersStore.armExchangeCredit.
-			if (
+			const exchange =
 				!doc.is_return &&
 				pos_profile.value?.use_customer_credit &&
-				customersStore.takeExchangeCredit(doc.customer)
-			) {
+				customersStore.takeExchangeCredit(doc.customer);
+			// Vouchers already scanned for this customer in this sale (e.g. the
+			// sale was switched to the voucher's customer, which reopens Payments).
+			const vouchers =
+				!doc.is_return &&
+				Object.values(credit_vouchers.value).some((v) => v.customer === doc.customer);
+			if (exchange || vouchers) {
 				redeem_customer_credit.value = true;
 				get_available_credit(true);
 			}

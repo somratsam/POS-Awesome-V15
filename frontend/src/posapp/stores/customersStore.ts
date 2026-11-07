@@ -261,6 +261,28 @@ export const useCustomersStore = defineStore("customers", () => {
 		if (exchangeCreditCustomer.value && exchangeCreditCustomer.value !== selectedCustomer.value) {
 			exchangeCreditCustomer.value = null;
 		}
+		keepCreditVouchersFor(selectedCustomer.value);
+	}
+
+	// Credit note vouchers scanned in Payments for the current sale, by
+	// credit note name. Kept here, not in Payments, because Payments is
+	// rebuilt each time it opens -- and switching the sale to a voucher's
+	// customer sends the cashier back to the cart first. Only the selected
+	// customer's vouchers are kept.
+	const creditVouchers = ref<Record<string, any>>({});
+
+	function addCreditVoucher(voucher: any) {
+		if (!voucher?.credit_origin) return;
+		creditVouchers.value = { ...creditVouchers.value, [voucher.credit_origin]: voucher };
+	}
+
+	function keepCreditVouchersFor(customer: string | null) {
+		const kept = Object.entries(creditVouchers.value).filter(
+			([, voucher]) => Boolean(customer) && voucher?.customer === customer,
+		);
+		if (kept.length !== Object.keys(creditVouchers.value).length) {
+			creditVouchers.value = Object.fromEntries(kept);
+		}
 	}
 
 	// Set right after a store-credit return is submitted: the next sale for
@@ -1095,6 +1117,9 @@ export const useCustomersStore = defineStore("customers", () => {
 		exchangeCreditCustomer,
 		armExchangeCredit,
 		takeExchangeCredit,
+		creditVouchers,
+		addCreditVoucher,
+		keepCreditVouchersFor,
 		setCustomerInfo,
 		isCustomerInfoFresh,
 		searchCustomers,

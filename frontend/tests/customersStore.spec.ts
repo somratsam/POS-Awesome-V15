@@ -295,3 +295,38 @@ describe("customersStore exchange credit after a return", () => {
 		expect(store.takeExchangeCredit("CUST-A")).toBe(true);
 	});
 });
+
+describe("customersStore credit note vouchers", () => {
+	beforeEach(() => {
+		setActivePinia(createPinia());
+	});
+
+	const voucher = (origin: string, customer: string) => ({
+		credit_origin: origin,
+		customer,
+		code: `C26${origin}ABCD`,
+		voucher: origin,
+		amount: 10,
+	});
+
+	it("keeps the vouchers of the customer the sale is switched to", () => {
+		const store = useCustomersStore();
+		store.setSelectedCustomer("CUST-A");
+		store.addCreditVoucher(voucher("CN-1", "CUST-B"));
+		// the sale is switched to the voucher's customer
+		store.setSelectedCustomer("CUST-B");
+		expect(Object.keys(store.creditVouchers)).toEqual(["CN-1"]);
+	});
+
+	it("drops them when the sale moves to another customer or is cleared", () => {
+		const store = useCustomersStore();
+		store.setSelectedCustomer("CUST-B");
+		store.addCreditVoucher(voucher("CN-1", "CUST-B"));
+		store.setSelectedCustomer("CUST-C");
+		expect(store.creditVouchers).toEqual({});
+		store.setSelectedCustomer("CUST-B");
+		store.addCreditVoucher(voucher("CN-2", "CUST-B"));
+		store.setSelectedCustomer(null);
+		expect(store.creditVouchers).toEqual({});
+	});
+});

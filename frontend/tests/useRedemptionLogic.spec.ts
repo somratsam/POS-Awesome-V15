@@ -105,6 +105,8 @@ describe("useRedemptionLogic", () => {
 			customer_credit_blocked,
 			get_available_credit,
 		} = useRedemptionLogic({
+			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
+			getAuthorizationContext: () => ({ supervisor: true }),
 			invoiceDoc,
 			posProfile: ref({ company: "Test Co", currency: "OMR" }),
 			customerInfo: ref({}),
@@ -153,6 +155,8 @@ describe("useRedemptionLogic", () => {
 			customer_credit_blocked,
 			get_available_credit,
 		} = useRedemptionLogic({
+			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
+			getAuthorizationContext: () => ({ supervisor: true }),
 			invoiceDoc,
 			posProfile: ref({ company: "Test Co", currency: "OMR" }),
 			customerInfo: ref({}),
@@ -213,6 +217,8 @@ describe("useRedemptionLogic", () => {
 			customer_credit_dict,
 			get_available_credit,
 		} = useRedemptionLogic({
+			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
+			getAuthorizationContext: () => ({ supervisor: true }),
 			invoiceDoc,
 			posProfile: ref({ company: "Test Co", currency: "OMR" }),
 			customerInfo: ref({}),
@@ -263,6 +269,8 @@ describe("useRedemptionLogic expired store credit", () => {
 		const toastStore = { show: vi.fn() };
 
 		const { customer_credit_dict, redeemed_customer_credit, get_available_credit } = useRedemptionLogic({
+			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
+			getAuthorizationContext: () => ({ supervisor: true }),
 			invoiceDoc: ref<any>({ customer: "CUST-0001", rounded_total: 100, grand_total: 100, conversion_rate: 1 }),
 			posProfile: ref({ company: "Test Co", currency: "OMR" }),
 			customerInfo: ref({}),
@@ -285,8 +293,9 @@ describe("useRedemptionLogic expired store credit", () => {
 			.map(([payload]: any[]) => payload)
 			.find((payload: any) => payload.key === "customer-credit-expired");
 		expect(expiredToast?.title).toBe(
-			"Store credit of 7.5 OMR has expired (expired on user:2026-10-01) and can't be used. Store credit is valid for 3 months.",
+			"Store credit of 7.500 OMR has expired (expired on user:2026-10-01) and can't be used. Store credit is valid for 3 months.",
 		);
+		// Credit was applied: the expired part is an orange note, not an error.
 		expect(expiredToast?.color).toBe("warning");
 	});
 
@@ -297,6 +306,8 @@ describe("useRedemptionLogic expired store credit", () => {
 			})),
 		};
 		const { customer_credit_dict, get_available_credit } = useRedemptionLogic({
+			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
+			getAuthorizationContext: () => ({ supervisor: true }),
 			invoiceDoc: ref<any>({ customer: "CUST-0001", rounded_total: 50, grand_total: 50, conversion_rate: 1 }),
 			posProfile: ref({ company: "Test Co", currency: "OMR" }),
 			customerInfo: ref({}),

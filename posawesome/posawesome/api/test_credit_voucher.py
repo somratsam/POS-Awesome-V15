@@ -258,3 +258,255 @@ class TestReceiptSwitch(unittest.TestCase):
         self.assertIn("Credit note voucher", frappe.render_template(self.SWITCH, {**ctx, "doc": _credit_return()}))
         refund = _credit_return(payments=[{"amount": -139.3}])
         self.assertEqual(frappe.render_template(self.SWITCH, {**ctx, "doc": refund}), "RECEIPT")
+
+
+def _sale(**overrides):
+    data = {
+        "doctype": "Sales Invoice",
+        "customer": "CUST-1",
+        "company": "Swan",
+        "pos_profile": "Test Pos",
+        "posa_pos_opening_shift": "SHIFT-NOW",
+        "is_return": 0,
+    }
+    data.update(overrides)
+    return frappe.get_doc(data)
+
+
+class TestAuthorizeCustomerCredit(unittest.TestCase):
+    """Each credit note spent needs a same-shift return, its voucher, or a
+    POS supervisor; shared customers can't spend credit."""
+
+    def _run(self, doc, rows, generic=False, supervisor=None, shifts=None):
+        shifts = shifts or {}
+
+        def get_value(doctype, name, field=None, *args, **kwargs):
+            if doctype == "Customer" and field == "posa_is_generic_customer":
+                return 1 if generic else 0
+            if doctype == "User" and field == "full_name":
+                return "Sara Supervisor"
+            return None
+
+        def get_all(doctype, filters=None, fields=None, **kwargs):
+            names = filters["name"][1]
+            return [frappe._dict(name=n, posa_pos_opening_shift=shifts.get(n)) for n in names]
+
+        with patch("frappe.db.get_value", side_effect=get_value), patch("frappe.get_all", side_effect=get_all), patch.object(
+            credit_voucher, "_credit_supervisor", return_value=supervisor
+        ):
+            credit_voucher.authorize_customer_credit(doc, rows)
+        return doc.get("posa_credit_authorized_by")
+
+    def test_same_shift_return_needs_nothing_more(self):
+        lines = self._run(_sale(), [{"type": "Invoice", "credit_origin": "CN-1"}], shifts={"CN-1": "SHIFT-NOW"})
+        self.assertEqual(lines, "CN-1: same-shift exchange")
+
+    def test_return_from_another_shift_is_not_an_exchange(self):
+        with self.assertRaises(frappe.ValidationError) as ctx:
+            self._run(_sale(), [{"type": "Invoice", "credit_origin": "CN-1"}], shifts={"CN-1": "SHIFT-OLD"})
+        self.assertIn("needs the customer's credit note voucher", str(ctx.exception))
+        self.assertIn("CN-1", str(ctx.exception))
+
+    def test_no_shift_on_either_side_is_not_an_exchange(self):
+        with self.assertRaises(frappe.ValidationError):
+            self._run(_sale(posa_pos_opening_shift=None), [{"type": "Invoice", "credit_origin": "CN-1"}])
+
+    def test_the_vouchers_own_code_authorizes_it(self):
+        name = "ACC-SINV-2026-00269"
+        code = credit_voucher.credit_voucher_label(credit_voucher.credit_voucher_code(name))
+        lines = self._run(_sale(), [{"type": "Invoice", "credit_origin": name, "voucher_code": code.lower()}])
+        self.assertEqual(lines, f"{name}: voucher {code}")
+
+    def test_another_vouchers_code_does_not(self):
+        other = credit_voucher.credit_voucher_code("ACC-SINV-2026-00270")
+        with self.assertRaises(frappe.ValidationError):
+            self._run(_sale(), [{"type": "Invoice", "credit_origin": "ACC-SINV-2026-00269", "voucher_code": other}])
+
+    def test_supervisor_covers_a_lost_voucher_and_is_named(self):
+        lines = self._run(
+            _sale(), [{"type": "Invoice", "credit_origin": "CN-1"}], supervisor="sara@x.test"
+        )
+        self.assertEqual(lines, "CN-1: supervisor Sara Supervisor (sara@x.test)")
+
+    def test_advances_need_a_supervisor(self):
+        with self.assertRaises(frappe.ValidationError):
+            self._run(_sale(), [{"type": "Advance", "credit_origin": "ACC-PAY-1"}])
+        lines = self._run(_sale(), [{"type": "Advance", "credit_origin": "ACC-PAY-1"}], supervisor="sara@x.test")
+        self.assertIn("ACC-PAY-1: supervisor", lines)
+
+    def test_one_line_per_credit_note(self):
+        name = "ACC-SINV-2026-00269"
+        lines = self._run(
+            _sale(),
+            [
+                {"type": "Invoice", "credit_origin": "CN-1"},
+                {"type": "Invoice", "credit_origin": name, "voucher_code": credit_voucher.credit_voucher_code(name)},
+                {"type": "Invoice", "credit_origin": "CN-3"},
+            ],
+            shifts={"CN-1": "SHIFT-NOW"},
+            supervisor="sara@x.test",
+        )
+        self.assertEqual(
+            lines.split("\n"),
+            [
+                "CN-1: same-shift exchange",
+                f"{name}: voucher {credit_voucher.credit_voucher_label(credit_voucher.credit_voucher_code(name))}",
+                "CN-3: supervisor Sara Supervisor (sara@x.test)",
+            ],
+        )
+
+    def test_shared_customer_cannot_spend_credit_even_with_voucher_or_supervisor(self):
+        name = "ACC-SINV-2026-00269"
+        with self.assertRaisesRegex(frappe.ValidationError, "shared customer account"):
+            self._run(
+                _sale(customer="Anonymous"),
+                [{"type": "Invoice", "credit_origin": name, "voucher_code": credit_voucher.credit_voucher_code(name)}],
+                generic=True,
+                supervisor="sara@x.test",
+            )
+
+
+class TestLookupCreditVoucher(unittest.TestCase):
+    NAME = "ACC-SINV-2026-00269"
+
+    def setUp(self):
+        frappe.cache.delete_value(credit_voucher._failure_key())
+        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key())
+        self.code = credit_voucher.credit_voucher_code(self.NAME)
+
+    def _lookup(self, code, company="Swan", customer="CUST-1", credit=None, expired=None, generic=False, candidates=None):
+        credit = [{"type": "Invoice", "credit_origin": self.NAME, "total_credit": 139.3, "expires_on": getdate("2027-02-05")}] if credit is None else credit
+
+        real_get_value = frappe.db.get_value
+        real_get_all = frappe.get_all
+
+        def get_all(doctype, *args, **kwargs):
+            if doctype == "Sales Invoice":
+                return [self.NAME] if candidates is None else candidates
+            return real_get_all(doctype, *args, **kwargs)
+
+        def get_value(doctype, *args, **kwargs):
+            name = args[0] if args else kwargs.get("filters")
+            fields = args[1] if len(args) > 1 else kwargs.get("fieldname")
+            if doctype == "Sales Invoice":
+                return frappe._dict(name=name, customer=customer, customer_name="Sanju", company=company)
+            if doctype == "Customer" and fields == "posa_is_generic_customer":
+                return 1 if generic else 0
+            if doctype == "Customer" and fields == "mobile_no":
+                return "99887766"
+            return real_get_value(doctype, *args, **kwargs)
+
+        with patch(
+            "posawesome.posawesome.api.pos_access.get_authorized_pos_profile",
+            return_value=frappe._dict(name="Test Pos", company="Swan"),
+        ), patch("frappe.get_all", side_effect=get_all), patch(
+            "frappe.db.get_value", side_effect=get_value
+        ), patch(
+            "posawesome.posawesome.api.payments.get_available_credit",
+            return_value={"credit": credit, "expired": expired or [], "generic_customer": generic},
+        ), patch.object(credit_voucher, "_credit_supervisor", return_value=None):
+            return credit_voucher.lookup_credit_voucher(code, "Test Pos")
+
+    def test_valid_voucher_returns_its_credit_and_customer(self):
+        result = self._lookup(credit_voucher.credit_voucher_label(self.code))
+        self.assertEqual(result["credit_origin"], self.NAME)
+        self.assertEqual(result["customer"], "CUST-1")
+        self.assertEqual(result["amount"], 139.3)
+        self.assertEqual(result["code"], self.code)
+        self.assertEqual(result["mobile_no"], "99887766")
+
+    def test_wrong_check_is_refused(self):
+        wrong = self.code[:-1] + ("2" if self.code[-1] != "2" else "3")
+        with self.assertRaisesRegex(frappe.ValidationError, "not a valid credit note voucher"):
+            self._lookup(wrong)
+
+    def test_not_a_voucher_shape_is_refused(self):
+        for text in ("", "hello", "ACC-SINV-2026-00269", "2026-00269"):
+            with self.assertRaisesRegex(frappe.ValidationError, "not a valid"):
+                self._lookup(text)
+
+    def test_guessing_is_stopped_after_ten_wrong_numbers(self):
+        wrong = self.code[:-1] + ("2" if self.code[-1] != "2" else "3")
+        for _ in range(credit_voucher.LOOKUP_FAILURE_LIMIT):
+            with self.assertRaises(frappe.ValidationError):
+                self._lookup(wrong)
+        with self.assertRaisesRegex(frappe.PermissionError, "Too many wrong voucher numbers"):
+            self._lookup(self.code)
+
+    def test_another_companys_voucher_is_refused(self):
+        with self.assertRaisesRegex(frappe.ValidationError, "another company"):
+            self._lookup(self.code, company="Other Co")
+
+    def test_used_voucher_is_refused(self):
+        with self.assertRaisesRegex(frappe.ValidationError, "already been used"):
+            self._lookup(self.code, credit=[])
+
+    def test_expired_voucher_is_refused_with_its_date(self):
+        expired = [{"type": "Invoice", "credit_origin": self.NAME, "total_credit": 10, "expires_on": getdate("2026-01-05")}]
+        with self.assertRaisesRegex(frappe.ValidationError, "expired on"):
+            self._lookup(self.code, credit=[], expired=expired)
+
+    def test_shared_customer_voucher_is_refused(self):
+        with self.assertRaisesRegex(frappe.ValidationError, "shared customer account"):
+            self._lookup(self.code, generic=True)
+
+    def test_parse(self):
+        self.assertEqual(credit_voucher.parse_voucher_code("c26-00269-env2"), ("26", "00269", "C2600269ENV2"))
+        self.assertIsNone(credit_voucher.parse_voucher_code("C26-00269-EN01"))  # 0 and 1 are never in a check
+        self.assertIsNone(credit_voucher.parse_voucher_code("X2600269ENV2"))
+
+
+class TestLostVoucherBySupervisor(unittest.TestCase):
+    """A POS supervisor on the till may name a return by its number instead
+    of the voucher code; nobody else can."""
+
+    NAME = "ACC-SINV-2026-00257"
+
+    def setUp(self):
+        frappe.cache.delete_value(credit_voucher._failure_key())
+        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key())
+
+    def _lookup(self, text, supervisor):
+        real_get_value = frappe.db.get_value
+        real_get_all = frappe.get_all
+
+        def get_value(doctype, *args, **kwargs):
+            fields = args[1] if len(args) > 1 else kwargs.get("fieldname")
+            if doctype == "Sales Invoice":
+                return frappe._dict(name=self.NAME, customer="CUST-1", customer_name="Sanju", company="Swan")
+            if doctype == "Customer":
+                return 0 if fields == "posa_is_generic_customer" else ""
+            return real_get_value(doctype, *args, **kwargs)
+
+        def get_all(doctype, *args, **kwargs):
+            if doctype == "Sales Invoice":
+                name_filter = kwargs.get("filters", {}).get("name", ["", ""])[1]
+                return [self.NAME] if self.NAME.endswith(name_filter.lstrip("%")) else []
+            return real_get_all(doctype, *args, **kwargs)
+
+        credit = [{"type": "Invoice", "credit_origin": self.NAME, "total_credit": 139.3, "expires_on": getdate("2027-02-05")}]
+        with patch(
+            "posawesome.posawesome.api.pos_access.get_authorized_pos_profile",
+            return_value=frappe._dict(name="Test Pos", company="Swan"),
+        ), patch("frappe.get_all", side_effect=get_all), patch("frappe.db.get_value", side_effect=get_value), patch(
+            "frappe.db.exists", return_value=False
+        ), patch.object(credit_voucher, "_credit_supervisor", return_value=supervisor), patch(
+            "posawesome.posawesome.api.payments.get_available_credit",
+            return_value={"credit": credit, "expired": [], "generic_customer": False},
+        ):
+            return credit_voucher.lookup_credit_voucher(text, "Test Pos")
+
+    def test_supervisor_can_use_the_return_number_and_no_code_is_revealed(self):
+        result = self._lookup("2026-00257", supervisor="sara@x.test")
+        self.assertEqual(result["credit_origin"], self.NAME)
+        self.assertEqual(result["approved_by"], "sara@x.test")
+        self.assertEqual(result["code"], "")
+        self.assertEqual(result["voucher"], self.NAME)
+
+    def test_a_cashier_cannot(self):
+        with self.assertRaisesRegex(frappe.ValidationError, "not a valid credit note voucher"):
+            self._lookup("2026-00257", supervisor=None)
+
+    def test_text_that_is_not_a_number_finds_nothing(self):
+        self.assertIsNone(credit_voucher.find_return_by_number("hello"))
+        self.assertIsNone(credit_voucher.find_return_by_number(""))
