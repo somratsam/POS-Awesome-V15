@@ -1122,8 +1122,23 @@ def _set_if_field_exists(doc, fieldname, value):
         doc.set(fieldname, value)
 
 
+def _authorize_customer_credit(invoice_doc, requested_rows):
+    """Same-shift exchange, the customer's voucher, or a POS supervisor --
+    see credit_voucher.authorize_customer_credit. Imported here so tests can
+    replace this one seam."""
+    from posawesome.posawesome.api.credit_voucher import authorize_customer_credit
+
+    authorize_customer_credit(invoice_doc, requested_rows)
+
+
 def _validate_customer_credit_redemption(invoice_doc, data, available_credit_rows=None):
-    """Enforce the "redeem all available credit, or none" policy.
+    """Store credit spent through "Use Customer Balance": each credit row is
+    used in full (no partial redemption), they must all fit in the sale, and
+    each must be authorized (_authorize_customer_credit).
+
+    The cashier chooses which credit rows: a customer with two credit notes
+    who brings one voucher uses that one only. (Before vouchers, all of a
+    customer's credit had to be used together.)
 
     Only runs when the client explicitly flags this as a genuine "Use
     Customer Balance" redemption via customer_credit_redemption_requested.
@@ -1133,10 +1148,8 @@ def _validate_customer_credit_redemption(invoice_doc, data, available_credit_row
     isn't "the customer's store credit" in this sense, and must not be
     affected -- they never set this flag.
 
-    Recomputes available credit server-side via get_available_credit(), the
-    same function the frontend calls to display it, instead of trusting the
-    client-supplied per-row total_credit figures (those drive the frontend's
-    own pre-submit UX only).
+    Balances are recomputed server-side via get_available_credit(), not
+    taken from the client-supplied per-row total_credit figures.
 
     available_credit_rows: pass the result of an already-made
     get_available_credit() call (submit_invoice() and
@@ -1147,39 +1160,67 @@ def _validate_customer_credit_redemption(invoice_doc, data, available_credit_row
     """
     if invoice_doc.get("is_return"):
         return
-    if not cint((data or {}).get("customer_credit_redemption_requested")):
+    data = data or {}
+    if not cint(data.get("customer_credit_redemption_requested")):
         return
     if not invoice_doc.customer:
         return
 
+    requested_rows = [
+        row
+        for row in (data.get("customer_credit_dict") or [])
+        if hasattr(row, "get") and flt(row.get("credit_to_redeem")) > 0
+    ]
+    if not requested_rows:
+        return
+
     if available_credit_rows is None:
         available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
+    available = {
+        (row.get("type"), row.get("credit_origin")): flt(row.get("total_credit"))
+        for row in available_credit_rows
+    }
 
-    real_total = sum(flt(row.get("total_credit")) for row in available_credit_rows)
+    precision = invoice_doc.precision("grand_total") or 2
+    total = 0
+    for row in requested_rows:
+        key = (row.get("type"), row.get("credit_origin"))
+        if key not in available:
+            frappe.throw(
+                _(
+                    "Store credit from {0} can't be used: it has expired or doesn't belong to this customer."
+                ).format(row.get("credit_origin"))
+            )
+        if flt(row.get("credit_to_redeem"), precision) != flt(available[key], precision):
+            frappe.throw(
+                _(
+                    "Store credit from {0} ({1}) must be used in full -- partial redemption is not allowed."
+                ).format(
+                    row.get("credit_origin"),
+                    frappe.utils.fmt_money(available[key], currency=invoice_doc.currency),
+                )
+            )
+        total += available[key]
+
+    redeemed = flt(data.get("redeemed_customer_credit"))
+    if flt(redeemed, precision) != flt(total, precision):
+        frappe.throw(
+            _(
+                "The full store credit selected ({0}) must be applied -- partial redemption is not allowed."
+            ).format(frappe.utils.fmt_money(total, currency=invoice_doc.currency))
+        )
 
     invoice_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
     loyalty_covered = flt(invoice_doc.get("loyalty_amount"))
     max_redeemable = max(invoice_total - loyalty_covered, 0)
-
-    precision = invoice_doc.precision("grand_total") or 2
-    redeemed = flt((data or {}).get("redeemed_customer_credit"))
-
-    if flt(real_total, precision) > flt(max_redeemable, precision):
-        if redeemed > 0:
-            frappe.throw(
-                _(
-                    "Customer must select items worth at least their available credit ({0}) to redeem it."
-                ).format(frappe.utils.fmt_money(real_total, currency=invoice_doc.currency))
-            )
-        return
-
-    expected = min(real_total, max_redeemable)
-    if flt(redeemed, precision) != flt(expected, precision):
+    if flt(total, precision) > flt(max_redeemable, precision):
         frappe.throw(
             _(
-                "The full available customer credit ({0}) must be applied -- partial redemption is not allowed."
-            ).format(frappe.utils.fmt_money(expected, currency=invoice_doc.currency))
+                "Customer must select items worth at least their available credit ({0}) to redeem it."
+            ).format(frappe.utils.fmt_money(total, currency=invoice_doc.currency))
         )
+
+    _authorize_customer_credit(invoice_doc, requested_rows)
 
 
 def _validate_customer_credit_sources(invoice_doc, data, available_credit_rows=None):

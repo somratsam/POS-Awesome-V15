@@ -75,6 +75,55 @@
 							{{ formatCurrency(availableCustomerCredit) }}
 							{{ $frappe._("to redeem it. It will be applied automatically once the cart reaches that amount.") }}
 						</v-alert>
+						<!-- Credit from an earlier visit needs the customer's
+						     voucher (or a POS supervisor on the till). -->
+						<div ref="voucherField" class="payment-options-panel__voucher mx-1" data-testid="credit-voucher-field">
+							<v-text-field
+								v-model="voucherInput"
+								density="compact"
+								variant="outlined"
+								hide-details
+								autocomplete="off"
+								:label="$frappe._('Credit note voucher')"
+								placeholder="C26-00000-XXXX"
+								prepend-inner-icon="mdi-ticket-confirmation-outline"
+								data-testid="credit-voucher-input"
+								:error="Boolean(voucherError)"
+								@keydown.enter.stop.prevent="submitVoucher"
+							>
+								<template #append-inner>
+									<v-btn
+										size="small"
+										variant="tonal"
+										color="primary"
+										:disabled="!voucherInput"
+										data-testid="credit-voucher-apply"
+										@click="submitVoucher"
+									>
+										{{ $frappe._("Use") }}
+									</v-btn>
+								</template>
+							</v-text-field>
+							<div
+								v-if="voucherError"
+								class="payment-options-panel__voucher-error mt-1"
+								role="alert"
+								data-testid="credit-voucher-error"
+							>
+								<v-icon size="16" color="error">mdi-alert-circle</v-icon>
+								{{ voucherError }}
+							</div>
+							<div
+								v-for="voucher in creditVouchers"
+								:key="voucher.credit_origin"
+								class="payment-options-panel__helper mt-1"
+								data-testid="credit-voucher-applied"
+							>
+								<v-icon size="16" color="success">mdi-check-circle</v-icon>
+								{{ $frappe._("Voucher") }} {{ voucher.voucher }}:
+								{{ formatCurrency(voucher.amount) }}
+							</div>
+						</div>
 					</v-col>
 				</v-row>
 			</div>
@@ -169,7 +218,7 @@
 </template>
 
 <script setup>
-import { computed, inject } from "vue";
+import { computed, inject, nextTick, ref, watch } from "vue";
 
 const props = defineProps({
 	invoiceDoc: {
@@ -240,6 +289,14 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	creditVouchers: {
+		type: Array,
+		default: () => [],
+	},
+	voucherError: {
+		type: String,
+		default: "",
+	},
 	customerCreditBlocked: {
 		type: Boolean,
 		default: false,
@@ -261,6 +318,8 @@ const emit = defineEmits([
 	"update:redeemCustomerCredit",
 	"apply-due-preset",
 	"get-available-credit",
+	"redeem-voucher",
+	"clear-voucher-error",
 ]);
 
 const $frappe = inject("frappe", window.frappe);
@@ -269,6 +328,31 @@ const $frappe = inject("frappe", window.frappe);
 // "Store as Credit?" is forced and shown disabled rather than hidden, so
 // staff see it's a deliberate policy lock, not a missing feature.
 const creditOnlyPolicy = computed(() => Boolean(props.posProfile?.posa_returns_credit_only));
+
+const voucherInput = ref("");
+// Typing again hides the last voucher problem.
+watch(voucherInput, (value) => {
+	if (value && props.voucherError) emit("clear-voucher-error");
+});
+// The box sits at the bottom of a scrolling panel: bring a new problem into view.
+const voucherField = ref(null);
+watch(
+	() => props.voucherError,
+	(message) => {
+		if (!message) return;
+		nextTick(() => {
+			voucherField.value
+				?.querySelector?.('[data-testid="credit-voucher-error"]')
+				?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+		});
+	},
+);
+const submitVoucher = () => {
+	const code = String(voucherInput.value || "").trim();
+	if (!code) return;
+	emit("redeem-voucher", code);
+	voucherInput.value = "";
+};
 
 const handleRedeemCustomerCreditUpdate = (val) => {
 	emit("update:redeemCustomerCredit", val);
@@ -366,5 +450,12 @@ const writeOffEffectiveMax = computed(() => {
 	.payment-options-layout {
 		grid-template-columns: 1fr;
 	}
+}
+
+.payment-options-panel__voucher-error {
+	color: rgb(var(--v-theme-error));
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.4;
 }
 </style>

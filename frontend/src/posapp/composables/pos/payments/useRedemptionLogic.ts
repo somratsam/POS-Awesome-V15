@@ -1,10 +1,12 @@
 import { ref, watch, computed, unref, type Ref } from "vue";
-import {
-	isOffline,
-	getCachedStoredValueSnapshot,
-	saveStoredValueSnapshot,
-} from "../../../../offline/index";
+import { isOffline, saveStoredValueSnapshot } from "../../../../offline/index";
 import { fromCompanyCurrency } from "../../../utils/erpnextCurrency";
+import {
+	selectAuthorizedCredit,
+	type CreditAuthorizationContext,
+	type CreditVoucher,
+} from "../../../utils/creditAuthorization";
+import { voucherErrorToast } from "../../../utils/voucherMessages";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -19,6 +21,14 @@ export interface RedemptionLogicOptions {
 		toastStore?: any;
 	};
 	onClearAmounts?: () => void;
+	// This sale's shift and whether a POS supervisor is on the till; decides
+	// which credit rows can be used without a voucher (creditAuthorization.ts).
+	getAuthorizationContext?: () => Omit<CreditAuthorizationContext, "vouchers">;
+	// Where scanned vouchers are kept; Payments passes the customers store's,
+	// so they survive Payments closing and reopening.
+	creditVouchers?: Ref<Record<string, CreditVoucher>>;
+	// Also shown as a red line under the voucher box ("" clears it).
+	onCreditMessage?: (message: string) => void;
 }
 
 export function useRedemptionLogic(options: RedemptionLogicOptions) {
@@ -45,6 +55,20 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 	// redemption is held at 0 and a banner/toast explains why, without
 	// switching the toggle back off (see PaymentOptions.vue).
 	const customer_credit_blocked = ref(false);
+	// Vouchers scanned/typed for this customer, by credit note name.
+	const credit_vouchers = options.creditVouchers || ref<Record<string, CreditVoucher>>({});
+	const addCreditVoucher = (voucher: CreditVoucher) => {
+		credit_vouchers.value = { ...credit_vouchers.value, [voucher.credit_origin]: voucher };
+	};
+	// keepCustomer: keep that customer's vouchers (the sale was just switched
+	// to them because of a voucher), drop everyone else's.
+	const clearCreditVouchers = (keepCustomer: string | null = null) => {
+		credit_vouchers.value = keepCustomer
+			? Object.fromEntries(
+					Object.entries(credit_vouchers.value).filter(([, v]) => v.customer === keepCustomer),
+				)
+			: {};
+	};
 	// Sum the raw total_credit values first, then round once at the end --
 	// matching creation.py's _validate_customer_credit_redemption() exactly
 	// (real_total = sum(flt(row.total_credit) for row in ...), rounded only
@@ -115,9 +139,8 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 
 	// Credit older than its expiry date (3 months, decided by the server) is
 	// left out of the redeemable rows; tell the cashier why it isn't there.
-	const notifyExpiredCredit = (expiredRows: any[]) => {
-		if (!stores?.toastStore) return;
-		const total = normalizeFloat(sumRawCredit(expiredRows));
+	const expiredCreditMessage = (expiredRows: any[]) => {
+		const total = normalizeFloat(sumRawCredit(expiredRows)).toFixed(unref(currencyPrecision) ?? 2);
 		const latest = expiredRows
 			.map((row: any) => String(row?.expires_on || ""))
 			.filter(Boolean)
@@ -128,14 +151,29 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 			latest && typeof frappe !== "undefined" && frappe?.datetime?.str_to_user
 				? frappe.datetime.str_to_user(latest)
 				: latest || "";
-		stores.toastStore.show({
-			title: __(
-				"Store credit of {0}{1} has expired (expired on {2}) and can't be used. Store credit is valid for 3 months.",
-				[total, currency ? ` ${currency}` : "", expiredOn],
-			),
-			color: "warning",
-			key: "customer-credit-expired",
-		});
+		return __(
+			"Store credit of {0}{1} has expired (expired on {2}) and can't be used. Store credit is valid for 3 months.",
+			[total, currency ? ` ${currency}` : "", expiredOn],
+		);
+	};
+
+	// Red, long enough to read, above the Payments screen (voucherMessages.ts).
+	const showCreditProblem = (message: string) => {
+		options.onCreditMessage?.(message);
+		stores?.toastStore?.show(voucherErrorToast(message));
+	};
+
+	// Credit that can't be used yet: no voucher, no same-shift return, no
+	// supervisor on the till.
+	const needsVoucherMessage = (rows: any[]) => {
+		const currency = unref(posProfile)?.currency || "";
+		return __(
+			"{0}{1} of this customer's credit needs their credit note voucher: scan or type it below Use Customer Balance. If the voucher is lost, a POS supervisor must approve: switch the till to a supervisor with their PIN, then type the return number in the voucher box.",
+			[
+				normalizeFloat(sumRawCredit(rows)).toFixed(unref(currencyPrecision) ?? 2),
+				currency ? ` ${currency}` : "",
+			],
+		);
 	};
 
 	// Get available customer credit
@@ -150,16 +188,12 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 
 			if (!customer || !company) return;
 
+			// Credit needs the server: a voucher is checked there, and so is a
+			// supervisor's approval. (An offline sale with credit would be
+			// refused when it syncs.)
 			if (isOffline()) {
-				const cachedSnapshot = getCachedStoredValueSnapshot(customer, company);
-				const data = Array.isArray(cachedSnapshot?.sources)
-					? JSON.parse(JSON.stringify(cachedSnapshot.sources))
-					: [];
-				if (data.length) {
-					applyCreditRows(data);
-				} else {
-					resetCustomerCreditState();
-				}
+				resetCustomerCreditState();
+				showCreditProblem(__("Store credit can only be used while the POS is online."));
 				return;
 			}
 
@@ -176,14 +210,50 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 					const message = r.message;
 					const data = Array.isArray(message) ? message : message?.credit || [];
 					const expired = Array.isArray(message?.expired) ? message.expired : [];
-					if (expired.length) {
-						notifyExpiredCredit(expired);
+					if (message?.generic_customer) {
+						resetCustomerCreditState();
+						showCreditProblem(
+							__(
+								"{0} is a shared customer account: store credit on it can't be used. Select the customer the credit belongs to, or scan their credit note voucher.",
+								[customer],
+							),
+						);
+						return;
 					}
+					// One message, so neither replaces the other on screen; nothing
+					// when credit was applied (the applied-voucher message stays up).
+					const problems: string[] = [];
 					if (data && data.length) {
 						saveStoredValueSnapshot(customer, company, data);
-						applyCreditRows(data);
+					}
+					const { authorized, needVoucher } = selectAuthorizedCredit(data || [], {
+						...(options.getAuthorizationContext?.() || {}),
+						vouchers: credit_vouchers.value,
+					});
+					// Only when nothing can be used: after a voucher or an exchange is
+					// applied, the customer's other credit simply stays on their account.
+					if (!authorized.length && expired.length) {
+						problems.push(expiredCreditMessage(expired));
+					}
+					if (needVoucher.length && !authorized.length) {
+						problems.push(needsVoucherMessage(needVoucher));
+					}
+					if (authorized.length) {
+						options.onCreditMessage?.("");
+						applyCreditRows(authorized);
+						if (expired.length) {
+							// Not a problem with what was applied: an orange note after it.
+							stores?.toastStore?.show({
+								title: expiredCreditMessage(expired),
+								color: "warning",
+								key: "customer-credit-expired",
+							});
+						}
 					} else {
 						resetCustomerCreditState();
+					}
+					if (problems.length) {
+						showCreditProblem(problems.join(" "));
 					}
 				});
 		} else {
@@ -365,6 +435,9 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 		customer_credit_dict,
 		customer_credit_redemption_requested,
 		customer_credit_blocked,
+		credit_vouchers,
+		addCreditVoucher,
+		clearCreditVouchers,
 		available_customer_credit,
 		available_points_amount,
 		get_available_credit,

@@ -456,7 +456,7 @@ def get_available_credit(customer, company, include_expired=0):
             "customer": customer,
             "company": company,
         },
-        ["name", "outstanding_amount", "is_return", "posting_date"],
+        ["name", "outstanding_amount", "is_return", "posting_date", "posa_pos_opening_shift"],
     )
 
     allocations = {}
@@ -498,6 +498,8 @@ def get_available_credit(customer, company, include_expired=0):
             "credit_to_redeem": 0,
             "source_type": "Sales Return" if row.is_return else "Sales Invoice",
             "expires_on": expires_on,
+            # Lets the POS use a same-shift exchange's credit without a voucher.
+            "pos_opening_shift": getattr(row, "posa_pos_opening_shift", None),
         }
 
         if today > expires_on:
@@ -558,7 +560,8 @@ def get_available_credit(customer, company, include_expired=0):
         total_credit.append(row)
 
     if cint(include_expired):
-        return {"credit": total_credit, "expired": expired_credit}
+        generic = bool(cint(frappe.db.get_value("Customer", customer, "posa_is_generic_customer")))
+        return {"credit": total_credit, "expired": expired_credit, "generic_customer": generic}
     return total_credit
 
 

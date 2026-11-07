@@ -407,6 +407,108 @@ class TestCustomerCreditSources(unittest.TestCase):
         )
 
 
+class TestCustomerCreditRedemption(unittest.TestCase):
+    """_validate_customer_credit_redemption: each credit row used in full,
+    the cashier chooses which rows, all must fit in the sale, and the chosen
+    rows go to authorization (voucher / same-shift exchange / supervisor)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.frappe, cls.enqueue_calls = _install_framework_stubs()
+        _install_dependency_stubs()
+        _install_package_stubs()
+        cls.creation = _load_module()
+
+    def setUp(self):
+        # The framework stub has no frappe.utils.fmt_money (used in messages).
+        utils = sys.modules["frappe.utils"]
+        if not hasattr(utils, "fmt_money"):
+            utils.fmt_money = lambda value, currency=None: f"{value} {currency or ''}".strip()
+        self.creation.frappe.utils = utils
+        self.available = [
+            {"type": "Invoice", "credit_origin": "CN-A", "total_credit": 40},
+            {"type": "Invoice", "credit_origin": "CN-B", "total_credit": 25},
+        ]
+        self.authorized = []
+        self._original_authorize = self.creation._authorize_customer_credit
+        self.creation._authorize_customer_credit = lambda doc, rows: self.authorized.append(
+            [row["credit_origin"] for row in rows]
+        )
+
+    def tearDown(self):
+        self.creation._authorize_customer_credit = self._original_authorize
+
+    def _doc(self, total=100):
+        doc = FakeDoc(
+            doctype="Sales Invoice", customer="CUST-0001", company="Test Company", is_return=0,
+            grand_total=total, rounded_total=total, currency="OMR",
+        )
+        doc.precision = lambda _fieldname: 3
+        return doc
+
+    def _data(self, rows, requested=1):
+        return {
+            "customer_credit_redemption_requested": requested,
+            "redeemed_customer_credit": sum(amount for _origin, amount in rows),
+            "customer_credit_dict": [
+                {"type": "Invoice", "credit_origin": origin, "total_credit": amount, "credit_to_redeem": amount}
+                for origin, amount in rows
+            ],
+        }
+
+    def _check(self, data, total=100):
+        self.creation._validate_customer_credit_redemption(
+            self._doc(total), data, available_credit_rows=self.available
+        )
+
+    def test_one_credit_note_of_two_can_be_used_on_its_own(self):
+        self._check(self._data([("CN-B", 25)]))
+        self.assertEqual(self.authorized, [["CN-B"]])
+
+    def test_both_credit_notes_together(self):
+        self._check(self._data([("CN-A", 40), ("CN-B", 25)]))
+        self.assertEqual(self.authorized, [["CN-A", "CN-B"]])
+
+    def test_part_of_a_credit_note_is_refused(self):
+        with self.assertRaisesRegex(Exception, "must be used in full"):
+            self._check(self._data([("CN-A", 30)]))
+        self.assertEqual(self.authorized, [])
+
+    def test_credit_bigger_than_the_sale_is_refused(self):
+        with self.assertRaisesRegex(Exception, "worth at least their available credit"):
+            self._check(self._data([("CN-A", 40), ("CN-B", 25)]), total=50)
+        self.assertEqual(self.authorized, [])
+
+    def test_redeemed_total_must_match_the_rows(self):
+        data = self._data([("CN-A", 40)])
+        data["redeemed_customer_credit"] = 39
+        with self.assertRaisesRegex(Exception, "must be applied"):
+            self._check(data)
+
+    def test_unknown_credit_note_is_refused(self):
+        with self.assertRaisesRegex(Exception, "expired or doesn't belong"):
+            self._check(self._data([("CN-OTHER", 10)]))
+
+    def test_nothing_applied_needs_no_authorization(self):
+        data = self._data([("CN-A", 40)])
+        data["customer_credit_dict"][0]["credit_to_redeem"] = 0
+        data["redeemed_customer_credit"] = 0
+        self._check(data, total=10)
+        self.assertEqual(self.authorized, [])
+
+    def test_m_pesa_style_payloads_are_not_this_rule(self):
+        self._check(self._data([("ACC-PAY-1", 5)], requested=0))
+        self.assertEqual(self.authorized, [])
+
+    def test_returns_are_skipped(self):
+        doc = self._doc()
+        doc.is_return = 1
+        self.creation._validate_customer_credit_redemption(
+            doc, self._data([("CN-OTHER", 10)]), available_credit_rows=self.available
+        )
+        self.assertEqual(self.authorized, [])
+
+
 class TestUpdateInvoiceReturnPayments(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -2024,6 +2126,9 @@ class TestManualPostingDatePreservation(unittest.TestCase):
         self.creation._save_draft_with_latest_timestamp = lambda doc: doc
         self.creation._apply_invoice_gift_card_settlement = lambda *args, **kwargs: None
         self.creation._process_post_submit_payments = lambda *args, **kwargs: None
+        # Voucher / exchange / supervisor authorization is tested in
+        # TestCustomerCreditRedemption and test_credit_voucher.
+        self.creation._authorize_customer_credit = lambda *args, **kwargs: None
 
         available_credit_calls = []
 
