@@ -1050,12 +1050,12 @@ const promptDiscountReason = async (
 	if (options.returnToCell) stayOnGridEntryFromItem(line, options.returnToCell);
 };
 
-const handleRowClick = (event: any, item: any) => {
+// A click on a row only selects it (for the keyboard actions that work on
+// the selected row: item details, quick edit). The item details open from
+// the chart icon at the end of the row -- not from a click anywhere on it,
+// which opened them by accident while staff aimed at a cell.
+const handleRowClick = (_event: any, item: any) => {
 	rememberSelectedRow(getItemIndex(item));
-	if (isEditableElement(event.target as HTMLElement)) {
-		return;
-	}
-	openItemHistory(item);
 };
 
 const focusItemField = (index: number, field: CartShortcutField, options?: CartFieldFocusOptions) => {
