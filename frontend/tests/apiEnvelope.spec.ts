@@ -60,6 +60,38 @@ describe("api envelope handling", () => {
 		});
 	});
 
+	it("reports a refused request (Frappe error body, no HTTP status) as the server's reason, not a lost connection", async () => {
+		(frappe.call as any).mockImplementation((options: any) => {
+			options.error({
+				exc_type: "PermissionError",
+				_server_messages: JSON.stringify([
+					JSON.stringify({
+						message: "Store credit from ACC-SINV-2026-00257 needs the customer's credit note voucher.",
+					}),
+				]),
+			});
+		});
+
+		const result = await api.callEnvelope("pos.test.refused");
+
+		expect(result).toMatchObject({
+			ok: false,
+			error: {
+				code: "BUSINESS_RULE",
+				message: "Store credit from ACC-SINV-2026-00257 needs the customer's credit note voucher.",
+				retryable: false,
+			},
+		});
+	});
+
+	it("a real lost connection (xhr with no response body) is still a transport error", async () => {
+		(frappe.call as any).mockImplementation((options: any) => {
+			options.error({ readyState: 0, status: 0, statusText: "error" });
+		});
+		const result = await api.callEnvelope("pos.test.offline");
+		expect(result).toMatchObject({ ok: false, error: { code: "TRANSPORT_ERROR", retryable: true } });
+	});
+
 	it("normalizes business-rule responses into non-retryable envelopes", async () => {
 		(frappe.call as any).mockImplementation(({ callback }: any) => {
 			callback({

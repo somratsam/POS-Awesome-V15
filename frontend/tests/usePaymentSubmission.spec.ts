@@ -1588,7 +1588,9 @@ describe("usePaymentSubmission", () => {
 			expect.objectContaining({
 				title: "Unable to submit invoice",
 				detail: expect.stringContaining("req-validation-1"),
-				color: "error",
+				// strong red, up long enough to read the server's reason
+				color: "red-darken-3",
+				timeout: 8000,
 			}),
 		);
 		expect(consoleError).toHaveBeenCalledWith(

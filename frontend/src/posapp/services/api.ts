@@ -288,6 +288,15 @@ function normalizeBusinessFailure<T>(
 	});
 }
 
+function isFrappeErrorBody(error: any) {
+	return Boolean(
+		error &&
+			typeof error === "object" &&
+			!("readyState" in error) &&
+			(error.exc_type || error.exception || error._server_messages || error.exc),
+	);
+}
+
 function normalizeTransportFailure<T>(
 	error: any,
 	requestId: string,
@@ -422,6 +431,13 @@ const api = {
 						);
 					},
 					error: (error: any) => {
+						// Frappe passes a refused request's response body here
+						// (e.g. a ValidationError, HTTP 417), with no HTTP status:
+						// that is the server's answer, not a lost connection.
+						if (isFrappeErrorBody(error)) {
+							settle(normalizeBusinessFailure<T>(error, requestId));
+							return;
+						}
 						settle(normalizeTransportFailure<T>(error, requestId));
 					},
 				});

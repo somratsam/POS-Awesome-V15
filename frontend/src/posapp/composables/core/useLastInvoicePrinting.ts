@@ -12,8 +12,11 @@ import {
 	shouldUseRawDocumentPrinting,
 } from "../../services/documentPrint";
 import { recordCreditNoteReprint, REPRINT_SETTINGS } from "../../utils/creditNoteReprint";
+import { voucherErrorToast } from "../../utils/voucherMessages";
+import { useToastStore } from "../../stores/toastStore";
 
 declare const frappe: any;
+declare const __: (text: string, args?: any[]) => string;
 
 export function useLastInvoicePrinting() {
 	const uiStore = useUIStore();
@@ -50,7 +53,7 @@ export function useLastInvoicePrinting() {
 			: "Sales Invoice";
 		// "Print last invoice" is a reprint: a credit note voucher prints as a
 		// DUPLICATE and the server records who reprinted it. If the server
-		// refuses (e.g. locked till) nothing prints; it has said why.
+		// refuses (e.g. locked till) nothing prints, and a red toast says why.
 		let creditNote = false;
 		try {
 			creditNote = await recordCreditNoteReprint({
@@ -58,8 +61,11 @@ export function useLastInvoicePrinting() {
 				name: lastInvoiceId,
 				posProfile: posProfile.name,
 			});
-		} catch (error) {
+		} catch (error: any) {
 			console.warn("Reprint not recorded, not printing", error);
+			useToastStore().show(
+				voucherErrorToast(error?.message || __("This invoice can't be reprinted now.")),
+			);
 			return;
 		}
 		const settingsParam = creditNote

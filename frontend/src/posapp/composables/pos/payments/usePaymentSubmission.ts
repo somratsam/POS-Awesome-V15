@@ -283,10 +283,13 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 		}
 
 		if (code === "VALIDATION_ERROR" || code === "BUSINESS_RULE") {
+			// The server's reason (e.g. store credit needing a voucher or a
+			// supervisor) is often long: leave it up long enough to read.
 			return {
 				title: __("Unable to submit invoice"),
 				detail: detail ? `${message}\n${detail}` : message,
-				color: "error",
+				color: "red-darken-3",
+				timeout: 8000,
 			};
 		}
 

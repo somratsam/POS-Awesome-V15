@@ -132,9 +132,14 @@
 			@sync-all="syncPendingInvoices"
 		/>
 
-		<!-- Snackbar for notifications -->
+		<!-- Snackbar for notifications. Vuetify sets a snackbar's z-index once,
+		     when it opens (2000, or just above the dialog on top at that
+		     moment), so a dialog opened later -- Payments, Invoice Management,
+		     a confirm box -- can cover it. .posa-toast (unscoped style below)
+		     keeps it above every dialog. -->
 		<v-snackbar
 			v-model="visible"
+			class="posa-toast"
 			:timeout="timeout"
 			:color="color"
 			:location="isRtl ? 'top left' : 'top right'"
@@ -1248,5 +1253,13 @@ export default {
 	position: relative;
 	display: flex;
 	align-items: center;
+}
+</style>
+
+<style>
+/* Not scoped: Vuetify renders the snackbar outside the app root, and sets its
+   z-index inline -- only !important wins over that. */
+.v-overlay.v-snackbar.posa-toast {
+	z-index: 10000 !important;
 }
 </style>
