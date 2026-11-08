@@ -21,6 +21,7 @@ import {
 	serverMessageOf,
 	voucherErrorToast,
 	voucherSuccessToast,
+	voucherTooBigForSale,
 } from "../src/posapp/utils/voucherMessages";
 
 const sameShift = { type: "Invoice", credit_origin: "CN-TODAY", total_credit: 40, pos_opening_shift: "SHIFT-1" };
@@ -421,5 +422,40 @@ describe("toasts sit above dialogs", () => {
 		const snackbar = navbarSource.slice(navbarSource.indexOf("<v-snackbar"), navbarSource.indexOf("</v-snackbar>"));
 		expect(snackbar).toContain('class="posa-toast"');
 		expect(navbarSource).toMatch(/<style>\s*[\s\S]*?\.v-overlay\.v-snackbar\.posa-toast \{\s*z-index: 10000 !important;/);
+	});
+});
+
+// A voucher is used in full: on a sale worth less than the voucher it is
+// refused up front in red, never announced in green and then not applied.
+describe("a voucher bigger than the sale", () => {
+	const fmt = (value: number) => value.toFixed(3);
+	beforeEach(() => {
+		(globalThis as any).__ = (text: string, args: any[] = []) =>
+			text.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)] ?? ""));
+	});
+
+	it("is refused with the amount the sale must reach", () => {
+		expect(voucherTooBigForSale({ voucher: "C26-00316-63TA", amount: 72.97 }, 10, fmt)).toBe(
+			"Voucher C26-00316-63TA is for 72.970. The sale must be at least 72.970 to use it. Add items, or keep the voucher for another visit.",
+		);
+	});
+
+	it("fits a sale of the same amount or more", () => {
+		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 72.97, fmt)).toBe("");
+		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 72.9700000001, fmt)).toBe("");
+		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 83, fmt)).toBe("");
+		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 72.969, fmt)).not.toBe("");
+	});
+
+	it("Payments checks it before switching the customer or applying anything", () => {
+		const script = paymentsSource.slice(paymentsSource.indexOf("<script"));
+		const fn = script.slice(script.indexOf("const redeemCreditVoucher"), script.indexOf("const { loadPrintPage"));
+		const check = fn.indexOf("voucherTooBigForSale(voucher, saleAmount");
+		expect(check).toBeGreaterThan(0);
+		expect(fn).toMatch(/const saleAmount = flt\(doc\.rounded_total \|\| doc\.grand_total \|\| 0\) - flt\(loyalty_amount\.value \|\| 0\);/);
+		expect(fn.slice(check)).toMatch(/^voucherTooBigForSale[^\n]*\n\s*if \(tooBig\) \{\s*showVoucherError\(tooBig\);\s*return;\s*\}/);
+		for (const later of ["askVoucherCustomer(voucher)", "customersStore.setSelectedCustomer(voucher.customer)", "addCreditVoucher(voucher)", "voucherSuccessToast("]) {
+			expect(fn.indexOf(later), later).toBeGreaterThan(check);
+		}
 	});
 });

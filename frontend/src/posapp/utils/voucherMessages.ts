@@ -89,3 +89,25 @@ export async function callWithoutDialog<T = any>(method: string, args: Record<st
 	if (response.ok) return body?.message as T;
 	throw new Error(serverMessageOf(body) || __("The server refused this (error {0}).", [response.status]));
 }
+
+/**
+ * A voucher is used in full, so it can't be applied to a sale worth less
+ * than it (the same rule as "Use Customer Balance"). saleAmount is what the
+ * sale still needs after loyalty points. Returns the red message to show,
+ * or "" when the voucher fits.
+ */
+export function voucherTooBigForSale(
+	voucher: { voucher?: string; amount?: number } | null | undefined,
+	saleAmount: number,
+	formatAmount: (value: number) => string,
+): string {
+	const voucherAmount = Number(voucher?.amount || 0);
+	const sale = Math.max(Number(saleAmount || 0), 0);
+	// Compared in baisa, so 72.970 vs 72.97 isn't a difference.
+	if (Math.round(voucherAmount * 1000) <= Math.round(sale * 1000)) return "";
+	const amount = formatAmount(voucherAmount);
+	return __("Voucher {0} is for {1}. The sale must be at least {1} to use it. Add items, or keep the voucher for another visit.", [
+		voucher?.voucher || "",
+		amount,
+	]);
+}

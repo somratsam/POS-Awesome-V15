@@ -399,6 +399,7 @@ import {
 	callWithoutDialog,
 	voucherErrorToast,
 	voucherSuccessToast,
+	voucherTooBigForSale,
 } from "../../utils/voucherMessages";
 import { isNoMoneyReturn, resolveReturnSubmit } from "../../utils/returnIntent";
 
@@ -746,6 +747,16 @@ const redeemCreditVoucher = async (code) => {
 		return;
 	}
 	if (!voucher?.credit_origin) return;
+
+	// Used in full only: on a smaller sale it is refused here, before the
+	// customer is switched or anything is applied.
+	const doc = invoice_doc.value || {};
+	const saleAmount = flt(doc.rounded_total || doc.grand_total || 0) - flt(loyalty_amount.value || 0);
+	const tooBig = voucherTooBigForSale(voucher, saleAmount, (value) => formatCurrency(value));
+	if (tooBig) {
+		showVoucherError(tooBig);
+		return;
+	}
 
 	const current = invoice_doc.value?.customer || "";
 	if (current !== voucher.customer) {
