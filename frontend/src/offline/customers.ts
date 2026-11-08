@@ -91,9 +91,13 @@ export async function syncOfflineCustomers() {
 	for (const entry of claimedEntries) {
 		const queuedCustomer = entry.payload;
 		try {
+			// offline_sync: if the mobile number already belongs to a
+			// customer (one created after this till last synced, or on
+			// another till), the server returns that customer instead of
+			// refusing, and the queued sales below move to it.
 			const result = await frappe.call({
 				method: "posawesome.posawesome.api.customers.create_customer",
-				args: queuedCustomer.args,
+				args: { ...queuedCustomer.args, offline_sync: 1 },
 			});
 			synced += 1;
 			await markWriteQueueEntrySynced(

@@ -37,6 +37,14 @@ def after_insert(doc, method):
 def validate(doc, method):
     validate_referral_code(doc)
     ensure_loyalty_portal_code(doc)
+    validate_mobile(doc)
+
+
+def validate_mobile(doc):
+    # Clean number, and one customer per mobile number (customer_mobile.py).
+    from .customer_mobile import validate_customer_mobile
+
+    validate_customer_mobile(doc)
 
 
 def create_customer_referral_code(doc):

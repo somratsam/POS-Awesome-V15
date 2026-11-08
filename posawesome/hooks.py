@@ -175,6 +175,9 @@ doc_events = {
         "validate": "posawesome.posawesome.api.customer.validate",
         "after_insert": "posawesome.posawesome.api.customer.after_insert",
     },
+    "Contact": {
+        "validate": "posawesome.posawesome.api.customer_mobile.validate_contact_mobile",
+    },
     "Bin": {
         "after_insert": [
             "posawesome.posawesome.stock_realtime.publish_bin_stock_change",

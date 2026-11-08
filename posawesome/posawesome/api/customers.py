@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import json
 import frappe
-from frappe.utils import nowdate, flt, cstr, get_datetime
+from frappe.utils import cint, nowdate, flt, cstr, get_datetime
 from frappe import _
 from erpnext.accounts.doctype.loyalty_program.loyalty_program import (
     get_loyalty_program_details_with_points,
@@ -58,12 +58,14 @@ def _find_duplicate_customer_records(
     exclude_customer=None,
     allow_duplicate_names=False,
 ):
-    """Return exact duplicate candidates without loading the full customer table."""
+    """Return exact duplicate candidates without loading the full customer table.
+    The mobile number is compared in its clean form (customer_mobile.py), so
+    "+968 9123 4567" finds the customer stored as "91234567"."""
+    from .customer_mobile import find_customer_with_mobile
+
     checks = []
     if customer_name and not allow_duplicate_names:
         checks.append(("customer_name", str(customer_name).strip()))
-    if mobile_no:
-        checks.append(("mobile_no", str(mobile_no).strip()))
     if email_id:
         checks.append(("email_id", str(email_id).strip().lower()))
     if tax_id:
@@ -88,7 +90,21 @@ def _find_duplicate_customer_records(
             match = matches.setdefault(customer_name_key, dict(customer, matching_fields=[]))
             match["matching_fields"].append(fieldname)
 
-    return list(matches.values())
+    if mobile_no:
+        existing = find_customer_with_mobile(mobile_no, [exclude_customer])
+        if existing:
+            if existing.name not in matches:
+                full = frappe.db.get_value(
+                    "Customer",
+                    existing.name,
+                    ["name", "customer_name", "mobile_no", "email_id", "tax_id"],
+                    as_dict=True,
+                ) or existing
+                matches[existing.name] = dict(full, matching_fields=[])
+            matches[existing.name]["matching_fields"].insert(0, "mobile_no")
+
+    # A mobile number match comes first: that one blocks the save.
+    return sorted(matches.values(), key=lambda match: "mobile_no" not in match["matching_fields"])
 
 
 @frappe.whitelist()
@@ -111,6 +127,25 @@ def find_duplicate_customers(
         exclude_customer=customer_id,
         allow_duplicate_names=bool(pos_profile.get("posa_allow_duplicate_customer_names")),
     )
+
+
+@frappe.whitelist()
+def find_customer_by_mobile(mobile_no, company, pos_profile_doc, customer_id=None):
+    """The customer that already has this mobile number (any format), for
+    the new-customer form's check while typing; None if there is none."""
+    from .customer_mobile import clean_mobile, find_customer_with_mobile
+
+    _assert_customer_write_allowed(pos_profile_doc, company=company)
+    if len(clean_mobile(mobile_no).lstrip("+")) < 8:
+        return None
+    existing = find_customer_with_mobile(mobile_no, [customer_id])
+    if not existing:
+        return None
+    return {
+        "name": existing.name,
+        "customer_name": existing.customer_name,
+        "mobile_no": clean_mobile(existing.mobile_no) or existing.mobile_no,
+    }
 
 
 def get_customer_groups(pos_profile):
@@ -416,9 +451,18 @@ def create_customer(
     address_line1=None,
     city=None,
     country=None,
+    offline_sync=None,
 ):
+    from .customer_mobile import (
+        assert_mobile_free,
+        clean_mobile,
+        duplicate_mobile_message,
+        find_customer_with_mobile,
+    )
+
     pos_profile_doc_obj = _assert_customer_write_allowed(pos_profile_doc, company=company)
     pos_profile = pos_profile_doc_obj.as_dict() if pos_profile_doc_obj else {}
+    mobile_no = clean_mobile(mobile_no) or None
 
     # Format birthday to MySQL compatible format (YYYY-MM-DD) if provided
     formatted_birthday = None
@@ -437,6 +481,21 @@ def create_customer(
             frappe.log_error(f"Error formatting birthday: {birthday}", "POS Awesome")
 
     if method == "create":
+        existing_by_mobile = find_customer_with_mobile(mobile_no)
+        if existing_by_mobile:
+            if cint(offline_sync):
+                # A customer created on a till while it was offline: the
+                # number already belongs to a customer, so the offline sale
+                # goes to that customer instead of creating a second one.
+                result = frappe.db.get_value(
+                    "Customer",
+                    existing_by_mobile.name,
+                    ["name", "customer_name", "mobile_no", "email_id", "tax_id", "loyalty_program"],
+                    as_dict=True,
+                )
+                result["posa_linked_existing_customer"] = 1
+                return result
+            frappe.throw(duplicate_mobile_message(existing_by_mobile), title=_("Duplicate mobile number"))
         duplicate_customers = _find_duplicate_customer_records(
             customer_name=customer_name,
             mobile_no=mobile_no,
@@ -496,6 +555,8 @@ def create_customer(
             return customer
     elif method == "update":
         customer_doc = frappe.get_doc("Customer", customer_id)
+        if mobile_no and clean_mobile(customer_doc.mobile_no) != mobile_no:
+            assert_mobile_free(mobile_no, [customer_doc.name])
         customer_doc.customer_name = customer_name
         customer_doc.tax_id = tax_id
         customer_doc.mobile_no = mobile_no
@@ -563,6 +624,13 @@ def create_customer(
 @frappe.whitelist()
 def set_customer_info(customer, fieldname, value="", pos_profile_doc=None, company=None):
     _assert_customer_write_allowed(pos_profile_doc, company=company)
+
+    if fieldname == "mobile_no":
+        from .customer_mobile import assert_mobile_free, clean_mobile
+
+        value = clean_mobile(value)
+        if value:
+            assert_mobile_free(value, [customer])
 
     if fieldname == "loyalty_program":
         frappe.db.set_value("Customer", customer, "loyalty_program", value)

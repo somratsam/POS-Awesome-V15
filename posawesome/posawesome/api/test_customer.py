@@ -217,10 +217,12 @@ class TestValidateStillRunsReferralCodeCheck(unittest.TestCase):
             patch.object(
                 module, "ensure_loyalty_portal_code", side_effect=lambda d: calls.append("loyalty")
             ),
+            patch.object(module, "validate_mobile", side_effect=lambda d: calls.append("mobile")),
         ):
             module.validate(doc, method=None)
 
-        self.assertEqual(calls, ["referral", "loyalty"])
+        # The mobile check (clean number, one customer per number) runs too.
+        self.assertEqual(calls, ["referral", "loyalty", "mobile"])
 
 
 if __name__ == "__main__":

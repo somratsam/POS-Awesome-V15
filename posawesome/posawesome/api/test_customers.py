@@ -65,6 +65,7 @@ def _install_stubs():
     frappe_utils_module.nowdate = lambda: "2026-05-21"
     frappe_utils_module.flt = lambda value=0, precision=None: float(value or 0)
     frappe_utils_module.cstr = lambda value="": "" if value is None else str(value)
+    frappe_utils_module.cint = lambda value=0: int(value or 0)
     frappe_utils_module.get_datetime = lambda value: value
     frappe_caching_module.redis_cache = lambda ttl=None: (lambda fn: fn)
     erpnext_loyalty_module.get_loyalty_program_details_with_points = (
@@ -82,6 +83,15 @@ def _install_stubs():
     ] = erpnext_loyalty_module
     sys.modules["posawesome.posawesome.api.utils"] = api_utils_module
     sys.modules["posawesome.posawesome.api.stored_value"] = stored_value_module
+
+    # The mobile rule itself is tested against the database in
+    # test_customer_mobile.py; here it only has to be the real clean_mobile.
+    mobile_module = types.ModuleType("posawesome.posawesome.api.customer_mobile")
+    mobile_module.clean_mobile = lambda value: "".join(c for c in str(value or "") if c.isdigit())
+    mobile_module.find_customer_with_mobile = lambda mobile_no, exclude=None: state.get(
+        "mobile_owner", {}
+    ).get(mobile_module.clean_mobile(mobile_no))
+    sys.modules["posawesome.posawesome.api.customer_mobile"] = mobile_module
 
     return state
 
@@ -123,16 +133,8 @@ class TestCustomersApi(unittest.TestCase):
             filters = kwargs.get("filters", {})
             if doctype != "Customer":
                 return []
-            if filters.get("mobile_no") == "+92 300 1234567":
-                return [
-                    AttrDict(
-                        name="CUST-EXISTING",
-                        customer_name="Existing Customer",
-                        mobile_no="+92 300 1234567",
-                        email_id="existing@example.com",
-                        tax_id="TIN-1",
-                    )
-                ]
+            # The mobile number is no longer an exact-text filter.
+            self.assertNotIn("mobile_no", filters)
             if filters.get("email_id") == "existing@example.com":
                 return [
                     AttrDict(
@@ -146,6 +148,13 @@ class TestCustomersApi(unittest.TestCase):
             return []
 
         self.module.frappe.get_all = get_all
+        self.state["mobile_owner"] = {
+            "923001234567": AttrDict(
+                name="CUST-EXISTING",
+                customer_name="Existing Customer",
+                mobile_no="+92 300 1234567",
+            )
+        }
         matches = self.module._find_duplicate_customer_records(
             customer_name="Different Name",
             mobile_no="+92 300 1234567",

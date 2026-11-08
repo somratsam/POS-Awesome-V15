@@ -83,14 +83,16 @@ describe("UpdateCustomer.vue Submit button guards against a rapid double-click",
 		// that shape could never match this exact "ends right after args"
 		// pattern.
 		const createCallMatch = updateCustomerSource.match(
-			/const r = await frappe\.call\(\{\s*method:\s*"posawesome\.posawesome\.api\.customers\.create_customer",\s*args:\s*apiArgs,\s*\}\);/,
+			// Since the duplicate-mobile work it goes through callWithoutDialog
+			// (Frappe's message box opens behind this form); still awaited.
+			/const message = await callWithoutDialog\(CREATE_CUSTOMER, apiArgs\);/,
 		);
 		expect(createCallMatch).not.toBeNull();
 	});
 
 	it("wraps the awaited create_customer call in try/catch so a transport failure surfaces a toast instead of an unhandled rejection", () => {
 		const tryBlockMatch = updateCustomerSource.match(
-			/try\s*\{\s*const r = await frappe\.call\(\{[\s\S]*?\}\s*catch \(error\) \{[\s\S]*?Customer creation failed[\s\S]*?\}/,
+			/try\s*\{[\s\S]*?const message = await callWithoutDialog\(CREATE_CUSTOMER, apiArgs\);[\s\S]*?\}\s*catch \(error\) \{[\s\S]*?Customer creation failed[\s\S]*?\}/,
 		);
 		expect(tryBlockMatch).not.toBeNull();
 	});

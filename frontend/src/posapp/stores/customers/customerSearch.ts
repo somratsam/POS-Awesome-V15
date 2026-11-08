@@ -1,4 +1,5 @@
 import type { CustomerSummary } from "../../types/models";
+import { cleanMobileNumber } from "../../utils/customerMobile";
 
 type SearchableCustomer = CustomerSummary & {
 	_search_text?: string;
@@ -133,12 +134,13 @@ export function normalizeCustomerDuplicateValue(
 	field: CustomerDuplicateField,
 	value: unknown,
 ): string {
+	if (field === "mobile_no") {
+		// Same number in any format ("+968 9123 4567" = "91234567").
+		return cleanMobileNumber(value);
+	}
 	const normalized = String(value ?? "")
 		.trim()
 		.toLowerCase();
-	if (field === "mobile_no") {
-		return normalized.replace(/\D/g, "");
-	}
 	if (field === "customer_name") {
 		return normalized.replace(/\s+/g, " ");
 	}
