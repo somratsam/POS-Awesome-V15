@@ -1,5 +1,7 @@
 import json
 import unittest
+
+import frappe
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -191,6 +193,17 @@ class _Row(dict):
     __getattr__ = dict.get
 
 
+class TestOverviewLeavesTheCacheAlone(unittest.TestCase):
+    def test_system_settings_in_the_cache_stay_real_after_the_overview_test(self):
+        # With frappe.get_doc replaced, a real database read inside the
+        # overview once cached this test's fake shift as System Settings and
+        # broke the whole site until the cache was cleared.
+        _overview_and_reconciliation({"Cash": 10}, [_invoice("SINV-1", 20, [("Cash", 20)])])
+        settings = frappe.get_cached_doc("System Settings")
+        self.assertEqual(settings.doctype, "System Settings")
+        self.assertIsNotNone(frappe.get_system_settings("session_expiry"))
+
+
 def _payments_by_mode(result):
     return {row["mode_of_payment"]: round(row["company_currency_total"], 3) for row in result["payments_by_mode"]}
 
@@ -241,6 +254,11 @@ def _overview_and_reconciliation(balance, invoices, movements=()):
         f"{OVERVIEW}.fetch_shift_invoices", return_value=invoices
     ), patch(f"{OVERVIEW}.fetch_shift_payment_entries", return_value=[]), patch(
         f"{OVERVIEW}.get_authorized_pos_profile"
+    ), patch(
+        # The sales breakdown reads invoices from the database; with
+        # frappe.get_doc replaced above, a real query could load (and cache)
+        # this test's fake document as System Settings.
+        f"{OVERVIEW}._shift_z_summary", return_value={}
     ), patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile"), patch(
         "posawesome.posawesome.api.credit_exchange.frappe"
     ) as exchange_frappe, patch(f"{CREATION}.frappe") as creation_frappe, patch(

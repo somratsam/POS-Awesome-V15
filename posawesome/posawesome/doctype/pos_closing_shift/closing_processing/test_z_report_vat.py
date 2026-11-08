@@ -42,7 +42,7 @@ class TestZReportVat(unittest.TestCase):
         self.assertAlmostEqual(report["net_sales"], 13.0)
         self.assertAlmostEqual(report["net_excl_vat"], 12.381)
 
-    def test_sales_based_figures_stay_gross(self):
+    def test_gross_sales_stays_gross_and_averages_use_net_sales(self):
         report = _report(
             [
                 _vat_row("S1", 1, 77.2, 3.676),
@@ -50,8 +50,9 @@ class TestZReportVat(unittest.TestCase):
             ]
         )
         self.assertAlmostEqual(report["total_sales"], 77.2)
-        self.assertAlmostEqual(report["sales_per_receipt"], 77.2)
-        self.assertAlmostEqual(report["sales_per_item"], 77.2)
+        self.assertAlmostEqual(report["gross_sales"], 77.2)
+        self.assertAlmostEqual(report["sales_per_receipt"], 13.0)
+        self.assertIsNone(report["sales_per_item"])
 
     def test_returns_only_shift_goes_negative(self):
         report = _report([_vat_row("R1", -1, -21.0, -1.0, is_return=1)])
@@ -117,9 +118,9 @@ class TestZReportPrintFormatVat(unittest.TestCase):
                 )
         self.assertNotIn("Tax Incl. Sales Figure", self.html)
 
-    def test_total_sales_receipts_stays_gross(self):
+    def test_gross_sales_receipts_stays_gross(self):
         self.assertIn(
-            '<span>Total Sales Receipts</span><span>{{ report.sale_count }} / {{ "%.3f"|format(report.total_sales) }}',
+            '<span>Gross Sales Receipts</span><span>{{ report.sale_count }} / {{ "%.3f"|format(report.gross_sales) }}',
             self.html,
         )
 

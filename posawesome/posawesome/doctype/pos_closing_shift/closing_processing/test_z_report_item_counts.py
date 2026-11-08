@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import frappe
 
-from posawesome.posawesome.doctype.pos_closing_shift.closing_processing import z_report
+from posawesome.posawesome.doctype.pos_closing_shift.closing_processing import sales_breakdown, z_report
 
 
 def _shift():
@@ -49,8 +49,19 @@ def _return(name, qty, amount=10.0):
     return _row(name, -qty, -amount, is_return=1)
 
 
+def breakdown_of(rows, exchange_customers=()):
+    """The real sales_breakdown over the same fake invoice rows."""
+    invoice_rows = [frappe._dict(row, doctype="Sales Invoice") for row in rows]
+    with patch.object(sales_breakdown, "_rows", return_value=invoice_rows), patch.object(
+        sales_breakdown, "get_customers_with_same_shift_return", return_value=list(exchange_customers)
+    ), patch.object(sales_breakdown.frappe, "get_all", return_value=[]):
+        return sales_breakdown.get_sales_breakdown("SHIFT-1", {"Sales Invoice": [r.name for r in rows]})
+
+
 def _report(rows):
     with patch.object(z_report.frappe, "get_doc", return_value=_shift()), patch.object(
+        z_report, "_sales_breakdown", return_value=breakdown_of(rows)
+    ), patch.object(
         z_report, "get_authorized_pos_profile"
     ), patch.object(z_report, "get_shift_invoice_rows", return_value=rows), patch.object(
         z_report, "get_shift_line_discount_totals", return_value={}
@@ -83,18 +94,20 @@ class TestZReportItemCounts(unittest.TestCase):
         self.assertEqual(report["sale_count"], 2)
         self.assertEqual(report["return_count"], 1)
 
-    def test_per_item_figures_use_items_sold(self):
-        # 77.200 sale and 64.200 return: net 0 pieces, but per-item figures
-        # are still based on the one piece sold.
+    def test_per_receipt_and_per_item_figures_use_net_sales_and_net_items(self):
+        # 77.200 sale and 64.200 return: Net Sales 13.000 over one receipt,
+        # 0 net pieces -- nothing to divide per item.
         report = _report([_sale("S1", 1, 77.2), _return("R1", 1, 64.2)])
         self.assertEqual(report["total_qty"], 0)
-        self.assertEqual(report["items_per_receipt"], 1)
-        self.assertAlmostEqual(report["sales_per_item"], 77.2)
-
-    def test_nothing_sold_shows_zero_per_item_figures(self):
-        report = _report([_return("R1", 2)])
+        self.assertAlmostEqual(report["sales_per_receipt"], 13.0)
         self.assertEqual(report["items_per_receipt"], 0)
-        self.assertEqual(report["sales_per_item"], 0)
+        self.assertIsNone(report["sales_per_item"])
+
+    def test_nothing_sold_has_no_per_receipt_figures(self):
+        report = _report([_return("R1", 2)])
+        self.assertIsNone(report["items_per_receipt"])
+        self.assertIsNone(report["sales_per_receipt"])
+        self.assertIsNone(report["sales_per_item"])
 
     def test_net_never_negative_zero(self):
         # 0.3 - 0.1 - 0.2 leaves a tiny negative float that rounds to -0.0.

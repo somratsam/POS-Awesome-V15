@@ -11,6 +11,17 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
 )
 
 
+def _shift_z_summary(pos_opening_shift, doctype, invoices):
+    """sales_breakdown.get_sales_breakdown for an open shift (imported here so
+    the module loads with the light stubs its tests use; tests replace this
+    one function)."""
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.sales_breakdown import (
+        get_sales_breakdown,
+    )
+
+    return get_sales_breakdown(pos_opening_shift, {doctype: [invoice.get("name") for invoice in invoices]})
+
+
 @frappe.whitelist()
 def get_closing_shift_overview(pos_opening_shift):
     """Return invoice and payment totals for the provided POS Opening Shift.
@@ -751,9 +762,12 @@ def get_closing_shift_overview(pos_opening_shift):
     cash_expected_company_currency_total = flt(drawer_cash)
     cash_taken_company_currency_total = flt(drawer_cash - opening_cash)
 
-    average_invoice_value = 0
-    if sale_invoices_count:
-        average_invoice_value = gross_company_currency_total / sale_invoices_count
+    # The same figures the Z Report prints after closing (exchanges, returns
+    # of earlier sales, takings bridge, store credit left, net-based
+    # averages), from the same function, so the two never disagree.
+    z_summary = _shift_z_summary(opening_shift_doc.name, doctype, invoices)
+    # Average Ticket = the Z Report's Sales Figure/Receipt.
+    average_invoice_value = flt(z_summary.get("sales_per_receipt") or 0)
 
     def prepare_currency_rows(container, include_count=False, include_points=False):
         output = []
@@ -884,6 +898,7 @@ def get_closing_shift_overview(pos_opening_shift):
         # and redeemed credit within this same shift. See same_shift_exchange_total
         # on the POS Closing Shift doctype for the post-close equivalent.
         "same_shift_exchange_total": flt(same_shift_exchange_total),
+        "z_summary": z_summary,
         "cash_expected": {
             "mode_of_payment": cash_mode_of_payment,
             "company_currency_total": flt(cash_expected_company_currency_total),

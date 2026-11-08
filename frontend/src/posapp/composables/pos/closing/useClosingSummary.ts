@@ -334,6 +334,36 @@ export function useClosingSummary(
 			: [];
 	});
 
+	// Figures shared with the Z Report (exchanges, returns of earlier sales,
+	// takings bridge, store credit left, net-based averages).
+	const zSummary = computed<Record<string, any>>(() => unref(overview)?.z_summary || {});
+
+	// Takings: Net Sales + Credit Issued - Credit Redeemed, less the other ways
+	// a sale was settled without money (only lines that aren't zero), =
+	// Today's Payments -- the same lines as the Z Report.
+	const takingsRows = computed(() => {
+		const z = zSummary.value;
+		const rows = [
+			{ key: "net", label: __("Net Sales"), amount: Number(z.net_sales || 0) },
+			{ key: "issued", label: __("+ Credit Issued"), amount: Number(z.credit_issued || 0) },
+			{ key: "redeemed", label: __("- Credit Redeemed"), amount: Number(z.credit_redeemed || 0) },
+		];
+		const optional: Array<[string, string]> = [
+			["refunds", __("- Refunds")],
+			["loyalty", __("- Loyalty Points")],
+			["write_off", __("- Write-off")],
+			["rounding", __("- Rounding")],
+			["unpaid", __("- Unpaid")],
+			["other", __("- Other")],
+		];
+		for (const [key, label] of optional) {
+			if (Number(z[key] || 0) !== 0) rows.push({ key, label, amount: Number(z[key]) });
+		}
+		return rows;
+	});
+	const takingsTotal = computed(() => Number(zSummary.value.takings || 0));
+	const leftAsStoreCredit = computed(() => Number(zSummary.value.left_as_store_credit || 0));
+
 	const salesSummary = computed(() => {
 		const ov = unref(overview);
 		return (
@@ -381,15 +411,19 @@ export function useClosingSummary(
 				key: "gross-sales",
 				label: __("Gross Sales"),
 				value: grossSales,
-				caption: `${__("Before returns")}`,
+				caption: zSummary.value.exchange_count
+					? `${__("Before returns")} · ${__("of which exchanges ({0})", [formatCount(zSummary.value.exchange_count)])}: ${formatCurrency(zSummary.value.exchange_sales)}`
+					: `${__("Before returns")}`,
 				icon: "mdi-chart-bar",
 				color: "accent-secondary",
 			},
 			{
+				// = the Z Report's Sales Figure/Receipt: Net Sales over receipts,
+				// exchanges not counted as receipts.
 				key: "average-ticket",
 				label: __("Average Ticket"),
-				value: avgInvoice,
-				caption: `${__("Across")}: ${formatCount(salesSummary.value.sale_invoices_count || 0)} ${__("sales")}`,
+				value: zSummary.value.sales_per_receipt === null && "sales_per_receipt" in zSummary.value ? "-" : avgInvoice,
+				caption: `${__("Net Sales over")}: ${formatCount(zSummary.value.receipts ?? salesSummary.value.sale_invoices_count ?? 0)} ${__("receipts")}${zSummary.value.exchange_count ? ` + ${formatCount(zSummary.value.exchange_count)} ${__("exch.")}` : ""}`,
 				icon: "mdi-chart-donut",
 				color: "accent-info",
 			},
@@ -447,7 +481,9 @@ export function useClosingSummary(
 				key: "returns",
 				label: __("Returns"),
 				value: returnsValue,
-				caption: `${__("Return count")}: ${formatCount(returnsSummary.value.count || 0)}`,
+				caption: zSummary.value.returns_earlier
+					? `${__("Return count")}: ${formatCount(returnsSummary.value.count || 0)} · ${__("of earlier sales")}: ${formatCurrency(zSummary.value.returns_earlier)}`
+					: `${__("Return count")}: ${formatCount(returnsSummary.value.count || 0)}`,
 				icon: "mdi-undo-variant",
 				color: "accent-secondary",
 			},
@@ -618,6 +654,10 @@ export function useClosingSummary(
 		customerCreditRedeemedByCurrency,
 		customerCreditIssuedSummary,
 		customerCreditIssuedByCurrency,
+		zSummary,
+		takingsRows,
+		takingsTotal,
+		leftAsStoreCredit,
 		primaryInsights,
 		secondaryInsights,
 		hideExpectedAmounts,

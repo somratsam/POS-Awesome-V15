@@ -4,6 +4,7 @@ from unittest.mock import patch
 import frappe
 
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing import data, z_report
+from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.test_z_report_item_counts import breakdown_of
 
 
 def _shift(**overrides):
@@ -74,6 +75,8 @@ class TestZReportDiscountsGranted(unittest.TestCase):
         ]
         line_totals = {"SI-1": 10.12, "SI-2": 4, "SI-3": 99}
         with patch.object(z_report.frappe, "get_doc", return_value=_shift()), patch.object(
+            z_report, "_sales_breakdown", return_value=breakdown_of(rows)
+        ), patch.object(
             z_report, "get_authorized_pos_profile"
         ), patch.object(z_report, "get_shift_invoice_rows", return_value=rows), patch.object(
             z_report, "get_shift_line_discount_totals", return_value=line_totals

@@ -905,6 +905,45 @@
 				</div>
 			</div>
 
+			<!-- Takings: the same bridge the Z Report prints. Hidden in a blind
+			     count, as it equals the payment totals. -->
+			<div v-if="!hideExpectedAmounts" class="table-section mt-4" data-test="takings-bridge">
+				<div class="table-header mb-2">
+					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
+						{{ __("Takings") }}
+					</h5>
+					<p class="text-body-2 text-medium-emphasis">
+						{{ __("Why the money taken differs from Net Sales") }}
+					</p>
+				</div>
+				<div class="overview-table-wrapper">
+					<table class="overview-table">
+						<tbody>
+							<tr v-for="row in takingsRows" :key="row.key" :data-test="`takings-${row.key}`">
+								<td>{{ row.label }}</td>
+								<td class="text-end">
+									{{ formatCurrencyWithSymbol(row.amount, overviewCompanyCurrency) }}
+								</td>
+							</tr>
+							<tr data-test="takings-total">
+								<td>
+									<strong>{{ __("= Takings") }}</strong>
+								</td>
+								<td class="text-end">
+									<strong>{{ formatCurrencyWithSymbol(takingsTotal, overviewCompanyCurrency) }}</strong>
+								</td>
+							</tr>
+							<tr data-test="left-as-store-credit">
+								<td>{{ __("Left as Store Credit") }}</td>
+								<td class="text-end">
+									{{ formatCurrencyWithSymbol(leftAsStoreCredit, overviewCompanyCurrency) }}
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+			</div>
+
 			<div v-if="!hideExpectedAmounts" class="table-section mt-4" data-test="payments-by-mode">
 				<div class="table-header mb-2">
 					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
@@ -996,6 +1035,10 @@ defineProps({
 	customerCreditRedeemedByCurrency: Array,
 	customerCreditIssuedSummary: Object,
 	customerCreditIssuedByCurrency: Array,
+	// Same lines as the Z Report's Takings section (useClosingSummary).
+	takingsRows: { type: Array, default: () => [] },
+	takingsTotal: { type: Number, default: 0 },
+	leftAsStoreCredit: { type: Number, default: 0 },
 	paymentsByMode: Array,
 	overviewCompanyCurrency: String,
 	// Blind count (POS Profile "Hide Expected Amount"): hide the cash and
