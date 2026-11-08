@@ -19,6 +19,7 @@ import {
 	normalizeCustomerSearchTerm,
 } from "./customers/customerSearch";
 import { resetCustomerLoadingCoordinator } from "../modules/customers/customerLoadingCoordinator";
+import { cleanMobileNumber, mobileLookupKey } from "../utils/customerMobile";
 // @ts-ignore
 import {
 	db,
@@ -635,6 +636,31 @@ export const useCustomersStore = defineStore("customers", () => {
 		}));
 	}
 
+	// The customer in the till's own list that already has this mobile
+	// number, in any format (works offline). Used by the new-customer form.
+	async function findLocalCustomerByMobile(
+		mobile: string,
+		excludeCustomer: string | null = null,
+	): Promise<CustomerSummary | null> {
+		const clean = cleanMobileNumber(mobile);
+		const key = mobileLookupKey(clean);
+		if (!key) return null;
+		await ensureDatabase();
+		const candidates: CustomerSummary[] = await db
+			.table("customers")
+			.where("_mobile_search_keys")
+			.equals(key)
+			.limit(50)
+			.toArray();
+		return (
+			candidates.find(
+				(customer) =>
+					customer.name !== excludeCustomer &&
+					cleanMobileNumber(customer.mobile_no) === clean,
+			) || null
+		);
+	}
+
 	// Read-only search for customer pickers outside the main customer box
 	// (Invoice Management's edit dialog). Same matching as performSearch,
 	// including the server fallback for mobiles not cached yet, but it never
@@ -1125,6 +1151,7 @@ export const useCustomersStore = defineStore("customers", () => {
 		searchCustomers,
 		queueSearch,
 		findLocalDuplicateCustomers,
+		findLocalCustomerByMobile,
 		lookupCustomers,
 		loadMoreCustomers,
 		verifyServerCustomerCount,

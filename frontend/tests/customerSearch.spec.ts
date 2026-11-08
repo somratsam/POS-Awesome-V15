@@ -75,7 +75,11 @@ describe("customer search helpers", () => {
 	it("normalizes duplicate identifiers consistently", () => {
 		expect(
 			normalizeCustomerDuplicateValue("mobile_no", "+92 300-123 4567"),
-		).toBe("923001234567");
+		).toBe("+923001234567");
+		// Omani formats are one 8-digit number (utils/customerMobile.ts).
+		expect(normalizeCustomerDuplicateValue("mobile_no", "+968 9123 4567")).toBe(
+			normalizeCustomerDuplicateValue("mobile_no", "9123-4567"),
+		);
 		expect(
 			normalizeCustomerDuplicateValue("email_id", " User@Example.COM "),
 		).toBe("user@example.com");

@@ -52,7 +52,15 @@
 									class="pos-themed-input"
 									hide-details
 									v-model="mobile_no"
+									data-test="customer-mobile-input"
+									@blur="mobile_no = cleanMobileNumber(mobile_no)"
 								></v-text-field>
+							</v-col>
+							<v-col cols="12" v-if="existingMobileCustomer && !customer_id" class="pt-0">
+								<ExistingCustomerNotice
+									:customer="existingMobileCustomer"
+									@select="selectExistingCustomer"
+								/>
 							</v-col>
 							<v-col cols="12" v-if="!hideNonEssential">
 								<v-text-field
@@ -241,8 +249,16 @@ import { useCustomersStore } from "../../../../stores/customersStore.js";
 import { useUIStore } from "../../../../stores/uiStore.js";
 import { storeToRefs } from "pinia";
 import { useToastStore } from "../../../../stores/toastStore.js";
+import { cleanMobileNumber, createMobileDuplicateCheck } from "../../../../utils/customerMobile";
+import { callWithoutDialog, VOUCHER_ERROR_COLOR, VOUCHER_ERROR_TIMEOUT } from "../../../../utils/voucherMessages";
+import ExistingCustomerNotice from "./ExistingCustomerNotice.vue";
+
+const FIND_CUSTOMER_BY_MOBILE = "posawesome.posawesome.api.customers.find_customer_by_mobile";
+const CREATE_CUSTOMER = "posawesome.posawesome.api.customers.create_customer";
+const CUSTOMER_MESSAGE_KEY = "customer-form-message";
 
 export default {
+	components: { ExistingCustomerNotice },
 	setup() {
 		const customersStore = useCustomersStore();
 		const uiStore = useUIStore();
@@ -284,6 +300,8 @@ export default {
 		loyalty_points: null,
 		loyalty_program: null,
 		portal_code: null,
+		// The customer that already has the mobile number typed (new customers).
+		existingMobileCustomer: null,
 		hideNonEssential: false,
 		countries: [
 			"Afghanistan",
@@ -330,6 +348,15 @@ export default {
 			if (typeof localStorage !== "undefined") {
 				localStorage.setItem("posawesome_hide_non_essential_fields", JSON.stringify(val));
 			}
+		},
+		mobile_no(value) {
+			// Check while typing, for a new customer only: the server still
+			// refuses a duplicate mobile on an edit.
+			if (this.customer_id) {
+				this.existingMobileCustomer = null;
+				return;
+			}
+			this.mobileCheck?.check(value);
 		},
 		birthday(newVal) {
 			// Check if the user has entered 8 digits without separators (e.g., 04111994)
@@ -393,6 +420,21 @@ export default {
 				}
 			});
 		},
+		cleanMobileNumber,
+		showCustomerError(title) {
+			this.toastStore.show({
+				title,
+				color: VOUCHER_ERROR_COLOR,
+				timeout: VOUCHER_ERROR_TIMEOUT,
+				key: CUSTOMER_MESSAGE_KEY,
+			});
+		},
+		async selectExistingCustomer(existing) {
+			if (!existing?.name) return;
+			await this.customersStore.addOrUpdateCustomer(existing);
+			this.toastStore.show({ title: __("Existing customer selected"), color: "info" });
+			this.close_dialog();
+		},
 		handleDialogEscape() {
 			if (this.confirmDialog) {
 				this.confirmClose();
@@ -450,6 +492,8 @@ export default {
 		close_dialog() {
 			this.customersStore.closeUpdateCustomerDialog();
 			this.clear_customer();
+			this.mobileCheck?.cancel();
+			this.existingMobileCustomer = null;
 		},
 		clear_customer() {
 			this.customer_name = "";
@@ -647,7 +691,22 @@ export default {
 			};
 
 			const customersStore = useCustomersStore();
+			args.mobile_no = cleanMobileNumber(args.mobile_no);
+			apiArgs.mobile_no = args.mobile_no;
 			if (!this.customer_id) {
+				// One mobile number, one customer: no new customer with a
+				// number another customer already has.
+				await this.mobileCheck.now(args.mobile_no);
+				if (this.existingMobileCustomer) {
+					const existing = this.existingMobileCustomer;
+					this.showCustomerError(
+						__("Customer already exists: {0}, {1}", [
+							existing.customer_name || existing.name,
+							existing.mobile_no || "",
+						]),
+					);
+					return;
+				}
 				let duplicateCustomers = await customersStore.findLocalDuplicateCustomers(args);
 				if (!isOffline() && !duplicateCustomers.length) {
 					const duplicateResponse = await frappe.call({
@@ -711,11 +770,11 @@ export default {
 			// completed, instead of releasing as soon as this function
 			// returns while the request is still on the wire.
 			try {
-				const r = await frappe.call({
-					method: "posawesome.posawesome.api.customers.create_customer",
-					args: apiArgs,
-				});
-				if (!r.exc && r.message && r.message.name) {
+				// Without Frappe's message box, which opens behind this form:
+				// a refusal ("Customer already exists: ...") shows as a red toast.
+				const message = await callWithoutDialog(CREATE_CUSTOMER, apiArgs);
+				const r = { message };
+				if (r.message && r.message.name) {
 					const wasCreate = !vm.customer_id;
 					let text = __("Customer created successfully.");
 					if (vm.customer_id) {
@@ -759,10 +818,7 @@ export default {
 			} catch (error) {
 				console.error("Error creating/updating customer:", error);
 				frappe.utils.play_sound("error");
-				vm.toastStore.show({
-					title: __("Customer creation failed."),
-					color: "error",
-				});
+				vm.showCustomerError(error?.message || __("Customer creation failed."));
 			}
 		},
 		onDateSelect() {
@@ -799,6 +855,20 @@ export default {
 		},
 	},
 	created: function () {
+		this.mobileCheck = createMobileDuplicateCheck({
+			findLocal: (mobile, exclude) => this.customersStore.findLocalCustomerByMobile(mobile, exclude),
+			findRemote: (mobile, exclude) =>
+				callWithoutDialog(FIND_CUSTOMER_BY_MOBILE, {
+					mobile_no: mobile,
+					customer_id: exclude,
+					company: this.pos_profile?.company,
+					pos_profile_doc: JSON.stringify(this.pos_profile),
+				}),
+			isOffline,
+			onResult: (existing) => {
+				this.existingMobileCustomer = this.customer_id ? null : existing;
+			},
+		});
 		if (typeof localStorage !== "undefined") {
 			const saved = localStorage.getItem("posawesome_hide_non_essential_fields");
 			if (saved !== null) {
