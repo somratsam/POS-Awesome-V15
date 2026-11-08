@@ -98,6 +98,8 @@ def _load_module():
     # test_cash_movement_integration), which needs the real frappe stubbed
     # out here; these tests are about other figures.
     module.drawer_cash_expected = lambda *args: (0.0, 0.0)
+    # The sales breakdown reads invoices from the database; not this test's subject.
+    module._shift_z_summary = lambda *args, **kwargs: {}
     return module
 
 

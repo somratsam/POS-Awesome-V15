@@ -38,6 +38,19 @@ def get_store_name(pos_profile_doc):
     return pos_profile_doc.get("name")
 
 
+def _sales_breakdown(doc):
+    """sales_breakdown.get_sales_breakdown for a closed shift (imported here so
+    the module loads with the light stubs its tests use)."""
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
+        _shift_invoice_names_by_doctype,
+    )
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.sales_breakdown import (
+        get_sales_breakdown,
+    )
+
+    return get_sales_breakdown(doc.pos_opening_shift, _shift_invoice_names_by_doctype(doc))
+
+
 @frappe.whitelist()
 def get_z_report_data(pos_closing_shift):
     """Assemble the full Z Report dataset for a submitted POS Closing Shift.
@@ -124,10 +137,13 @@ def get_z_report_data(pos_closing_shift):
     total_vat = vat_on_sales - vat_on_returns
     # flt() also turns a rounded -0.0 into 0.0, so the net never prints as "-0".
     total_qty = flt(items_sold - items_returned, 3)
-    items_per_receipt = flt(items_sold / sale_count, 2) if sale_count else 0.0
-    sales_per_receipt = flt(total_sales / sale_count, CURRENCY_PRECISION) if sale_count else 0.0
-    sales_per_item = flt(total_sales / items_sold, CURRENCY_PRECISION) if items_sold else 0.0
     total_register_count = sale_count + return_count
+
+    # Exchanges, returns of earlier sales, net-based averages, the takings
+    # bridge and the credit figures -- shared with the live Closing Shift
+    # overview (sales_breakdown.py), recalculated from the invoices on every
+    # print, so reprints of old closings use the same rules.
+    breakdown = _sales_breakdown(doc)
 
     pos_profile_doc = frappe.db.get_value(
         "POS Profile",
@@ -176,9 +192,20 @@ def get_z_report_data(pos_closing_shift):
         "company_currency": frappe.get_cached_value("Company", doc.company, "default_currency"),
         "net_total": flt(doc.net_total, CURRENCY_PRECISION),
         "grand_total": flt(doc.grand_total, CURRENCY_PRECISION),
-        "customer_credit_issued": flt(doc.customer_credit_issued, CURRENCY_PRECISION),
-        "customer_credit_redeemed": flt(doc.customer_credit_redeemed, CURRENCY_PRECISION),
-        "same_shift_exchange_total": flt(doc.same_shift_exchange_total, CURRENCY_PRECISION),
+        "customer_credit_issued": breakdown["credit_issued"],
+        "customer_credit_redeemed": breakdown["credit_redeemed"],
+        "same_shift_exchange_total": breakdown["same_shift_exchange_total"],
+        "left_as_store_credit": breakdown["left_as_store_credit"],
+        "gross_sales": flt(total_sales, CURRENCY_PRECISION),
+        "returns_this_shift": breakdown["returns_this_shift"],
+        "returns_earlier": breakdown["returns_earlier"],
+        "exchange_count": breakdown["exchange_count"],
+        "exchange_sales": breakdown["exchange_sales"],
+        "receipt_count": breakdown["receipts"],
+        "takings": breakdown["takings"],
+        "bridge": {
+            key: breakdown[key] for key in ("refunds", "loyalty", "write_off", "rounding", "unpaid", "other")
+        },
         "total_sales": flt(total_sales, CURRENCY_PRECISION),
         "total_returns": flt(total_returns, CURRENCY_PRECISION),
         "net_sales": flt(net_sales, CURRENCY_PRECISION),
@@ -192,9 +219,10 @@ def get_z_report_data(pos_closing_shift):
         "vat_on_returns": flt(vat_on_returns, CURRENCY_PRECISION),
         "total_vat": flt(total_vat, CURRENCY_PRECISION),
         "net_excl_vat": flt(net_excl_vat, CURRENCY_PRECISION),
-        "items_per_receipt": items_per_receipt,
-        "sales_per_receipt": sales_per_receipt,
-        "sales_per_item": sales_per_item,
+        # None when there is nothing to divide by (printed as "-").
+        "items_per_receipt": breakdown["items_per_receipt"],
+        "sales_per_receipt": breakdown["sales_per_receipt"],
+        "sales_per_item": breakdown["sales_per_item"],
         "total_register_count": total_register_count,
         "payment_modes": payment_modes,
         "payment_reconciliation": payment_reconciliation,

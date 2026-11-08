@@ -44,7 +44,20 @@ export function useClosingShift(eventBus: any) {
 			return;
 		}
 
-		const toNumber = (value: unknown) => {
+		const Z_SUMMARY_AVERAGES = ["sales_per_receipt", "items_per_receipt", "sales_per_item"];
+const normalizeZSummary = (raw: any) => {
+	const source = raw && typeof raw === "object" ? raw : {};
+	const out: Record<string, number | null> = {};
+	for (const [key, value] of Object.entries(source)) {
+		out[key] =
+			Z_SUMMARY_AVERAGES.includes(key) && (value === null || value === undefined)
+				? null
+				: Number(value) || 0;
+	}
+	return out;
+};
+
+const toNumber = (value: unknown) => {
 			const number = Number(value);
 			return Number.isFinite(number) ? number : 0;
 		};
@@ -235,6 +248,10 @@ export function useClosingShift(eventBus: any) {
 			customer_credit_issued: normalizeCredit(payload.customer_credit_issued),
 			customer_credit_redeemed: normalizeCredit(payload.customer_credit_redeemed),
 			same_shift_exchange_total: toNumber(payload.same_shift_exchange_total),
+			// The same figures the Z Report prints after closing (server:
+			// closing_processing/sales_breakdown.py). Averages stay null when
+			// there is nothing to divide by.
+			z_summary: normalizeZSummary(payload.z_summary),
 			cash_expected: {
 				mode_of_payment: payload.cash_expected?.mode_of_payment || "",
 				company_currency_total: toNumber(
