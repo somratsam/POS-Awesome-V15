@@ -266,14 +266,15 @@ describe("customersStore exchange credit after a return", () => {
 		setActivePinia(createPinia());
 	});
 
-	it("is taken once, for the customer of the return only", () => {
+	it("stays on for every Payments opening of that customer's sale, not used up", () => {
 		const store = useCustomersStore();
 		store.setSelectedCustomer("CUST-A");
 		store.armExchangeCredit("CUST-A");
 
-		expect(store.takeExchangeCredit("CUST-B")).toBe(false);
-		expect(store.takeExchangeCredit("CUST-A")).toBe(true);
-		expect(store.takeExchangeCredit("CUST-A")).toBe(false);
+		expect(store.isCreditOn("CUST-B")).toBe(false);
+		expect(store.isCreditOn("CUST-A")).toBe(true);
+		// Payments opened again (back to the cart, "Go back"...): still on.
+		expect(store.isCreditOn("CUST-A")).toBe(true);
 	});
 
 	it("is cleared when a different customer is selected", () => {
@@ -284,7 +285,7 @@ describe("customersStore exchange credit after a return", () => {
 		store.setSelectedCustomer("CUST-B");
 		store.setSelectedCustomer("CUST-A");
 
-		expect(store.takeExchangeCredit("CUST-A")).toBe(false);
+		expect(store.isCreditOn("CUST-A")).toBe(false);
 	});
 
 	it("survives re-selecting the same customer", () => {
@@ -292,7 +293,24 @@ describe("customersStore exchange credit after a return", () => {
 		store.armExchangeCredit("CUST-A");
 		store.setSelectedCustomer("CUST-A");
 
-		expect(store.takeExchangeCredit("CUST-A")).toBe(true);
+		expect(store.isCreditOn("CUST-A")).toBe(true);
+	});
+
+	it("follows the cashier's switch: on remembers it, off clears it, a sale ends it", () => {
+		const store = useCustomersStore();
+		store.setSelectedCustomer("CUST-A");
+		store.setCreditOn("CUST-A", true);
+		expect(store.isCreditOn("CUST-A")).toBe(true);
+		store.setCreditOn("CUST-A", false);
+		expect(store.isCreditOn("CUST-A")).toBe(false);
+
+		store.armExchangeCredit("CUST-A");
+		// Switching off for another customer doesn't touch it.
+		store.setCreditOn("CUST-B", false);
+		expect(store.isCreditOn("CUST-A")).toBe(true);
+		// Sale submitted.
+		store.setCreditOn(null, false);
+		expect(store.isCreditOn("CUST-A")).toBe(false);
 	});
 });
 

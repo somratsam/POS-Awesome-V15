@@ -95,7 +95,7 @@ class TestIsCreditNoteVoucher(unittest.TestCase):
 
 
 class TestRecordCreditNoteReprint(unittest.TestCase):
-    def _call(self, doc, cashier="cashier@x.test", locked=False, readable=True):
+    def _call(self, doc, cashier="cashier@x.test", locked=False, readable=True, balance_for=None, used=0):
         comments = []
 
         def active_cashier(pos_profile=None):
@@ -112,15 +112,20 @@ class TestRecordCreditNoteReprint(unittest.TestCase):
             "posawesome.posawesome.api.terminal_state.get_active_terminal_cashier", side_effect=active_cashier
         ), patch("frappe.db.get_value", return_value="Cash <b>Ier</b>"), patch.object(
             doc, "check_permission", side_effect=check_permission
-        ), patch.object(doc, "add_comment", side_effect=lambda kind, text: comments.append((kind, text))):
+        ), patch.object(doc, "add_comment", side_effect=lambda kind, text: comments.append((kind, text))), patch.object(
+            credit_voucher, "credit_voucher_balance_use", return_value=used
+        ):
             try:
-                return credit_voucher.record_credit_note_reprint("Sales Invoice", doc.name, "Test Pos"), comments
+                return (
+                    credit_voucher.record_credit_note_reprint("Sales Invoice", doc.name, "Test Pos", balance_for=balance_for),
+                    comments,
+                )
             finally:
                 self.comments = comments
 
     def test_voucher_reprint_records_the_pin_cashier(self):
         result, comments = self._call(_credit_return())
-        self.assertEqual(result, {"credit_note": True, "cashier": "cashier@x.test"})
+        self.assertEqual(result, {"credit_note": True, "balance": False, "cashier": "cashier@x.test"})
         self.assertEqual(comments[0], ("checked", "read"))
         [(kind, text)] = comments[1:]
         self.assertEqual(kind, "Info")
@@ -128,6 +133,26 @@ class TestRecordCreditNoteReprint(unittest.TestCase):
         self.assertIn("Test Pos", text)
         self.assertIn("DUPLICATE", text)
         self.assertNotIn("<b>", text)  # the full name is escaped
+
+    def test_balance_voucher_after_a_sale_is_recorded_with_the_sale_and_amounts(self):
+        doc = _credit_return(outstanding_amount=-5)
+        result, comments = self._call(doc, balance_for="ACC-SINV-2026-00330", used=45)
+        self.assertEqual(result, {"credit_note": True, "balance": True, "cashier": "cashier@x.test"})
+        [(kind, text)] = comments[1:]
+        self.assertIn("Balance voucher printed", text)
+        self.assertIn("ACC-SINV-2026-00330", text)
+        self.assertIn("cashier@x.test", text)
+        self.assertNotIn("DUPLICATE", text)
+
+    def test_balance_for_a_sale_that_did_not_use_it_is_an_ordinary_reprint(self):
+        result, comments = self._call(_credit_return(), balance_for="ACC-SINV-2026-00999", used=0)
+        self.assertEqual(result["balance"], False)
+        self.assertIn("DUPLICATE", comments[1][1])
+
+    def test_balance_voucher_on_a_locked_till_refuses(self):
+        with self.assertRaises(frappe.PermissionError):
+            self._call(_credit_return(outstanding_amount=-5), locked=True, balance_for="S", used=45)
+        self.assertEqual(self.comments, [("checked", "read")])
 
     def test_other_invoices_record_nothing_and_need_no_cashier(self):
         sale = _credit_return(is_return=0, grand_total=50, payments=[{"mode_of_payment": "Cash", "amount": 50}])
@@ -171,10 +196,10 @@ class TestVoucherTemplate(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _render(self, doc, reprint=False):
-        return frappe.render_template(
-            TEMPLATE, {"doc": doc, "print_settings": frappe._dict({"is_reprint": 1} if reprint else {})}
-        )
+    def _render(self, doc, reprint=False, settings=None):
+        print_settings = frappe._dict({"is_reprint": 1} if reprint else {})
+        print_settings.update(settings or {})
+        return frappe.render_template(TEMPLATE, {"doc": doc, "print_settings": print_settings})
 
     def test_valid_voucher(self):
         doc = _credit_return()
@@ -215,6 +240,43 @@ class TestVoucherTemplate(unittest.TestCase):
         text = _text(self._render(_credit_return(outstanding_amount=-39.3)))
         self.assertIn("**** OMR 39.300 ****", text)
         self.assertIn("Remaining from original OMR 139.300", text)
+
+    def _render_balance(self, doc, sale, used):
+        calls = []
+
+        def balance_use(credit_note, for_sale):
+            calls.append((credit_note, for_sale))
+            return used
+
+        html = frappe.render_template(
+            TEMPLATE.replace("credit_voucher_balance_use(", "balance_use("),
+            {"doc": doc, "print_settings": frappe._dict({"balance_for": sale}), "balance_use": balance_use},
+        )
+        return html, calls
+
+    def test_balance_voucher_shows_banner_use_and_rest_and_keeps_the_code(self):
+        doc = _credit_return(grand_total=-50, outstanding_amount=-5)
+        html, calls = self._render_balance(doc, "ACC-SINV-2026-00330", 45)
+        text = _text(html)
+        self.assertIn("*** BALANCE · رصيد ***", text)
+        self.assertIn("Used 45.000 on sale ACC-SINV-2026-00330. Remaining 5.000.", text)
+        self.assertIn("**** OMR 5.000 ****", text)
+        self.assertIn("[BARCODE]", text)
+        self.assertNotIn("DUPLICATE", text)
+        self.assertEqual(calls, [(doc.name, "ACC-SINV-2026-00330")])
+
+    def test_balance_settings_for_a_sale_that_did_not_use_it_print_the_plain_voucher(self):
+        html, _calls = self._render_balance(_credit_return(), "X", 0)
+        self.assertNotIn("BALANCE", _text(html))
+
+    def test_voucher_says_the_rest_stays_on_it(self):
+        text = _text(self._render(_credit_return()))
+        self.assertIn("Any amount not used stays on this voucher.", text)
+        self.assertNotIn("in one purchase of this value or more", text)
+
+    def test_balance_use_with_no_matching_journal_entry_is_zero(self):
+        self.assertEqual(credit_voucher.credit_voucher_balance_use("ACC-SINV-2026-99998", "ACC-SINV-2026-99999"), 0)
+        self.assertEqual(credit_voucher.credit_voucher_balance_use("", "X"), 0)
 
     def test_quantities_discount_and_escaping(self):
         doc = _credit_return(

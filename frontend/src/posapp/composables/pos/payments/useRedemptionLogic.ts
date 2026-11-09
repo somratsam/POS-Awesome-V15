@@ -29,6 +29,30 @@ export interface RedemptionLogicOptions {
 	creditVouchers?: Ref<Record<string, CreditVoucher>>;
 	// Also shown as a red line under the voucher box ("" clears it).
 	onCreditMessage?: (message: string) => void;
+	// Gift cards settle part of the sale before store credit, as on the
+	// server (creation.py _amount_due_before_credit).
+	getGiftCardTotal?: () => number;
+}
+
+// A credit note used in part on this sale: what is left stays on it (same
+// voucher, same code, same expiry) and a balance voucher prints after it.
+export interface CreditRemainder {
+	credit_origin: string;
+	voucher?: string;
+	total_credit: number;
+	used: number;
+	remaining: number;
+}
+
+// Order credit is used in: the credit that expires soonest first; advances
+// (no expiry) last. Same order as the server checks.
+export function creditUseOrder(rows: any[]): number[] {
+	const key = (row: any) =>
+		row?.type === "Invoice" && row?.expires_on ? `0|${String(row.expires_on)}` : "1|";
+	return (Array.isArray(rows) ? rows : [])
+		.map((row, index) => ({ index, key: key(row) }))
+		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index))
+		.map((entry) => entry.index);
 }
 
 export function useRedemptionLogic(options: RedemptionLogicOptions) {
@@ -51,9 +75,9 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 	// Backend validation (customer_credit_redemption_requested in the submit
 	// payload) mirrors this flag exactly.
 	const customer_credit_redemption_requested = ref(false);
-	// True while available credit exceeds what this invoice can absorb --
-	// redemption is held at 0 and a banner/toast explains why, without
-	// switching the toggle back off (see PaymentOptions.vue).
+	// Kept for callers that still reset it; credit is never blocked any more:
+	// credit bigger than the sale is used up to the sale amount and the rest
+	// stays on the credit note.
 	const customer_credit_blocked = ref(false);
 	// Vouchers scanned/typed for this customer, by credit note name.
 	const credit_vouchers = options.creditVouchers || ref<Record<string, CreditVoucher>>({});
@@ -69,22 +93,19 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 				)
 			: {};
 	};
-	// Sum the raw total_credit values first, then round once at the end --
-	// matching creation.py's _validate_customer_credit_redemption() exactly
-	// (real_total = sum(flt(row.total_credit) for row in ...), rounded only
-	// at the final comparison). Rounding each row before summing can disagree
-	// with the backend's own figure whenever a row's true value isn't already
-	// clean at currency precision (e.g. a return split evenly across two
-	// lines, 2.2055 + 2.2055 -- true sum 4.411, but 2.21 + 2.21 = 4.42).
-	// get_available_credit() never rounds outstanding_amount-derived rows at
-	// all, so this isn't a rare edge case -- see PROGRESS_NOTES.md.
+	// Raw sum, rounded once: only for the amounts quoted in messages about
+	// credit that can't be used (expired, needs a voucher).
 	const sumRawCredit = (rows: any[]) =>
 		(Array.isArray(rows) ? rows : []).reduce(
 			(total, row) => total + (Number(row?.total_credit) || 0),
 			0,
 		);
+	// Each credit note's balance rounded to the currency, then added: the same
+	// figures the allocation below and the server use, so what is shown as
+	// available is exactly what can be used.
 	const available_customer_credit = computed(() => {
-		return normalizeFloat(sumRawCredit(customer_credit_dict.value));
+		const rows = Array.isArray(customer_credit_dict.value) ? customer_credit_dict.value : [];
+		return normalizeFloat(rows.reduce((sum, row) => sum + normalizeFloat(row?.total_credit || 0), 0));
 	});
 
 	const available_points_amount = computed(() => {
@@ -115,7 +136,8 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 
 		const invoiceTotal = normalizeFloat(doc.rounded_total || doc.grand_total || 0);
 		const loyaltyCovered = normalizeFloat(unref(loyalty_amount) || 0);
-		return Math.max(normalizeFloat(invoiceTotal - loyaltyCovered), 0);
+		const giftCards = normalizeFloat(options.getGiftCardTotal?.() || 0);
+		return Math.max(normalizeFloat(invoiceTotal - loyaltyCovered - giftCards), 0);
 	};
 
 	// Seeds customer_credit_dict from a freshly-fetched set of credit sources
@@ -269,119 +291,82 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 		return parser(value, prec);
 	};
 
-	// The single place that decides, every time it runs, whether the current
-	// customer_credit_dict is eligible for full redemption -- re-derived
-	// fresh each call so it reacts correctly to the cart/loyalty total
-	// changing *after* credit was already applied or blocked (e.g. cashier
-	// leaves Payments to add more items, then comes back), not just at the
-	// moment the toggle was first switched on.
+	// The single place that fills each credit row's credit_to_redeem, re-run
+	// every time the rows, loyalty or the sale total change (e.g. the cashier
+	// leaves Payments to add items and comes back).
+	//
+	// A genuine "Use Customer Balance" redemption uses the credit up to what
+	// the sale still needs, soonest-expiring first (creditUseOrder); when the
+	// credit is worth more, the last credit note is used in part and the rest
+	// stays on it. The cashier can't type a smaller amount. The server checks
+	// the same rule (_validate_customer_credit_redemption).
 	const normalizeCustomerCreditAllocations = () => {
 		const rows = Array.isArray(customer_credit_dict.value) ? customer_credit_dict.value : [];
-		const available_total = normalizeFloat(sumRawCredit(rows));
+		const genuine = customer_credit_redemption_requested.value && rows.length > 0;
+		const maxRedeemable = getMaxRedeemableCustomerCredit();
 
-		// Only re-derive eligibility for rows that came from a genuine balance
-		// redemption (applyCreditRows already set one of these flags true).
-		// M-Pesa/phone payment never touch either flag, so their rows fall
-		// through to the legacy preserve-existing-value branch below,
-		// completely untouched by this policy.
-		const inGenuineRedemptionMode =
-			customer_credit_redemption_requested.value || customer_credit_blocked.value;
-
-		if (inGenuineRedemptionMode && rows.length) {
-			const max_redeemable = getMaxRedeemableCustomerCredit();
-			const eligible = normalizeFloat(available_total) <= normalizeFloat(max_redeemable);
-
-			if (eligible !== customer_credit_redemption_requested.value) {
-				customer_credit_redemption_requested.value = eligible;
-				customer_credit_blocked.value = !eligible;
-				if (!eligible && stores?.toastStore) {
-					const currency = unref(posProfile)?.currency || "";
-					stores.toastStore.show({
-						title: __(
-							"Customer must select items worth at least their available credit ({0}{1}) to redeem it.",
-							[normalizeFloat(available_total), currency ? ` ${currency}` : ""],
-						),
-						color: "error",
-					});
-				}
+		// Computed into a plain local array first and written to each reactive
+		// row once, at its final value: writing twice would re-trigger the deep
+		// watcher that calls this very function.
+		const computed_credit_to_redeem: number[] = rows.map(() => 0);
+		if (genuine) {
+			// Whole minor units (baisa), so 50.000 - 45.000 is exactly 5.000.
+			const prec = unref(currencyPrecision) ?? 2;
+			const factor = Math.pow(10, Math.max(prec, 0));
+			let remainingMinor = Math.round(maxRedeemable * factor);
+			for (const index of creditUseOrder(rows)) {
+				// Each balance rounded to the currency first, as the server does.
+				const availableMinor = Math.max(Math.round(normalizeFloat(rows[index]?.total_credit || 0) * factor), 0);
+				const useMinor = Math.min(availableMinor, Math.max(remainingMinor, 0));
+				computed_credit_to_redeem[index] = useMinor / factor;
+				remainingMinor -= useMinor;
 			}
-		}
-
-		let remainingAllowed = getMaxRedeemableCustomerCredit();
-		const isFullRedemption = customer_credit_redemption_requested.value && rows.length > 0;
-
-		// Compute each row's final credit_to_redeem into a plain local array
-		// first -- NOT onto the reactive row objects yet. row.credit_to_redeem
-		// is written exactly once per row, below, already at its final value.
-		// (An earlier version wrote the naive per-row-rounded value onto the
-		// row first and then patched one row a second time to fix the
-		// rounding-allocation mismatch below -- two real, different writes to
-		// the same reactive property, each one re-triggering the deep watcher
-		// on customer_credit_dict that calls this very function, so the
-		// "naive" and "patched" values kept overwriting each other forever.
-		// Computing locally and writing once avoids that entirely.)
-		const computed_credit_to_redeem: number[] = rows.map((row: any) => {
-			const available = Math.max(normalizeFloat(row?.total_credit || 0), 0);
-			let requested: number;
-			if (customer_credit_redemption_requested.value) {
-				// Eligible genuine redemption: full amount is mandatory --
-				// ignore any manually-typed-down value so it snaps back
-				// rather than allowing a partial redemption.
-				requested = available;
-			} else if (customer_credit_blocked.value) {
-				// Ineligible genuine redemption: nothing gets applied.
-				requested = 0;
-			} else {
-				// M-Pesa/phone payment (or no redemption in progress): keep
-				// whatever amount was already set on this row.
-				requested = Math.max(normalizeFloat(row?.credit_to_redeem || 0), 0);
-			}
-			const allowed = Math.min(requested, available, Math.max(remainingAllowed, 0));
-			const rounded = normalizeFloat(allowed);
-			remainingAllowed = normalizeFloat(Math.max(remainingAllowed - rounded, 0));
-			return rounded;
-		});
-
-		// Redeeming the full available balance must land on the exact same
-		// total the backend independently computes (available_total, above --
-		// which now matches _validate_customer_credit_redemption()'s
-		// real_total exactly, since both sum raw values and round once).
-		// Rounding each row separately, as the map above just did, can still
-		// under/overshoot that total even with correct rounding: "round each
-		// part, then sum" and "sum, then round once" are different operations
-		// whenever a row's raw value sits close to a rounding boundary (e.g.
-		// two rows of 2.2055 each round to 2.206 individually, summing to
-		// 4.412, while the true total 4.411 rounds cleanly on its own). Patch
-		// the discrepancy onto the last row with enough headroom to absorb it
-		// (not always literally the last row -- it may have no available
-		// credit of its own to give back) before ever writing to the row
-		// objects, so the backend's exact-match check on
-		// redeemed_customer_credit can never fail on rounding alone.
-		if (isFullRedemption) {
-			const allocatedSoFar = normalizeFloat(
-				computed_credit_to_redeem.reduce((sum, value) => sum + value, 0),
-			);
-			const delta = normalizeFloat(available_total - allocatedSoFar);
-			if (delta !== 0) {
-				for (let i = rows.length - 1; i >= 0; i -= 1) {
-					const rowAvailable = Math.max(normalizeFloat(rows[i]?.total_credit || 0), 0);
-					const adjusted = normalizeFloat((computed_credit_to_redeem[i] ?? 0) + delta);
-					if (adjusted >= 0 && adjusted <= rowAvailable) {
-						computed_credit_to_redeem[i] = adjusted;
-						break;
-					}
-				}
-			}
+		} else {
+			// M-Pesa/phone payment (or no redemption in progress): keep whatever
+			// amount was already set on each row, within its balance and the sale.
+			let remainingAllowed = maxRedeemable;
+			rows.forEach((row: any, index: number) => {
+				const available = Math.max(normalizeFloat(row?.total_credit || 0), 0);
+				const requested = Math.max(normalizeFloat(row?.credit_to_redeem || 0), 0);
+				const allowed = normalizeFloat(Math.min(requested, available, Math.max(remainingAllowed, 0)));
+				computed_credit_to_redeem[index] = allowed;
+				remainingAllowed = normalizeFloat(Math.max(remainingAllowed - allowed, 0));
+			});
 		}
 
 		rows.forEach((row: any, index: number) => {
-			row.credit_to_redeem = computed_credit_to_redeem[index];
+			if (row.credit_to_redeem !== computed_credit_to_redeem[index]) {
+				row.credit_to_redeem = computed_credit_to_redeem[index];
+			}
 		});
 
 		redeemed_customer_credit.value = normalizeFloat(
 			computed_credit_to_redeem.reduce((sum, value) => sum + value, 0),
 		);
 	};
+
+	// Credit notes used in part on this sale (normally one).
+	const credit_remainders = computed<CreditRemainder[]>(() => {
+		if (!customer_credit_redemption_requested.value) return [];
+		const rows = Array.isArray(customer_credit_dict.value) ? customer_credit_dict.value : [];
+		return rows
+			.filter((row: any) => row?.type === "Invoice")
+			.map((row: any) => {
+				const total = normalizeFloat(row?.total_credit || 0);
+				const used = normalizeFloat(row?.credit_to_redeem || 0);
+				return {
+					credit_origin: String(row.credit_origin || ""),
+					voucher: credit_vouchers.value[row.credit_origin]?.voucher,
+					total_credit: total,
+					used,
+					remaining: normalizeFloat(total - used),
+				};
+			})
+			.filter((row) => row.used > 0 && row.remaining > 0);
+	});
+	const credit_remainder_total = computed(() =>
+		normalizeFloat(credit_remainders.value.reduce((sum, row) => sum + row.remaining, 0)),
+	);
 
 	watch(redeemed_customer_credit, (newVal) => {
 		const limit = Math.min(
@@ -435,6 +420,8 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 		customer_credit_dict,
 		customer_credit_redemption_requested,
 		customer_credit_blocked,
+		credit_remainders,
+		credit_remainder_total,
 		credit_vouchers,
 		addCreditVoucher,
 		clearCreditVouchers,

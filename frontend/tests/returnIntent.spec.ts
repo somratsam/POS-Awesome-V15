@@ -171,7 +171,7 @@ describe("Payments.vue wiring", () => {
 		expect(shortcut).toContain("submit(null, false, true)");
 		expect(shortcut).toContain("submit(null, false, false)");
 		expect(shortcut).toContain("submit(null, false, print)");
-		expect(shortcut.match(/if \(returnIntentDialog\.value\) return;/g)).toHaveLength(2);
+		expect(shortcut.match(/if \(returnIntentDialog\.value \|\| creditRemainderDialog\.value\) return;/g)).toHaveLength(2);
 		expect(script).toMatch(/onSubmit: \(args, submitPrint\) => \{\s*submitInvoiceWrapper\(/);
 	});
 

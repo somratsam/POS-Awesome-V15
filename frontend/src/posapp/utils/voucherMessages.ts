@@ -90,24 +90,15 @@ export async function callWithoutDialog<T = any>(method: string, args: Record<st
 	throw new Error(serverMessageOf(body) || __("The server refused this (error {0}).", [response.status]));
 }
 
+/** Blue: information the cashier must notice, not a problem. */
+export function voucherInfoToast(title: string) {
+	return { title, color: "info", timeout: VOUCHER_ERROR_TIMEOUT, key: VOUCHER_MESSAGE_KEY };
+}
+
 /**
- * A voucher is used in full, so it can't be applied to a sale worth less
- * than it (the same rule as "Use Customer Balance"). saleAmount is what the
- * sale still needs after loyalty points. Returns the red message to show,
- * or "" when the voucher fits.
+ * Credit worth more than the sale: the rest stays on the credit note, and a
+ * credit note voucher prints for it after the sale. amount is formatted.
  */
-export function voucherTooBigForSale(
-	voucher: { voucher?: string; amount?: number } | null | undefined,
-	saleAmount: number,
-	formatAmount: (value: number) => string,
-): string {
-	const voucherAmount = Number(voucher?.amount || 0);
-	const sale = Math.max(Number(saleAmount || 0), 0);
-	// Compared in baisa, so 72.970 vs 72.97 isn't a difference.
-	if (Math.round(voucherAmount * 1000) <= Math.round(sale * 1000)) return "";
-	const amount = formatAmount(voucherAmount);
-	return __("Voucher {0} is for {1}. The sale must be at least {1} to use it. Add items, or keep the voucher for another visit.", [
-		voucher?.voucher || "",
-		amount,
-	]);
+export function creditRemainderMessage(amount: string): string {
+	return __("A credit note for {0} will be issued for the remaining credit.", [amount]);
 }

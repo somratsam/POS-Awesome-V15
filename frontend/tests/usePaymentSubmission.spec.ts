@@ -114,6 +114,41 @@ describe("usePaymentSubmission", () => {
 		);
 	});
 
+	describe("store credit worth more than the sale", () => {
+		const setup = (redeemed: number, cash = 0) => {
+			const invoiceDoc = ref<any>({
+				is_return: 0,
+				items: [{ item_code: "A", qty: 1, rate: 45 }],
+				payments: [{ mode_of_payment: "Cash", amount: cash, type: "Cash" }],
+				rounded_total: 45,
+				grand_total: 45,
+			});
+			return usePaymentSubmission({
+				invoiceDoc,
+				posProfile: ref({ posa_allow_partial_payment: 0 }),
+				stockSettings: ref({}),
+				invoiceType: ref("Invoice"),
+				formatFloat: (value) => Number(value || 0),
+				stores: { toastStore: { show: vi.fn() } },
+				diff_payment: ref(0) as any,
+				isCashback: ref(true),
+				customerCreditRedemptionRequested: ref(true),
+				customerCreditDict: ref([
+					{ type: "Invoice", credit_origin: "CN-1", total_credit: 50, credit_to_redeem: redeemed },
+				]),
+				redeemedCustomerCredit: ref(redeemed),
+			} as any);
+		};
+
+		it("accepts credit used up to the sale amount, the rest staying on the credit note", async () => {
+			await expect(setup(45).validateSubmission(true)).resolves.toBe(true);
+		});
+
+		it("refuses credit typed down to keep more of it, the gap paid in cash", async () => {
+			await expect(setup(40, 5).validateSubmission(true)).rejects.toThrow(/must cover the sale up to 45/);
+		});
+	});
+
 	it("allows warning-only below-cost policy and shows a warning", async () => {
 		const toastShow = vi.fn();
 		const invoiceDoc = ref<any>({

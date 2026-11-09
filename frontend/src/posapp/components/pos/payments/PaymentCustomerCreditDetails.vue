@@ -57,8 +57,9 @@ defineProps({
 		default: () => [],
 	},
 	// True while this dict represents a genuine "Use Customer Balance"
-	// redemption that must be applied in full -- the field becomes readonly
-	// rather than silently snapping back a typed-in value.
+	// redemption, whose amounts the POS sets (up to the sale, soonest-expiring
+	// first) -- the field becomes readonly rather than silently snapping back
+	// a typed-in value.
 	customerCreditRedemptionRequested: {
 		type: Boolean,
 		default: false,

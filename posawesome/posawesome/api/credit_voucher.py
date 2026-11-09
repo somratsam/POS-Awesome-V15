@@ -24,6 +24,12 @@ on a sale must be authorized one of three ways, checked at submit
   - a POS supervisor (lost voucher): signed in, or switched onto the till
     with their PIN -- the same rule as Edit Invoice and a below-cost sale.
 Credit held by a shared (generic) customer can't be spent at all.
+
+A credit note can be used in part: credit worth more than the sale covers
+the sale and the rest stays on the same credit note -- same code, same
+expiry. A balance voucher (the voucher with a BALANCE banner, "Used X on
+sale Y. Remaining Z.") prints after that sale; record_credit_note_reprint
+logs it with balance_for.
 """
 
 import hashlib
@@ -115,8 +121,30 @@ def credit_voucher_valid_until(doc):
     return get_customer_credit_expiry(doc.get("posting_date"))
 
 
+def credit_voucher_balance_use(credit_note, sale):
+    """Store credit of credit_note spent on sale (0 when none): the credit
+    redemption Journal Entries that move credit from the credit note to that
+    sale. The balance voucher prints "Used X on sale Y". Jinja method."""
+    if not credit_note or not sale:
+        return 0
+    used = frappe.db.sql(
+        """
+        select sum(debit_row.debit_in_account_currency)
+        from `tabJournal Entry Account` debit_row
+        inner join `tabJournal Entry Account` credit_row on credit_row.parent = debit_row.parent
+        inner join `tabJournal Entry` je on je.name = debit_row.parent
+        where je.docstatus = 1
+            and debit_row.reference_type = 'Sales Invoice' and debit_row.reference_name = %s
+            and credit_row.reference_type = 'Sales Invoice' and credit_row.reference_name = %s
+            and credit_row.credit_in_account_currency > 0
+        """,
+        (cstr(credit_note), cstr(sale)),
+    )
+    return flt(used[0][0]) if used and used[0][0] else 0
+
+
 @frappe.whitelist()
-def record_credit_note_reprint(doctype=None, name=None, pos_profile=None):
+def record_credit_note_reprint(doctype=None, name=None, pos_profile=None, balance_for=None):
     """Called by the POS before it reprints an invoice. For a credit note
     voucher, records a Comment naming the till's PIN-verified cashier (taken
     from the server's terminal state, not from the request) and returns
@@ -143,13 +171,32 @@ def record_credit_note_reprint(doctype=None, name=None, pos_profile=None):
     cashier = get_active_terminal_cashier(pos_profile)
     full_name = frappe.db.get_value("User", cashier, "full_name") or cashier
     till = cstr(pos_profile or doc.get("pos_profile"))
+    # Balance voucher: printed after a sale that used this credit note in
+    # part. Not a DUPLICATE: it shows the new balance and the sale.
+    used = credit_voucher_balance_use(name, balance_for) if balance_for else 0
+    if used > 0:
+        remaining = max(-flt(doc.get("outstanding_amount")), 0)
+        doc.add_comment(
+            "Info",
+            _(
+                "Balance voucher printed by {0} ({1}) at {2}: {3} used on sale {4}, {5} remaining."
+            ).format(
+                escape_html(full_name),
+                escape_html(cashier),
+                escape_html(till),
+                frappe.utils.fmt_money(used, doc.precision("grand_total"), currency=doc.get("currency")),
+                escape_html(cstr(balance_for)),
+                frappe.utils.fmt_money(remaining, doc.precision("grand_total"), currency=doc.get("currency")),
+            ),
+        )
+        return {"credit_note": True, "balance": True, "cashier": cashier}
     doc.add_comment(
         "Info",
         _("Credit note voucher reprinted (DUPLICATE) by {0} ({1}) at {2}.").format(
             escape_html(full_name), escape_html(cashier), escape_html(till)
         ),
     )
-    return {"credit_note": True, "cashier": cashier}
+    return {"credit_note": True, "balance": False, "cashier": cashier}
 
 
 def parse_voucher_code(text):

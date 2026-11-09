@@ -64,17 +64,6 @@
 							class="my-0 pa-1"
 							@update:model-value="handleRedeemCustomerCreditUpdate"
 						></v-switch>
-						<v-alert
-							v-if="redeemCustomerCredit && customerCreditBlocked"
-							type="error"
-							variant="tonal"
-							density="compact"
-							class="mx-1 mb-1"
-						>
-							{{ $frappe._("Customer must select items worth at least their available credit of") }}
-							{{ formatCurrency(availableCustomerCredit) }}
-							{{ $frappe._("to redeem it. It will be applied automatically once the cart reaches that amount.") }}
-						</v-alert>
 						<!-- Credit from an earlier visit needs the customer's
 						     voucher (or a POS supervisor on the till). -->
 						<div ref="voucherField" class="payment-options-panel__voucher mx-1" data-testid="credit-voucher-field">
@@ -112,6 +101,17 @@
 							>
 								<v-icon size="16" color="error">mdi-alert-circle</v-icon>
 								{{ voucherError }}
+							</div>
+							<!-- Credit worth more than the sale: a credit note is
+							     issued for the rest (blue: information, not a problem). -->
+							<div
+								v-else-if="voucherInfo"
+								class="payment-options-panel__voucher-info mt-1"
+								role="status"
+								data-testid="credit-voucher-info"
+							>
+								<v-icon size="16" color="info">mdi-information</v-icon>
+								{{ voucherInfo }}
 							</div>
 							<div
 								v-for="voucher in creditVouchers"
@@ -297,9 +297,9 @@ const props = defineProps({
 		type: String,
 		default: "",
 	},
-	customerCreditBlocked: {
-		type: Boolean,
-		default: false,
+	voucherInfo: {
+		type: String,
+		default: "",
 	},
 	formatCurrency: {
 		type: Function,
@@ -450,6 +450,13 @@ const writeOffEffectiveMax = computed(() => {
 	.payment-options-layout {
 		grid-template-columns: 1fr;
 	}
+}
+
+.payment-options-panel__voucher-info {
+	color: rgb(var(--v-theme-info));
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.4;
 }
 
 .payment-options-panel__voucher-error {

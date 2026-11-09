@@ -94,7 +94,11 @@ export function usePaymentPrinting(options: PaymentPrintingOptions) {
 		win.print();
 	};
 
-	const loadPrintPage = async (input: { doc?: any; doctype?: string; name?: string } = {}) => {
+	// settings: print settings JSON for the print format (e.g. a balance
+	// voucher's {"balance_for": sale}); passed to printview and to QZ.
+	const loadPrintPage = async (
+		input: { doc?: any; doctype?: string; name?: string; settings?: string } = {},
+	) => {
 		const { doc, profile, doctype, print_format, letter_head } = resolvePrintContext(input);
 		const debugPrint = isDebugPrintEnabled();
 		const offline = isOffline();
@@ -118,6 +122,8 @@ export function usePaymentPrinting(options: PaymentPrintingOptions) {
 			"&no_letterhead=" +
 			letter_head;
 
+		const settingsParam = input.settings ? "&settings=" + encodeURIComponent(input.settings) : "";
+		url += settingsParam;
 		url = appendDebugPrintParam(url, debugPrint);
 
 		const printOptions = {
@@ -160,6 +166,7 @@ export function usePaymentPrinting(options: PaymentPrintingOptions) {
 				newTabUrl += "&no_letterhead=0";
 			}
 
+			newTabUrl += settingsParam;
 			newTabUrl = appendDebugPrintParam(newTabUrl, debugPrint);
 			const printWindow = window.open(newTabUrl, "_blank");
 			if (printWindow) {
@@ -183,6 +190,7 @@ export function usePaymentPrinting(options: PaymentPrintingOptions) {
 						printFormat: print_format || "Standard",
 						letterhead: profile.letter_head || null,
 						noLetterhead: letter_head,
+						...(input.settings ? { settings: input.settings } : {}),
 					});
 					return;
 				} catch (error) {

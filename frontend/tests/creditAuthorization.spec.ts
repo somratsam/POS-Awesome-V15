@@ -21,8 +21,11 @@ import {
 	serverMessageOf,
 	voucherErrorToast,
 	voucherSuccessToast,
-	voucherTooBigForSale,
+	voucherInfoToast,
+	creditRemainderMessage,
+	VOUCHER_MESSAGE_KEY,
 } from "../src/posapp/utils/voucherMessages";
+import CreditRemainderDialog from "../src/posapp/components/pos/payments/CreditRemainderDialog.vue";
 
 const sameShift = { type: "Invoice", credit_origin: "CN-TODAY", total_credit: 40, pos_opening_shift: "SHIFT-1" };
 const oldNote = { type: "Invoice", credit_origin: "CN-OLD", total_credit: 25, pos_opening_shift: "SHIFT-0" };
@@ -367,7 +370,7 @@ describe("Payments.vue voucher wiring", () => {
 	it("forgets vouchers when the customer changes and after the sale", () => {
 		const watcher = script.slice(script.indexOf("watch(selectedCustomer"), script.indexOf("watch(selectedCustomer") + 300);
 		expect(watcher).toContain("clearCreditVouchers(newCustomer);");
-		expect(script).toMatch(/onSuccess: \(\) => \{\s*customer_credit_dict\.value = \[\];\s*clearCreditVouchers\(\);/);
+		expect(script).toMatch(/onSuccess: \(\) => \{[^}]*?customer_credit_dict\.value = \[\];\s*clearCreditVouchers\(\);/);
 	});
 });
 
@@ -427,35 +430,132 @@ describe("toasts sit above dialogs", () => {
 
 // A voucher is used in full: on a sale worth less than the voucher it is
 // refused up front in red, never announced in green and then not applied.
-describe("a voucher bigger than the sale", () => {
-	const fmt = (value: number) => value.toFixed(3);
+describe("credit worth more than the sale", () => {
+	const fmt = (value: number) => `${value.toFixed(3)} OMR`;
 	beforeEach(() => {
 		(globalThis as any).__ = (text: string, args: any[] = []) =>
 			text.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)] ?? ""));
+		(window as any).__ = (globalThis as any).__;
+		(window as any).frappe = { _: (value: string) => value };
 	});
 
-	it("is refused with the amount the sale must reach", () => {
-		expect(voucherTooBigForSale({ voucher: "C26-00316-63TA", amount: 72.97 }, 10, fmt)).toBe(
-			"Voucher C26-00316-63TA is for 72.970. The sale must be at least 72.970 to use it. Add items, or keep the voucher for another visit.",
+	it("says a credit note is issued for the rest, in blue, replacing the voucher message", () => {
+		expect(creditRemainderMessage("5.000 OMR")).toBe(
+			"A credit note for 5.000 OMR will be issued for the remaining credit.",
 		);
+		const toast = voucherInfoToast("x");
+		expect(toast.color).toBe("info");
+		expect(toast.key).toBe(VOUCHER_MESSAGE_KEY);
 	});
 
-	it("fits a sale of the same amount or more", () => {
-		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 72.97, fmt)).toBe("");
-		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 72.9700000001, fmt)).toBe("");
-		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 83, fmt)).toBe("");
-		expect(voucherTooBigForSale({ voucher: "V", amount: 72.97 }, 72.969, fmt)).not.toBe("");
-	});
-
-	it("Payments checks it before switching the customer or applying anything", () => {
+	it("a voucher bigger than the sale is no longer refused: Payments applies it and shows one blue message", () => {
 		const script = paymentsSource.slice(paymentsSource.indexOf("<script"));
-		const fn = script.slice(script.indexOf("const redeemCreditVoucher"), script.indexOf("const { loadPrintPage"));
-		const check = fn.indexOf("voucherTooBigForSale(voucher, saleAmount");
-		expect(check).toBeGreaterThan(0);
-		expect(fn).toMatch(/const saleAmount = flt\(doc\.rounded_total \|\| doc\.grand_total \|\| 0\) - flt\(loyalty_amount\.value \|\| 0\);/);
-		expect(fn.slice(check)).toMatch(/^voucherTooBigForSale[^\n]*\n\s*if \(tooBig\) \{\s*showVoucherError\(tooBig\);\s*return;\s*\}/);
-		for (const later of ["askVoucherCustomer(voucher)", "customersStore.setSelectedCustomer(voucher.customer)", "addCreditVoucher(voucher)", "voucherSuccessToast("]) {
-			expect(fn.indexOf(later), later).toBeGreaterThan(check);
-		}
+		const fn = script.slice(script.indexOf("const redeemCreditVoucher"), script.indexOf("let announcedRemainder"));
+		expect(fn).not.toContain("voucherTooBigForSale");
+		expect(fn).not.toContain("showVoucherError(tooBig)");
+		expect(fn).toContain("addCreditVoucher(voucher)");
+		expect(fn).toMatch(/voucherInfoToast\(`\$\{text\} \$\{creditRemainderMessage\(formatCurrency\(rest\)\)\}`\)/);
+	});
+
+	it("shows the figures as a blue line under the voucher box", () => {
+		const wrapper = mount(PaymentOptions, {
+			props: {
+				invoiceDoc: { is_return: 0 },
+				posProfile: { use_customer_credit: 1 },
+				formatCurrency: (v: number) => `OMR ${v}`,
+				voucherInfo: "Credit 50.000 · Sale 45.000 · Credit note for 5.000",
+			},
+			global: { components: { VRow: Box, VCol: Box, VSwitch: Box, VAlert: Box, VIcon: Box, VChip: Box, VTextField: InputStub, VBtn: BtnStub, VueDatePicker: Box } },
+		});
+		const line = wrapper.find('[data-testid="credit-voucher-info"]');
+		expect(line.exists()).toBe(true);
+		expect(line.text()).toContain("Credit note for 5.000");
+		// A voucher problem (red) takes the place of the information line.
+		const withError = mount(PaymentOptions, {
+			props: {
+				invoiceDoc: { is_return: 0 },
+				posProfile: { use_customer_credit: 1 },
+				formatCurrency: (v: number) => `OMR ${v}`,
+				voucherInfo: "Credit note for 5.000",
+				voucherError: "Wrong number",
+			},
+			global: { components: { VRow: Box, VCol: Box, VSwitch: Box, VAlert: Box, VIcon: Box, VChip: Box, VTextField: InputStub, VBtn: BtnStub, VueDatePicker: Box } },
+		});
+		expect(withError.find('[data-testid="credit-voucher-info"]').exists()).toBe(false);
+		expect(withError.find('[data-testid="credit-voucher-error"]').exists()).toBe(true);
+	});
+
+	it("the confirmation: a cross to close, Add more items, and Issue credit note and submit as the only submit", async () => {
+		const onConfirm = vi.fn();
+		const onBack = vi.fn();
+		const onClose = vi.fn();
+		const wrapper = mount(CreditRemainderDialog, {
+			props: { modelValue: true, credit: 50, sale: 45, remainder: 5, vouchers: "C26-00316-63TA", formatCurrency: fmt, onConfirm, onBack, onClose },
+			global: {
+				components: {
+					VDialog: { props: ["modelValue"], template: "<div class='dlg'><slot /></div>" },
+					VCard: Box,
+					VCardTitle: Box,
+					VCardText: Box,
+					VCardActions: Box,
+					VBtn: BtnStub,
+				},
+			},
+		});
+		expect(wrapper.text()).toContain("Issue a credit note for 5.000 OMR and submit?");
+		expect(wrapper.find('[data-testid="credit-remainder-figures"]').text()).toBe("Credit 50.000 OMR · Sale 45.000 OMR");
+		expect(wrapper.find('[data-testid="credit-remainder-text"]').text()).toContain("C26-00316-63TA");
+		expect(wrapper.find('[data-testid="credit-remainder-back"]').text()).toBe("Add more items");
+		expect(wrapper.text()).not.toContain("Go back");
+		expect(wrapper.find('[data-testid="credit-remainder-submit"]').text()).toBe("Issue credit note and submit");
+
+		await wrapper.find('[data-testid="credit-remainder-close"]').trigger("click");
+		await wrapper.find('[data-testid="credit-remainder-back"]').trigger("click");
+		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(onBack).toHaveBeenCalledTimes(1);
+		expect(onConfirm).not.toHaveBeenCalled();
+		await wrapper.find('[data-testid="credit-remainder-submit"]').trigger("click");
+		expect(onConfirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("Escape closes the box (stays on Payments); Add more items has the focus, so Enter never submits", async () => {
+		const source = (await import("../src/posapp/components/pos/payments/CreditRemainderDialog.vue?raw")).default as string;
+		expect(source).toContain(`@keydown.esc.stop.prevent="$emit('close')"`);
+		expect(source).toMatch(/ref="backButton"[\s\S]*?data-testid="credit-remainder-back"/);
+		expect(source).toMatch(/const el = backButton\.value\?\.\$el \|\| backButton\.value;\s*el\?\.focus\?\.\(\);/);
+		expect(source).toMatch(/icon="mdi-close"[\s\S]*?data-testid="credit-remainder-close"\s*@click="\$emit\('close'\)"/);
+	});
+
+	it("Payments applies the credit again every time it opens, and remembers the cashier's switch", () => {
+		const script = paymentsSource.slice(paymentsSource.indexOf("<script"));
+		// Not used up on the first opening (that lost the credit after "Go back").
+		expect(script).not.toContain("takeExchangeCredit");
+		expect(script).toMatch(/const exchange =\s*!doc\.is_return &&\s*pos_profile\.value\?\.use_customer_credit &&\s*customersStore\.isCreditOn\(doc\.customer\);/);
+		expect(paymentsSource).toContain('@update:redeem-customer-credit="setRedeemCustomerCredit"');
+		expect(script).toMatch(/customersStore\.setCreditOn\(invoice_doc\.value\?\.customer \|\| null, Boolean\(value\)\)/);
+		// A submitted sale ends it; a submitted return leaves the exchange on.
+		expect(script).toMatch(/if \(!submittedReturn\) customersStore\.setCreditOn\(null, false\);/);
+	});
+
+	it("Payments asks on every submit route, goes back to the cart on Go back, and prints the balance voucher after the sale", () => {
+		const script = paymentsSource.slice(paymentsSource.indexOf("<script"));
+		const wrapper = script.slice(script.indexOf("const submitInvoiceWrapper"), script.indexOf("// Keyboard Shortcuts"));
+		const ask = wrapper.indexOf("await askCreditRemainder()");
+		expect(ask).toBeGreaterThan(0);
+		expect(ask).toBeLessThan(wrapper.indexOf("await submitInvoice(print"));
+		// Add more items -> cart; cross / Escape -> stay; only "submit" goes on.
+		expect(wrapper).toMatch(/const choice = await askCreditRemainder\(\);\s*if \(choice === "back"\) \{\s*back_to_invoice\(\);\s*return;\s*\}\s*if \(choice !== "submit"\) return;/);
+		expect(paymentsSource).toContain(`@confirm="settleCreditRemainder('submit')"`);
+		expect(paymentsSource).toContain(`@back="settleCreditRemainder('back')"`);
+		expect(paymentsSource).toContain(`@close="settleCreditRemainder('close')"`);
+		expect(script).toMatch(/resolve\?\.\(choice \|\| "close"\);/);
+		expect(wrapper).toMatch(/onSubmitted: \(info\) => \{\s*void printBalanceVouchers\(remainderSlips, info\);/);
+		// Returns never ask.
+		expect(wrapper).toMatch(/const submittedReturn = Boolean\(invoice_doc\.value\?\.is_return\);\s*const remainderSlips = submittedReturn\s*\? \[\]/);
+		// The slip prints whether or not the receipt prints, after the receipt.
+		const printer = script.slice(script.indexOf("const printBalanceVouchers"), script.indexOf("// Credit worth more", script.indexOf("const printBalanceVouchers")) > 0 ? script.indexOf("// Credit worth more", script.indexOf("const printBalanceVouchers")) : undefined);
+		expect(printer).toContain("if (receiptPrintPromise) await receiptPrintPromise;");
+		expect(printer).toContain("recordBalanceVoucherPrint(");
+		expect(printer).toContain("balanceVoucherSettings(name)");
 	});
 });

@@ -112,6 +112,7 @@ jinja = {
         "posawesome.posawesome.api.credit_voucher.credit_voucher_label",
         "posawesome.posawesome.api.credit_voucher.is_credit_note_voucher",
         "posawesome.posawesome.api.credit_voucher.credit_voucher_valid_until",
+        "posawesome.posawesome.api.credit_voucher.credit_voucher_balance_use",
     ],
 }
 

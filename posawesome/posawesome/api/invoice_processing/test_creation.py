@@ -108,6 +108,7 @@ def _install_framework_stubs():
         pass
 
     frappe_utils.cint = lambda value: int(value or 0)
+    frappe_utils.cstr = lambda value: "" if value is None else str(value)
     frappe_utils.flt = lambda value, precision=None: round(float(value or 0), precision or 2)
     frappe_utils.getdate = lambda value: value
     frappe_utils.nowdate = lambda: "2026-03-21"
@@ -392,7 +393,7 @@ class TestCustomerCreditSources(unittest.TestCase):
             self._check(self._data(amount=41))
 
     def test_invoice_credit_without_full_redemption_flag_is_refused(self):
-        with self.assertRaisesRegex(Exception, "only be redeemed in full"):
+        with self.assertRaisesRegex(Exception, "only be redeemed through Use Customer Balance"):
             self._check(self._data(requested=0))
 
     def test_advance_rows_are_left_alone(self):
@@ -408,9 +409,11 @@ class TestCustomerCreditSources(unittest.TestCase):
 
 
 class TestCustomerCreditRedemption(unittest.TestCase):
-    """_validate_customer_credit_redemption: each credit row used in full,
-    the cashier chooses which rows, all must fit in the sale, and the chosen
-    rows go to authorization (voucher / same-shift exchange / supervisor)."""
+    """_validate_customer_credit_redemption: the credit picked covers the sale
+    up to what it still needs; when it is worth more, the credit note that
+    expires last is used in part and the rest stays on it. The cashier
+    chooses which rows, and the chosen rows go to authorization (voucher /
+    same-shift exchange / supervisor)."""
 
     @classmethod
     def setUpClass(cls):
@@ -423,11 +426,11 @@ class TestCustomerCreditRedemption(unittest.TestCase):
         # The framework stub has no frappe.utils.fmt_money (used in messages).
         utils = sys.modules["frappe.utils"]
         if not hasattr(utils, "fmt_money"):
-            utils.fmt_money = lambda value, currency=None: f"{value} {currency or ''}".strip()
+            utils.fmt_money = lambda value, precision=None, currency=None: f"{value} {currency or ''}".strip()
         self.creation.frappe.utils = utils
         self.available = [
-            {"type": "Invoice", "credit_origin": "CN-A", "total_credit": 40},
-            {"type": "Invoice", "credit_origin": "CN-B", "total_credit": 25},
+            {"type": "Invoice", "credit_origin": "CN-A", "total_credit": 40, "expires_on": "2027-01-10"},
+            {"type": "Invoice", "credit_origin": "CN-B", "total_credit": 25, "expires_on": "2027-02-20"},
         ]
         self.authorized = []
         self._original_authorize = self.creation._authorize_customer_credit
@@ -446,8 +449,8 @@ class TestCustomerCreditRedemption(unittest.TestCase):
         doc.precision = lambda _fieldname: 3
         return doc
 
-    def _data(self, rows, requested=1):
-        return {
+    def _data(self, rows, requested=1, gift_cards=0):
+        data = {
             "customer_credit_redemption_requested": requested,
             "redeemed_customer_credit": sum(amount for _origin, amount in rows),
             "customer_credit_dict": [
@@ -455,11 +458,14 @@ class TestCustomerCreditRedemption(unittest.TestCase):
                 for origin, amount in rows
             ],
         }
+        if gift_cards:
+            data["gift_card_redemptions"] = [{"gift_card_code": "G1", "amount": gift_cards}]
+        return data
 
-    def _check(self, data, total=100):
-        self.creation._validate_customer_credit_redemption(
-            self._doc(total), data, available_credit_rows=self.available
-        )
+    def _check(self, data, total=100, loyalty=0):
+        doc = self._doc(total)
+        doc.loyalty_amount = loyalty
+        self.creation._validate_customer_credit_redemption(doc, data, available_credit_rows=self.available)
 
     def test_one_credit_note_of_two_can_be_used_on_its_own(self):
         self._check(self._data([("CN-B", 25)]))
@@ -469,20 +475,46 @@ class TestCustomerCreditRedemption(unittest.TestCase):
         self._check(self._data([("CN-A", 40), ("CN-B", 25)]))
         self.assertEqual(self.authorized, [["CN-A", "CN-B"]])
 
-    def test_part_of_a_credit_note_is_refused(self):
-        with self.assertRaisesRegex(Exception, "must be used in full"):
+    def test_credit_typed_down_on_a_bigger_sale_is_refused(self):
+        # Sale 100, credit note 40: all 40 must be used, not 30 + cash.
+        with self.assertRaisesRegex(Exception, "must cover the sale up to"):
             self._check(self._data([("CN-A", 30)]))
         self.assertEqual(self.authorized, [])
 
-    def test_credit_bigger_than_the_sale_is_refused(self):
-        with self.assertRaisesRegex(Exception, "worth at least their available credit"):
-            self._check(self._data([("CN-A", 40), ("CN-B", 25)]), total=50)
+    def test_credit_bigger_than_the_sale_covers_it_and_the_rest_stays(self):
+        # Credit 50 (one note), sale 45: 45 used, 5 stays on CN-A.
+        self.available = [{"type": "Invoice", "credit_origin": "CN-A", "total_credit": 50, "expires_on": "2027-01-10"}]
+        self._check(self._data([("CN-A", 45)]), total=45)
+        self.assertEqual(self.authorized, [["CN-A"]])
+
+    def test_soonest_expiring_note_is_used_in_full_first(self):
+        # Sale 50: CN-A (expires first) 40 in full, CN-B 10 of 25.
+        self._check(self._data([("CN-A", 40), ("CN-B", 10)]), total=50)
+        self.assertEqual(self.authorized, [["CN-A", "CN-B"]])
+
+    def test_the_later_expiring_note_must_be_the_one_used_in_part(self):
+        with self.assertRaisesRegex(Exception, "expires later than CN-A"):
+            self._check(self._data([("CN-A", 25), ("CN-B", 25)]), total=50)
         self.assertEqual(self.authorized, [])
+
+    def test_two_notes_used_in_part_are_refused(self):
+        with self.assertRaisesRegex(Exception, "Only one credit note can be used in part"):
+            self._check(self._data([("CN-A", 20), ("CN-B", 10)]), total=30)
+
+    def test_credit_never_more_than_the_sale_needs(self):
+        with self.assertRaisesRegex(Exception, "more than its remaining balance|must cover the sale up to"):
+            self._check(self._data([("CN-A", 40)]), total=30)
+
+    def test_loyalty_points_and_gift_cards_come_off_first(self):
+        # Sale 50, loyalty 10, gift card 15: credit covers the other 25.
+        self._check(self._data([("CN-A", 25)], gift_cards=15), total=50, loyalty=10)
+        with self.assertRaisesRegex(Exception, "must cover the sale up to"):
+            self._check(self._data([("CN-A", 40)], gift_cards=15), total=50, loyalty=10)
 
     def test_redeemed_total_must_match_the_rows(self):
         data = self._data([("CN-A", 40)])
         data["redeemed_customer_credit"] = 39
-        with self.assertRaisesRegex(Exception, "must be applied"):
+        with self.assertRaisesRegex(Exception, "doesn't match the credit notes used"):
             self._check(data)
 
     def test_unknown_credit_note_is_refused(self):
@@ -507,6 +539,105 @@ class TestCustomerCreditRedemption(unittest.TestCase):
             doc, self._data([("CN-OTHER", 10)]), available_credit_rows=self.available
         )
         self.assertEqual(self.authorized, [])
+
+
+class TestChangeOnlyFromCash(unittest.TestCase):
+    """_validate_change_only_from_cash: store credit, a gift card or a card
+    can never come out of the drawer as change."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.frappe, cls.enqueue_calls = _install_framework_stubs()
+        _install_dependency_stubs()
+        _install_package_stubs()
+        cls.creation = _load_module()
+
+    def setUp(self):
+        utils = sys.modules["frappe.utils"]
+        if not hasattr(utils, "fmt_money"):
+            utils.fmt_money = lambda value, precision=None, currency=None: f"{value} {currency or ''}".strip()
+        self.creation.frappe.utils = utils
+
+    def _doc(self, total, payments, loyalty=0, write_off=0):
+        doc = FakeDoc(
+            doctype="Sales Invoice", is_return=0, grand_total=total, rounded_total=total, currency="OMR",
+            loyalty_amount=loyalty, write_off_amount=write_off,
+            payments=[FakeDoc(mode_of_payment=mode, amount=amount, type=kind) for mode, amount, kind in payments],
+        )
+        doc.precision = lambda _fieldname: 3
+        return doc
+
+    def _check(self, doc, **data):
+        self.creation._validate_change_only_from_cash(doc, data, {"posa_cash_mode_of_payment": "Cash"})
+
+    def test_gift_card_plus_credit_on_the_same_sale_is_refused(self):
+        # The staging case: sale 141.750, gift card 141.750 + credit 139.300,
+        # asking 139.300 back -- the credit would come out as money.
+        doc = self._doc(141.75, [("Gift Card", 141.75, "Cash")])
+        with self.assertRaisesRegex(Exception, "more than the sale still needs"):
+            self._check(
+                doc, redeemed_customer_credit=139.3, paid_change=139.3,
+                gift_card_redemptions=[{"gift_card_code": "G", "amount": 141.75}],
+            )
+
+    def test_change_without_the_cash_to_give_it_is_refused(self):
+        # The staging case: credit 139.300 + 2.450 cash on 141.750, 50 change.
+        doc = self._doc(141.75, [("Cash", 2.45, "Cash")])
+        with self.assertRaisesRegex(Exception, "more than the cash taken"):
+            self._check(doc, redeemed_customer_credit=139.3, paid_change=50)
+
+    def test_change_bigger_than_the_overpayment_is_refused(self):
+        doc = self._doc(45, [("Cash", 50, "Cash")])
+        with self.assertRaisesRegex(Exception, "more than the amount paid over the total"):
+            self._check(doc, paid_change=10)
+
+    def test_card_overpayment_is_refused(self):
+        doc = self._doc(45, [("Visa", 50, "Bank")])
+        with self.assertRaisesRegex(Exception, "change can only be given from cash"):
+            self._check(doc)
+
+    def test_ordinary_cash_change_passes(self):
+        self._check(self._doc(45, [("Cash", 50, "Cash")]), paid_change=5)
+
+    def test_credit_with_cash_change_from_the_cash_passes(self):
+        # Credit 139.300 + 22.450 cash on 141.750: 20 change, all from the cash.
+        self._check(self._doc(141.75, [("Cash", 22.45, "Cash")]), redeemed_customer_credit=139.3, paid_change=20)
+
+    def test_credit_covering_the_whole_sale_passes(self):
+        self._check(self._doc(45, [("Cash", 0, "Cash")]), redeemed_customer_credit=45)
+
+    def test_credit_change_the_profile_allows_comes_from_cash(self):
+        self._check(self._doc(45, [("Cash", 50, "Cash")]), credit_change=5)
+
+    def test_returns_are_skipped(self):
+        doc = self._doc(-45, [("Cash", -45, "Cash")])
+        doc.is_return = 1
+        self._check(doc, paid_change=99)
+
+
+class TestNoMoneyReturnIsNotPos(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.frappe, cls.enqueue_calls = _install_framework_stubs()
+        _install_dependency_stubs()
+        _install_package_stubs()
+        cls.creation = _load_module()
+
+    def _doc(self, is_return, amounts):
+        return FakeDoc(is_return=is_return, is_pos=1, payments=[FakeDoc(amount=a) for a in amounts])
+
+    def test_return_refunding_nothing_is_booked_off_pos(self):
+        doc = self._doc(1, [0, 0])
+        self.creation._mark_no_money_return_off_pos(doc)
+        self.assertEqual(doc.is_pos, 0)
+
+    def test_return_with_a_refund_and_sales_are_left_alone(self):
+        refund = self._doc(1, [-10, 0])
+        sale = self._doc(0, [0])
+        self.creation._mark_no_money_return_off_pos(refund)
+        self.creation._mark_no_money_return_off_pos(sale)
+        self.assertEqual(refund.is_pos, 1)
+        self.assertEqual(sale.is_pos, 1)
 
 
 class TestUpdateInvoiceReturnPayments(unittest.TestCase):
@@ -1831,6 +1962,12 @@ class TestManualPostingDatePreservation(unittest.TestCase):
         self.creation._process_post_submit_payments = (
             lambda doc, submitted_data, *args, **kwargs: post_submit_data.append(submitted_data)
         )
+        # These tests are about the Credit Change setting; this harness can't
+        # carry real payment rows (they become plain dicts), so the change-
+        # from-cash rule is tested on its own in TestChangeOnlyFromCash.
+        original_cash_rule = self.creation._validate_change_only_from_cash
+        self.creation._validate_change_only_from_cash = lambda *args, **kwargs: None
+        self.addCleanup(setattr, self.creation, "_validate_change_only_from_cash", original_cash_rule)
         payload = {
             "doctype": "Sales Invoice",
             "name": "ACC-SINV-CHANGE-0001",
