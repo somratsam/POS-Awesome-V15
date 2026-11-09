@@ -21,11 +21,15 @@ DISCOUNT_EPSILON = 0.0000001
 
 
 def get_cashier_discount_reasons():
-    """Enabled reasons offered at the till, in display order (boot data)."""
+    """Enabled reasons offered at the till, in display order (boot data).
+
+    offer_percentage is the reason's usual bank offer rate (0 = none), shown
+    to the cashier as a reminder only; nothing applies it to a line.
+    """
     return frappe.get_all(
         REASON_DOCTYPE,
         filters={"enabled": 1, "is_system": 0},
-        fields=["name", "display_order"],
+        fields=["name", "display_order", "offer_percentage"],
         order_by="display_order asc, name asc",
     )
 

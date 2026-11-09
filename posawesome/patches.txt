@@ -40,3 +40,4 @@ posawesome.patches.backfill_invoice_reporting_fields
 posawesome.patches.seed_pos_discount_reasons
 posawesome.patches.backfill_invoice_line_reporting_fields
 posawesome.patches.backfill_invoice_style_name_and_mrp_excl_vat
+posawesome.patches.set_pos_discount_reason_offer_rates
