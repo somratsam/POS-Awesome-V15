@@ -825,6 +825,36 @@ never fired in normal continued use, only on a session's very first edit.
 Fixed with one shared `isStayPutGridColumnKey()` check used by both
 interception sites. See `PROGRESS_NOTES.md` section 41.
 
+## `bench run-tests` on Staging Resets System Settings
+
+Running any backend test module on `staging.local` runs ERPNext's test
+bootstrap (`erpnext/tests/utils.py` `update_system_settings`), which saves
+System Settings with currency/float precision **2**, time zone
+**Asia/Kolkata** and language en -- and commits. Staging is Asia/Muscat with
+precision 3 like production. After the last backend module of a check,
+restore both with a real save of System Settings (or
+`frappe.db.set_default(...)`), clear the cache, and confirm
+`frappe.get_doc("Sales Invoice", x).precision("grand_total") == 3` -- a
+direct `tabSingles` update alone doesn't change `doc.precision()`, which
+reads the `tabDefaultValue` copy. Money tests on staging silently ran at 2
+decimals because of this (PROGRESS_NOTES section 87).
+
+## Payments Is Rebuilt Every Time It Opens -- State That Must Survive Belongs in a Store
+
+`Payments.vue` is recreated on each opening, and cashiers routinely go back
+to the cart and open it again. Anything set "once, on the first opening"
+is lost on the second: an exchange's "Use Customer Balance" was applied only
+on the first opening (`takeExchangeCredit` used it up), so going back to the
+cart turned an exchange into an ordinary card sale. Keep such state in a
+store and re-apply it on every opening (`customersStore.isCreditOn`, like
+the scanned vouchers), and test the reopen path, not just the first open.
+
+## Run Vitest With Node 24
+
+The shell's default Node here is 18; Vitest under it fails with ~120
+`webidl-conversions` errors and collects only part of the suite. Use
+`PATH=$HOME/.nvm/versions/node/v24.19.0/bin:$PATH npx vitest run`.
+
 ## Two Facts That Look Wrong From the Code Alone
 
 - `onscan.js` in `posawesome/posawesome/page/posapp/` is never loaded (Frappe loads only the page's own `posapp.js`), so `useScannerInput.ts`'s `onScan`/`triggerOnScan` path is dead code -- hardware scanners arrive as plain keystrokes into whatever element has focus (see `PROGRESS_NOTES.md` section 56).

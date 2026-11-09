@@ -8110,3 +8110,107 @@ confirmed), `8ea09e60`, `22e37d32`.
   POSA-OS-26-0000048/49 cancelled; posa-tmp-editprobe@ and
   posa-tmp-editsuper@test.invalid disabled (linked from cancelled docs, so
   not deleted).
+
+## 87. Store credit bigger than the sale: used up to the sale, the rest stays on the same credit note with a BALANCE voucher; change only from cash (2026-11-09, `60dc14d3` on `develop-swan`, `e2f9d460` on `stable`)
+
+**Business rule (approved).** No block when the credit is worth more than
+the sale: the customer buys the cheaper item and keeps the rest as credit.
+Applies to every credit note however it was issued (same-shift exchange,
+voucher, supervisor lost-voucher route). Store policy: no refunds.
+
+**What happens.**
+- Credit covers the sale up to what it still needs after loyalty points and
+  gift cards. The soonest-expiring credit is used first (advances last), so
+  only the one that expires last is used in part. The rest stays on the
+  **same credit note**: same voucher code (the code is an HMAC of the invoice
+  name, so it can't change), same expiry (3 months from the return; using
+  part of it does not restart the clock). No minimum remainder. The cashier
+  can't type the credit down.
+- A return of a sale paid partly by credit (case 2) already gave the whole
+  value back as one new credit note with a fresh 3-month expiry (kept, by
+  decision) -- verified on staging (89.600 = 73.000 credit + 16.600 Visa).
+- Mechanics: the existing credit Journal Entry simply carries the part
+  amount; the credit note's outstanding goes e.g. -50 -> -5. No new
+  documents or accounts. Z Report needs no change: Credit Redeemed is the
+  part used, Left as Store Credit the rest (staging: 139.300 issued, 73.000
+  redeemed, 66.300 left, takings 0).
+
+**Payments.** Blue message on top and a blue line under the voucher box
+("Credit X · Sale Y · Credit note for Z"; one message when a voucher is
+scanned, not green then another). On every submit key a confirmation
+`CreditRemainderDialog.vue` "Issue a credit note for Z and submit?":
+cross / Escape close it and stay on Payments, **Add more items** (focused, so
+Enter never submits) goes back to the cart, **Issue credit note and submit**
+is the only thing that submits. No option spends the whole credit.
+
+**BALANCE voucher.** After such a sale the credit note's voucher always
+prints (after the receipt when one prints, also on plain Submit and on the
+Exchange route): the normal voucher template with barcode and code, a
+"BALANCE · رصيد" banner and "Used X on sale Y. Remaining Z." (print setting
+`balance_for` = the sale; Jinja method `credit_voucher_balance_use` reads the
+redemption JE). Recorded first as a Comment with the PIN cashier
+(`record_credit_note_reprint(..., balance_for=)`); a later reprint is a
+normal DUPLICATE showing what is left. Voucher text now "Any amount not used
+stays on this voucher". The "Swan Sales Invoice" DB record is unchanged: the
+credit note goes through its existing voucher switch.
+
+**Bug found in the user's hand test, fixed before commit.** After an
+exchange, "Use Customer Balance" was switched on only the first time
+Payments opened (`takeExchangeCredit` used it up) and Payments is rebuilt on
+every opening, so Cancel Payment / back to the cart / "Add more items" and
+reopening lost the credit and the sale went through as a normal sale
+(staging 00326/00327: 48.600 left untouched, 27.500 paid by Visa).
+`customersStore.isCreditOn/setCreditOn` now keep it on for the customer's
+sale until switched off, the customer changes or the sale is submitted
+(also when the cashier switched it on by hand). A page reload mid-exchange
+still forgets it: the cashier switches it on (same-shift credit needs no
+voucher). Reproduced and re-tested in headless Chromium (staging 00328-00335).
+
+**Change only from cash (server, `_validate_change_only_from_cash`, on the
+saved draft).** Real gap before, verified on staging (rolled back): gift
+card 141.750 + credit 139.300 on a 141.750 sale was accepted with a 139.300
+payout; credit 139.300 with no cash and 50.000 change was paid out. Now:
+credit can't exceed what the sale still needs, change paid can't exceed the
+cash taken nor the overpayment, an overpayment must be covered by cash.
+Gift card was also counted twice in
+`_correct_outstanding_amount_for_pending_credit_change` -- fixed.
+
+**is_pos guard.** A return refunding no money is booked with `is_pos` 0 on
+the server too (`_mark_no_money_return_off_pos`); with `is_pos` 1 ERPNext
+posts the credit against the original sale while the return keeps its own
+negative outstanding, so `get_available_credit` listed it twice (seen in a
+rolled-back simulation; no real staging return affected).
+
+**Rounding.** POS and server add each credit note's balance rounded to the
+currency (no longer raw-sum-then-round), so the two always agree.
+
+**Staging System Settings (found, restored).** `bench run-tests` runs
+ERPNext's test bootstrap (`erpnext/tests/utils.py` `update_system_settings`),
+which saves System Settings with precision 2 and time zone Asia/Kolkata --
+why staging kept losing precision 3 after section 78. A direct
+`tabSingles` update is not enough (`doc.precision()` reads `tabDefaultValue`).
+Restored Asia/Muscat, 3/3; see CLAUDE.md.
+
+**Checks.** vitest 279/279 files, 1738/1738 (Node 24). Backend in isolation:
+test_credit_voucher 51/51, invoice_processing.test_creation 113 run with the
+same 8 pre-existing errors (identical names to the unchanged code),
+invoice_processing.test_payment 4/4, invoice_processing.test_utils 12/12,
+test_payments 12/12, test_offline_sync_invoices 4/4,
+test_return_generic_customer_credit_guard 8/8, test_stored_value 2/2,
+test_sales_breakdown 6/6, test_z_report 3/3; test_invoices,
+test_invoice_cancel_hooks, test_submitted_invoice_shift_security and
+test_pos_invoice_submission_ledger fail identically on the unchanged code.
+`bench build` exit 0; migrate twice exit 0 (no field). Staging end-to-end
+(rolled back) for part use, refusals, legit cash change, is_pos guard and
+the BALANCE print; user's hand tests all passed.
+
+**Cleanup note.** Disabling the throwaway cashier
+`posa-tmp-editprobe@test.invalid` also deleted all its 13 unsubmitted drafts
+(00273-00336 range), 11 of them left from earlier sessions; drafts only.
+
+**Production deploy** (site `site1.local`; from `08664307` to `e2f9d460`).
+No new field, no fixture, no print format record change. `hooks.py` has a
+new Jinja method: the cache must be cleared (migrate does it; `clear-cache`
+is enough). Rollback: `git checkout 08664307`, build, clear-cache, restart;
+part-used credit notes stay valid under the old code (used in full on a sale
+of at least what is left).
