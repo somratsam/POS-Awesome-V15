@@ -8214,3 +8214,64 @@ new Jinja method: the cache must be cleared (migrate does it; `clear-cache`
 is enough). Rollback: `git checkout 08664307`, build, clear-cache, restart;
 part-used credit notes stay valid under the old code (used in full on a sale
 of at least what is left).
+
+## 88. Bank offer rates in the discount reason prompt (2026-11-09, `d0a0d97d` on `develop-swan`, `6d96c985` on `stable`)
+
+**Request.** Staff type the Disc % first, then pick the reason, and mix up
+which bank goes with which rate. Reminder only: nothing fills in or changes a
+discount; the receipt and Z Report don't read the rate.
+
+**Built.**
+- POS Discount Reason **Offer %** (`offer_percentage`, Percent, after
+  `enabled`, in list view). Percent columns are NOT NULL in Frappe, so
+  "blank" is stored as 0 = no fixed rate. Validated 0-100; "Not recorded"
+  always 0. Sent to the till with the reason list (boot data,
+  `get_cashier_discount_reasons`), so offline tills use the list cached at
+  shift opening.
+- Patch `set_pos_discount_reason_offer_rates`: NBO Sadara 20, NBO Infinite /
+  Platinum 20, OAB Elite / Infinite 20, OAB Credit Card 10, Bank Dhofar Al
+  Riadah 20, Bank Muscat Private Banking 20, Bank Muscat Asalah 15, Bank
+  Muscat Al Jawhar 10, Bank Muscat Oman Air Platinum 10. Fills only a blank
+  rate on a reason with exactly that name (a manager's rate is kept, a
+  renamed/missing reason skipped), `update_modified=False`.
+- Cart: ⓘ next to the Disc % title (`DiscountOfferRates.vue`, only where the
+  store asks for reasons, not on returns): read-only list "NBO Sadara · 20%"
+  plus "No fixed rate: ...". It sits in the header cell's end padding: the
+  column is 80-108px and inside the content box it clipped "Disc %"
+  (measured in headless Chromium). Vuetify's hidden hover sort arrow is
+  rendered only while sorted by Disc % to make room; the button stops click
+  and Enter/Space so they don't sort.
+- Reason prompt: a rate chip on each reason; reasons matching the line's
+  Disc % first, with a green ✓ chip. Picking (or Enter on) a reason whose
+  rate differs shows an orange line "NBO Sadara is usually 20%; this line
+  has 15%." with **Change %** (focused) and **Keep**. Keep records the
+  reason with the % as typed. Change % records nothing and goes back to the
+  line's Disc % editor; the pick is kept client-side (`_discount_reason_hint`,
+  not in the payload allowlist) and preselected when the prompt reopens. On
+  the Pay check, Change % = back to the cart. "Also use for N other lines"
+  checks those lines' % too.
+
+**Checks.** vitest 280/280 files, 1759/1759 (Node 24); new
+`discountOfferRates.spec.ts` mutation-checked (warning gate, header key stop,
+other-lines check). Backend in isolation: test_discount_reasons 34/34,
+test_shifts 8/8, test_offline_sync_invoices 4/4, test_print_assets 4/4,
+test_z_report_line_discounts 2/2, test_z_report 3/3. `bench build` exit 0;
+migrate twice exit 0 (patch logged once, nothing changed on the second run).
+System Settings verified 3/3, Asia/Muscat afterwards. Live (headless Chromium,
+throwaway cashier deleted afterwards, no invoice or draft created): header at
+1100-1920px, rates list, chips/order for 15% and 20%, Change % -> editor ->
+20 -> NBO Sadara preselected -> Enter, Keep at 390px. The cart table's
+horizontal overflow at <=1440px (113px at 1100) is the same with and without
+the ⓘ -- pre-existing, not touched.
+
+**Hand tests.** All of the user's hand tests on staging passed.
+
+**Production deploy** (site `site1.local`; from `e2f9d460` to `6d96c985`).
+Backup; pull `stable`; `bench --site site1.local migrate` once (adds Offer %
+and runs `set_pos_discount_reason_offer_rates`, which fills the nine rates);
+`bench build --app posawesome`; `bench restart`. Check the Offer % column in
+the POS Discount Reason list: a reason renamed on production is skipped by
+the patch and gets its rate by hand in Desk. Tills see the rates on their next
+online page load. No fixture, no print format, no receipt change.
+Rollback: `git checkout e2f9d460`, build, restart; the extra column stays and
+is ignored by the old code.
