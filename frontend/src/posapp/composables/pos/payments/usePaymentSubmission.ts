@@ -91,6 +91,14 @@ export interface SubmissionCallbacks {
 	// The cashier's choice on a no-money return (see utils/returnIntent).
 	// A credit note ends the visit, so no exchange sale is set up after it.
 	returnIntent?: ReturnIntent | null;
+	// The sale was submitted online (after the receipt print was started).
+	// Payments prints the balance voucher of a credit note used in part.
+	onSubmitted?: (_info: {
+		name: string;
+		doctype: string;
+		waitForPostSubmitPayments: boolean;
+		waitForInvoiceProcessing: boolean;
+	}) => void;
 }
 
 
@@ -824,26 +832,32 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 		}
 
 		// Defense-in-depth client-side mirror of the backend's
-		// _validate_customer_credit_redemption: the reactive logic in
-		// useRedemptionLogic.ts should already keep this true, but a genuine
-		// balance redemption must always redeem its full available amount,
-		// never less. The backend re-verifies independently regardless.
+		// _validate_customer_credit_redemption: useRedemptionLogic.ts already
+		// keeps this true. A genuine balance redemption uses the credit up to
+		// what the sale still needs after loyalty points and gift cards --
+		// never less (the rest of a credit note stays on it), never more
+		// (credit is never change). Each balance is rounded to the currency
+		// before adding, as the server does.
 		if (unref(options.customerCreditRedemptionRequested) && customerCreditDict?.value?.length) {
-			// Sum raw, round once -- matching the backend's own
-			// _validate_customer_credit_redemption() exactly (and
-			// useRedemptionLogic.ts's available_customer_credit, fixed the
-			// same way). Rounding each row before summing can disagree with
-			// the backend's figure whenever a row's true value isn't already
-			// clean at currency precision.
-			const rawTotal = customerCreditDict.value.reduce(
-				(total: number, row: any) => total + (Number(row?.total_credit) || 0),
+			const available_total = formatFloat(
+				customerCreditDict.value.reduce(
+					(total: number, row: any) => total + formatFloat(row?.total_credit || 0, prec),
+					0,
+				),
+				prec,
+			);
+			const giftCardsApplied = (Array.isArray(options.giftCardRedemptions?.value)
+				? options.giftCardRedemptions?.value || []
+				: []
+			).reduce((sum: number, row: any) => sum + formatFloat(row?.amount || 0, prec), 0);
+			const due = Math.max(
+				formatFloat(invoice_total - formatFloat(getLoyaltyRedemptionForSubmission(doc).amount || 0, prec) - giftCardsApplied, prec),
 				0,
 			);
-			const available_total = formatFloat(rawTotal, prec);
-			const expected = formatFloat(Math.min(available_total, invoice_total), prec);
+			const expected = formatFloat(Math.min(available_total, due), prec);
 			if (formatFloat(unref(redeemedCustomerCredit) || 0, prec) !== expected) {
 				throw new Error(
-					__("The full available customer credit ({0}) must be applied.", [expected]),
+					__("Store credit must cover the sale up to {0}.", [expected]),
 				);
 			}
 		}
@@ -998,6 +1012,7 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			onPrint,
 			onFinishNavigation,
 			onScheduleBackgroundCheck,
+			onSubmitted,
 		} = callbacks;
 
 		if (doc.is_return) {
@@ -1290,6 +1305,15 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 				!hasPostSubmitPaymentWork
 			) {
 				onPrint(submittedDocument, {
+					name: responseInvoiceName,
+					doctype: submittedDoctype,
+					waitForPostSubmitPayments: hasPostSubmitPaymentWork,
+					waitForInvoiceProcessing,
+				});
+			}
+
+			if (onSubmitted && responseInvoiceName) {
+				onSubmitted({
 					name: responseInvoiceName,
 					doctype: submittedDoctype,
 					waitForPostSubmitPayments: hasPostSubmitPaymentWork,

@@ -286,20 +286,31 @@ export const useCustomersStore = defineStore("customers", () => {
 		}
 	}
 
-	// Set right after a store-credit return is submitted: the next sale for
-	// that same customer opens Payments with "Use Customer Balance" already
-	// on. Cleared as soon as a different customer is selected, and used at
-	// most once (takeExchangeCredit), so a cashier switching it off stays off.
+	// "Use Customer Balance" stays on for this customer's sale every time
+	// Payments opens -- Payments is rebuilt each time, and the cashier often
+	// goes back to the cart (to add an item, or "Add more items" on the credit note
+	// question) and opens it again. Set right after a store-credit return is
+	// submitted (the exchange), or when the cashier switches it on; cleared
+	// when the cashier switches it off, a different customer is selected, or
+	// the sale is submitted.
 	const exchangeCreditCustomer = ref<string | null>(null);
 
 	function armExchangeCredit(name: string | null) {
 		exchangeCreditCustomer.value = name || null;
 	}
 
-	function takeExchangeCredit(name: string | null | undefined) {
-		if (!name || exchangeCreditCustomer.value !== name) return false;
-		exchangeCreditCustomer.value = null;
-		return true;
+	/** True while credit stays on for this customer's sale (not used up). */
+	function isCreditOn(name: string | null | undefined) {
+		return Boolean(name) && exchangeCreditCustomer.value === name;
+	}
+
+	/** The cashier switched "Use Customer Balance" on or off for this customer. */
+	function setCreditOn(name: string | null | undefined, on: boolean) {
+		if (on && name) {
+			exchangeCreditCustomer.value = name;
+		} else if (!name || exchangeCreditCustomer.value === name) {
+			exchangeCreditCustomer.value = null;
+		}
 	}
 
 	function upsertCustomerSummaryFromInfo(info: CustomerInfo) {
@@ -1142,7 +1153,8 @@ export const useCustomersStore = defineStore("customers", () => {
 		setSelectedCustomer,
 		exchangeCreditCustomer,
 		armExchangeCredit,
-		takeExchangeCredit,
+		isCreditOn,
+		setCreditOn,
 		creditVouchers,
 		addCreditVoucher,
 		keepCreditVouchersFor,

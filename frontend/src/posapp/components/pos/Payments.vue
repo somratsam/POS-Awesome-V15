@@ -203,9 +203,9 @@
 							:available-customer-credit="available_customer_credit"
 							:redeemed-customer-credit="redeemed_customer_credit"
 							:customer-credit-sources="customer_credit_dict.length"
-							:customer-credit-blocked="customer_credit_blocked"
 							:credit-vouchers="Object.values(credit_vouchers)"
 							:voucher-error="voucherError"
+							:voucher-info="creditRemainderLine"
 							:format-currency="formatCurrency"
 							@update:is-write-off-change="is_write_off_change = $event"
 							@update:is-credit-sale="is_credit_sale = $event"
@@ -220,7 +220,7 @@
 							@update:credit-due-days="credit_due_days = $event"
 							@update:write-off-amount="handleWriteOffAmountUpdate"
 							@apply-due-preset="applyDuePreset"
-							@update:redeem-customer-credit="redeem_customer_credit = $event"
+							@update:redeem-customer-credit="setRedeemCustomerCredit"
 							@get-available-credit="get_available_credit"
 							@redeem-voucher="redeemCreditVoucher"
 							@clear-voucher-error="voucherError = ''"
@@ -289,6 +289,17 @@
 			:model-value="returnIntentDialog"
 			@choose="settleReturnIntent"
 			@cancel="settleReturnIntent(null)"
+		/>
+		<CreditRemainderDialog
+			:model-value="creditRemainderDialog"
+			:credit="creditRemainderFigures.credit"
+			:sale="creditRemainderFigures.sale"
+			:remainder="creditRemainderFigures.remainder"
+			:vouchers="creditRemainderFigures.vouchers"
+			:format-currency="formatCurrency"
+			@confirm="settleCreditRemainder('submit')"
+			@back="settleCreditRemainder('back')"
+			@close="settleCreditRemainder('close')"
 		/>
 		<!-- Dialogs Section (Custom Days, Phone Payment) -->
 		<PaymentDialogs
@@ -394,14 +405,21 @@ import PaymentOptions from "./payments/PaymentOptions.vue";
 import PaymentSelectionFields from "./payments/PaymentSelectionFields.vue";
 import PaymentDialogs from "./payments/PaymentDialogs.vue";
 import ReturnIntentDialog from "./payments/ReturnIntentDialog.vue";
+import CreditRemainderDialog from "./payments/CreditRemainderDialog.vue";
 import CreditVoucherCustomerDialog from "./payments/CreditVoucherCustomerDialog.vue";
 import {
 	callWithoutDialog,
 	voucherErrorToast,
 	voucherSuccessToast,
-	voucherTooBigForSale,
+	voucherInfoToast,
+	creditRemainderMessage,
 } from "../../utils/voucherMessages";
 import { isNoMoneyReturn, resolveReturnSubmit } from "../../utils/returnIntent";
+import {
+	balanceVoucherSettings,
+	recordBalanceVoucherPrint,
+	REPRINT_SETTINGS,
+} from "../../utils/creditNoteReprint";
 
 const props = defineProps({
 	dialogMode: {
@@ -670,6 +688,8 @@ const {
 	customer_credit_dict,
 	customer_credit_redemption_requested,
 	customer_credit_blocked,
+	credit_remainders,
+	credit_remainder_total,
 	credit_vouchers,
 	addCreditVoucher,
 	clearCreditVouchers,
@@ -692,6 +712,7 @@ const {
 	onCreditMessage: (message) => {
 		voucherError.value = message;
 	},
+	getGiftCardTotal: () => Number(giftCardAppliedAmount?.value || 0),
 });
 
 // Credit note voucher scanned or typed in Payments: the server checks it
@@ -748,16 +769,6 @@ const redeemCreditVoucher = async (code) => {
 	}
 	if (!voucher?.credit_origin) return;
 
-	// Used in full only: on a smaller sale it is refused here, before the
-	// customer is switched or anything is applied.
-	const doc = invoice_doc.value || {};
-	const saleAmount = flt(doc.rounded_total || doc.grand_total || 0) - flt(loyalty_amount.value || 0);
-	const tooBig = voucherTooBigForSale(voucher, saleAmount, (value) => formatCurrency(value));
-	if (tooBig) {
-		showVoucherError(tooBig);
-		return;
-	}
-
 	const current = invoice_doc.value?.customer || "";
 	if (current !== voucher.customer) {
 		const isDefaultCustomer = !current || current === pos_profile.value?.customer;
@@ -783,9 +794,138 @@ const redeemCreditVoucher = async (code) => {
 	const applied = voucher.approved_by
 		? __("Credit note {0} ({1}) approved by a supervisor for {2}.", [voucher.voucher, amount, who])
 		: __("Voucher {0} ({1}) will be used for {2}.", [voucher.voucher, amount, who]);
-	toastStore.show(
-		voucherSuccessToast(backOnInvoice ? `${applied} ${__("Press PAY to continue.")}` : applied),
+	// A voucher worth more than the sale: one blue message saying a credit
+	// note is issued for the rest (not a green one followed by another).
+	const doc = invoice_doc.value || {};
+	const saleAmount = Math.max(
+		flt(doc.rounded_total || doc.grand_total || 0) - flt(loyalty_amount.value || 0) - flt(giftCardAppliedAmount.value || 0),
+		0,
 	);
+	const rest = flt(flt(voucher.amount || 0) - saleAmount, currency_precision.value);
+	const text = backOnInvoice ? `${applied} ${__("Press PAY to continue.")}` : applied;
+	if (!backOnInvoice && rest > 0) {
+		announcedRemainder = rest;
+		toastStore.show(voucherInfoToast(`${text} ${creditRemainderMessage(formatCurrency(rest))}`));
+	} else {
+		toastStore.show(voucherSuccessToast(text));
+	}
+};
+
+// Credit worth more than the sale: what is left stays on the credit note and
+// a balance voucher prints after the sale. The cashier is told before
+// submitting -- a blue message on top and a line under the voucher box --
+// and asked again on submit (CreditRemainderDialog).
+let announcedRemainder = 0;
+// Credit = the credit notes used on this sale (what they were worth), Sale =
+// what that credit pays for, and the credit note for the rest.
+const creditRemainderFigures = computed(() => {
+	const remainder = flt(credit_remainder_total.value || 0, currency_precision.value);
+	const sale = flt(redeemed_customer_credit.value || 0, currency_precision.value);
+	return {
+		credit: flt(sale + remainder, currency_precision.value),
+		sale,
+		remainder,
+		vouchers: credit_remainders.value
+			.map((row) => row.voucher)
+			.filter(Boolean)
+			.join(", "),
+	};
+});
+const creditRemainderLine = computed(() => {
+	const { credit, sale, remainder } = creditRemainderFigures.value;
+	if (!(remainder > 0)) return "";
+	return `${__("Credit")} ${formatCurrency(credit)} · ${__("Sale")} ${formatCurrency(sale)} · ${__("Credit note for {0}", [
+		formatCurrency(remainder),
+	])}`;
+});
+watch(credit_remainder_total, (rest) => {
+	const value = flt(rest || 0, currency_precision.value);
+	if (!(value > 0)) {
+		announcedRemainder = 0;
+		return;
+	}
+	if (value === announcedRemainder || !isPaymentOpen.value) return;
+	announcedRemainder = value;
+	toastStore.show(voucherInfoToast(creditRemainderMessage(formatCurrency(value))));
+});
+// The cashier's "Use Customer Balance" switch: remembered for this
+// customer's sale, so reopening Payments keeps it (customersStore.isCreditOn).
+const setRedeemCustomerCredit = (value) => {
+	redeem_customer_credit.value = Boolean(value);
+	if (!invoice_doc.value?.is_return) {
+		customersStore.setCreditOn(invoice_doc.value?.customer || null, Boolean(value));
+	}
+};
+const creditRemainderDialog = ref(false);
+let resolveCreditRemainder = null;
+const askCreditRemainder = () =>
+	new Promise((resolve) => {
+		resolveCreditRemainder = resolve;
+		creditRemainderDialog.value = true;
+	});
+// "submit" | "back" (Add more items: to the cart) | "close" (cross or
+// Escape: stay on Payments). Only "submit" submits.
+const settleCreditRemainder = (choice) => {
+	creditRemainderDialog.value = false;
+	const resolve = resolveCreditRemainder;
+	resolveCreditRemainder = null;
+	resolve?.(choice || "close");
+};
+
+// The receipt's print (started by submit) -- the balance voucher prints after it.
+let receiptPrintPromise = null;
+const trackReceiptPrint = (promise) => {
+	receiptPrintPromise = Promise.resolve(promise).catch(() => {});
+	return promise;
+};
+// After a sale that used a credit note in part, its balance voucher always
+// prints (it is the customer's only paper for the rest), right after the
+// receipt when one prints. Server-recorded first, like a reprint.
+const printBalanceVouchers = async (slips, { name, doctype, waitForPostSubmitPayments, waitForInvoiceProcessing }) => {
+	if (!slips.length || !name || isOffline()) return;
+	const profileName = pos_profile.value?.name || null;
+	// Let the receipt's own print start first (it may be scheduled just after).
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	try {
+		if (receiptPrintPromise) await receiptPrintPromise;
+		if (waitForInvoiceProcessing) await waitForInvoiceSubmission(name, doctype);
+		if (waitForPostSubmitPayments) await socketStore.waitForPostSubmitPayments(name, 45000);
+	} catch (error) {
+		console.warn("Balance voucher not printed", error);
+		toastStore.show(
+			voucherErrorToast(
+				__("The balance voucher didn't print. Reprint credit note {0} from Invoice Management.", [
+					slips.map((slip) => slip.credit_origin).join(", "),
+				]),
+			),
+		);
+		return;
+	}
+	for (const slip of slips) {
+		try {
+			const recorded = await recordBalanceVoucherPrint({
+				name: slip.credit_origin,
+				sale: name,
+				posProfile: profileName,
+			});
+			await loadPrintPage({
+				doctype: "Sales Invoice",
+				name: slip.credit_origin,
+				doc: { name: slip.credit_origin, doctype: "Sales Invoice" },
+				settings: recorded.balance ? balanceVoucherSettings(name) : REPRINT_SETTINGS,
+			});
+		} catch (error) {
+			console.warn("Balance voucher not printed", error);
+			toastStore.show(
+				voucherErrorToast(
+					error?.message ||
+						__("The balance voucher didn't print. Reprint credit note {0} from Invoice Management.", [
+							slip.credit_origin,
+						]),
+				),
+			);
+		}
+	}
 };
 
 const { loadPrintPage, printOfflineInvoice } = usePaymentPrinting({
@@ -850,11 +990,13 @@ const {
 					} else if (isOffline()) {
 						printOfflineInvoice(doc);
 					} else {
-						loadPrintPage({
-							doc,
-							doctype: printOptions.doctype,
-							name: printOptions.name,
-						});
+						trackReceiptPrint(
+							loadPrintPage({
+								doc,
+								doctype: printOptions.doctype,
+								name: printOptions.name,
+							}),
+						);
 					}
 				}
 			},
@@ -1943,7 +2085,17 @@ const waitForInvoiceSubmission = async (invoiceName, doctype) => {
 	}
 };
 
-const runDeferredPrintWorkflow = async ({
+const runDeferredPrintWorkflow = ({
+	name,
+	doctype,
+	waitForPostSubmitPayments = false,
+	waitForInvoiceProcessing = false,
+}) =>
+	trackReceiptPrint(
+		deferredPrint({ name, doctype, waitForPostSubmitPayments, waitForInvoiceProcessing }),
+	);
+
+const deferredPrint = async ({
 	name,
 	doctype,
 	waitForPostSubmitPayments = false,
@@ -2068,7 +2220,7 @@ const submitReturnAs = (intent) =>
 	submitInvoiceWrapper(intent === "credit_note", undefined, { returnIntent: intent });
 
 const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {}) => {
-	if (submissionInFlight.value || returnIntentDialog.value) {
+	if (submissionInFlight.value || returnIntentDialog.value || creditRemainderDialog.value) {
 		return;
 	}
 
@@ -2091,8 +2243,26 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 		returnIntent = decision.intent;
 	}
 
+	// Credit worth more than the sale: ask before submitting (every submit
+	// route arrives here). "Add more items" returns to the cart; the cross or Escape stays on Payments; credit kept either way.
+	const submittedReturn = Boolean(invoice_doc.value?.is_return);
+	const remainderSlips = submittedReturn
+		? []
+		: credit_remainders.value.map((row) => ({ ...row }));
+	if (remainderSlips.length) {
+		if (creditRemainderDialog.value) return;
+		const choice = await askCreditRemainder();
+		if (choice === "back") {
+			back_to_invoice();
+			return;
+		}
+		if (choice !== "submit") return;
+		if (submissionInFlight.value) return;
+	}
+
 	submissionInFlight.value = true;
 	loading.value = true;
+	receiptPrintPromise = null;
 	try {
 		await validateSubmission(options.paymentReceived || false);
 		await submitInvoice(print, {
@@ -2108,15 +2278,20 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 					} else if (isOffline()) {
 						printOfflineInvoice(doc);
 					} else {
-						loadPrintPage({
-							doc,
-							doctype: printOptions.doctype,
-							name: printOptions.name,
-						});
+						trackReceiptPrint(
+							loadPrintPage({
+								doc,
+								doctype: printOptions.doctype,
+								name: printOptions.name,
+							}),
+						);
 					}
 				}
 			},
 			onSuccess: () => {
+				// A sale ends the credit for it; after a return the exchange has
+				// just switched it on for the next sale (usePaymentSubmission).
+				if (!submittedReturn) customersStore.setCreditOn(null, false);
 				customer_credit_dict.value = [];
 				clearCreditVouchers();
 				redeem_customer_credit.value = false;
@@ -2130,6 +2305,9 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 			},
 			onScheduleBackgroundCheck: (payload) => {
 				scheduleBackgroundStatusCheck(payload);
+			},
+			onSubmitted: (info) => {
+				void printBalanceVouchers(remainderSlips, info);
 			},
 			...callbackOverrides,
 			returnIntent,
@@ -2154,7 +2332,7 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 // Keyboard Shortcuts
 const handlePaymentShortcut = (event) => {
 	if (event.defaultPrevented || submissionInFlight.value || loading.value) return;
-	if (returnIntentDialog.value) return;
+	if (returnIntentDialog.value || creditRemainderDialog.value) return;
 	if (event.repeat) return;
 	if (!paymentVisible.value) return;
 
@@ -2205,7 +2383,7 @@ const handlePaymentShortcut = (event) => {
 
 const handleSubmitPaymentShortcut = ({ print = false, amount = null } = {}) => {
 	if (!paymentVisible.value || submissionInFlight.value || loading.value) return;
-	if (returnIntentDialog.value) return;
+	if (returnIntentDialog.value || creditRemainderDialog.value) return;
 	const submitShortcut = () => {
 		nextTick(() => {
 			submit(null, false, print);
@@ -2596,13 +2774,15 @@ onMounted(() => {
 			}
 			get_sales_person_names();
 
-			// Exchange after a return: same effect as the cashier switching on
-			// "Use Customer Balance" (PaymentOptions.vue), once, for that
-			// customer only -- see customersStore.armExchangeCredit.
+			// Exchange after a return, or the cashier switched "Use Customer
+			// Balance" on earlier in this sale: credit is applied again every
+			// time Payments opens (it is rebuilt each time), until it is switched
+			// off, the customer changes or the sale is submitted -- see
+			// customersStore.isCreditOn.
 			const exchange =
 				!doc.is_return &&
 				pos_profile.value?.use_customer_credit &&
-				customersStore.takeExchangeCredit(doc.customer);
+				customersStore.isCreditOn(doc.customer);
 			// Vouchers already scanned for this customer in this sale (e.g. the
 			// sale was switched to the voucher's customer, which reopens Payments).
 			const vouchers =

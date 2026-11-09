@@ -35,3 +35,33 @@ export async function recordCreditNoteReprint({
 	});
 	return Boolean(result?.credit_note);
 }
+
+/** Print settings for a balance voucher: the credit note shows the sale it
+ * was just used on, what was used and what is left. */
+export function balanceVoucherSettings(sale: string): string {
+	return JSON.stringify({ balance_for: sale });
+}
+
+/**
+ * Before the balance voucher of a credit note used in part on `sale` prints:
+ * the server records it (Comment naming the PIN cashier) and says whether the
+ * sale really used it ({balance: true}); if not, it is treated as an ordinary
+ * reprint and prints as a DUPLICATE. Throws like recordCreditNoteReprint.
+ */
+export async function recordBalanceVoucherPrint({
+	name,
+	sale,
+	posProfile,
+}: {
+	name: string;
+	sale: string;
+	posProfile?: string | null;
+}): Promise<{ creditNote: boolean; balance: boolean }> {
+	const result: any = await callWithoutDialog(CREDIT_NOTE_REPRINT_METHOD, {
+		doctype: "Sales Invoice",
+		name,
+		pos_profile: posProfile || null,
+		balance_for: sale,
+	});
+	return { creditNote: Boolean(result?.credit_note), balance: Boolean(result?.balance) };
+}

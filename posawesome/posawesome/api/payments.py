@@ -250,7 +250,13 @@ def _correct_outstanding_amount_for_pending_credit_change(invoice_doc, data):
 
     redeemed_credit = flt(data.get("redeemed_customer_credit"))
     grand_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
-    payments_total = sum(flt(row.get("amount")) for row in (invoice_doc.payments or []))
+    # The gift card settlement row is added to payments as well; it is counted
+    # once, from gift_card_redemptions below.
+    payments_total = sum(
+        flt(row.get("amount"))
+        for row in (invoice_doc.payments or [])
+        if str(row.get("mode_of_payment") or "").strip() != "Gift Card"
+    )
     gift_card_total = sum(
         flt(row.get("amount")) for row in (data.get("gift_card_redemptions") or [])
     )

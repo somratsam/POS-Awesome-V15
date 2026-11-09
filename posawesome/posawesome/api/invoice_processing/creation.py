@@ -3,6 +3,7 @@ from frappe import _
 from frappe.exceptions import TimestampMismatchError
 from frappe.utils import (
     cint,
+    cstr,
     flt,
     getdate,
     get_datetime,
@@ -1131,14 +1132,29 @@ def _authorize_customer_credit(invoice_doc, requested_rows):
     authorize_customer_credit(invoice_doc, requested_rows)
 
 
+def _credit_row_expiry_key(row, expiry_by_origin):
+    """Order credit is used in: the credit that expires soonest first. Advances
+    never expire, so they come last."""
+    if row.get("type") == "Invoice":
+        expires_on = expiry_by_origin.get(row.get("credit_origin"))
+        if expires_on:
+            return (0, str(expires_on))
+    return (1, "")
+
+
 def _validate_customer_credit_redemption(invoice_doc, data, available_credit_rows=None):
-    """Store credit spent through "Use Customer Balance": each credit row is
-    used in full (no partial redemption), they must all fit in the sale, and
-    each must be authorized (_authorize_customer_credit).
+    """Store credit spent through "Use Customer Balance".
+
+    Credit is used up to what the sale still needs after loyalty points and
+    gift cards, never more. When the credit picked is worth more than that,
+    one credit note is used in part and the rest stays on it (same voucher,
+    same code, same expiry; a balance voucher prints after the sale). The
+    credit that expires soonest is used first, so only the one that expires
+    last may be used in part. Each credit row must be authorized
+    (_authorize_customer_credit).
 
     The cashier chooses which credit rows: a customer with two credit notes
-    who brings one voucher uses that one only. (Before vouchers, all of a
-    customer's credit had to be used together.)
+    who brings one voucher uses that one only.
 
     Only runs when the client explicitly flags this as a genuine "Use
     Customer Balance" redemption via customer_credit_redemption_requested.
@@ -1180,9 +1196,16 @@ def _validate_customer_credit_redemption(invoice_doc, data, available_credit_row
         (row.get("type"), row.get("credit_origin")): flt(row.get("total_credit"))
         for row in available_credit_rows
     }
+    expiry_by_origin = {
+        row.get("credit_origin"): row.get("expires_on")
+        for row in available_credit_rows
+        if row.get("type") == "Invoice"
+    }
 
     precision = invoice_doc.precision("grand_total") or 2
-    total = 0
+    selected_total = 0
+    redeemed_total = 0
+    partial_rows = []
     for row in requested_rows:
         key = (row.get("type"), row.get("credit_origin"))
         if key not in available:
@@ -1191,36 +1214,160 @@ def _validate_customer_credit_redemption(invoice_doc, data, available_credit_row
                     "Store credit from {0} can't be used: it has expired or doesn't belong to this customer."
                 ).format(row.get("credit_origin"))
             )
-        if flt(row.get("credit_to_redeem"), precision) != flt(available[key], precision):
-            frappe.throw(
-                _(
-                    "Store credit from {0} ({1}) must be used in full -- partial redemption is not allowed."
-                ).format(
-                    row.get("credit_origin"),
-                    frappe.utils.fmt_money(available[key], currency=invoice_doc.currency),
-                )
-            )
-        total += available[key]
+        used = flt(row.get("credit_to_redeem"), precision)
+        balance = flt(available[key], precision)
+        if used > balance:
+            frappe.throw(_("Store credit from {0} is more than its remaining balance.").format(row.get("credit_origin")))
+        if used < balance:
+            partial_rows.append(row)
+        # Each credit note's balance rounded to the currency first, as the
+        # POS does (useRedemptionLogic.ts), so both add up the same figures.
+        selected_total += balance
+        redeemed_total += used
 
     redeemed = flt(data.get("redeemed_customer_credit"))
-    if flt(redeemed, precision) != flt(total, precision):
+    if flt(redeemed, precision) != flt(redeemed_total, precision):
         frappe.throw(
-            _(
-                "The full store credit selected ({0}) must be applied -- partial redemption is not allowed."
-            ).format(frappe.utils.fmt_money(total, currency=invoice_doc.currency))
+            _("The store credit applied ({0}) doesn't match the credit notes used ({1}).").format(
+                frappe.utils.fmt_money(redeemed, precision, currency=invoice_doc.currency),
+                frappe.utils.fmt_money(redeemed_total, precision, currency=invoice_doc.currency),
+            )
         )
 
-    invoice_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
-    loyalty_covered = flt(invoice_doc.get("loyalty_amount"))
-    max_redeemable = max(invoice_total - loyalty_covered, 0)
-    if flt(total, precision) > flt(max_redeemable, precision):
+    # Credit covers the sale up to what is still due; it is never handed
+    # back as change.
+    due = _amount_due_before_credit(invoice_doc, data)
+    expected = min(flt(selected_total, precision), flt(due, precision))
+    if flt(redeemed_total, precision) != flt(expected, precision):
         frappe.throw(
             _(
-                "Customer must select items worth at least their available credit ({0}) to redeem it."
-            ).format(frappe.utils.fmt_money(total, currency=invoice_doc.currency))
+                "Store credit must cover the sale up to {0} (credit selected {1}, still due {2})."
+            ).format(
+                frappe.utils.fmt_money(expected, precision, currency=invoice_doc.currency),
+                frappe.utils.fmt_money(selected_total, precision, currency=invoice_doc.currency),
+                frappe.utils.fmt_money(due, precision, currency=invoice_doc.currency),
+            )
         )
+
+    if len(partial_rows) > 1:
+        frappe.throw(_("Only one credit note can be used in part on a sale; use the others in full."))
+    if partial_rows:
+        partial_key = _credit_row_expiry_key(partial_rows[0], expiry_by_origin)
+        for row in requested_rows:
+            if row is not partial_rows[0] and _credit_row_expiry_key(row, expiry_by_origin) > partial_key:
+                frappe.throw(
+                    _(
+                        "Store credit from {0} expires later than {1}: the credit that expires soonest is used first, so {0} is the one to use in part."
+                    ).format(row.get("credit_origin"), partial_rows[0].get("credit_origin"))
+                )
 
     _authorize_customer_credit(invoice_doc, requested_rows)
+
+
+def _gift_card_total(data):
+    return sum(
+        max(flt((row or {}).get("amount")), 0)
+        for row in ((data or {}).get("gift_card_redemptions") or [])
+        if hasattr(row, "get")
+    )
+
+
+def _amount_due_before_credit(invoice_doc, data):
+    """What the sale still needs before store credit: its total less loyalty
+    points and gift cards."""
+    invoice_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
+    return max(
+        invoice_total - max(flt(invoice_doc.get("loyalty_amount")), 0) - _gift_card_total(data),
+        0,
+    )
+
+
+def _is_cash_payment_row(row, profile_doc=None):
+    """Same rule as the Payments screen (utils/cashTender.ts): Mode of Payment
+    type Cash, the profile's cash mode, or a name containing "cash". The gift
+    card settlement row is typed Cash but is not cash."""
+    mode = cstr(row.get("mode_of_payment")).strip()
+    if mode == "Gift Card":
+        return False
+    if cstr(row.get("type")).strip().lower() == "cash":
+        return True
+    configured = cstr((profile_doc or {}).get("posa_cash_mode_of_payment")).strip().lower()
+    if configured and mode.lower() == configured:
+        return True
+    return "cash" in mode.lower()
+
+
+def _validate_change_only_from_cash(invoice_doc, data, profile_doc=None):
+    """Change is money out of the drawer, so it can only come from cash taken
+    on this sale -- never from store credit, a gift card or a card.
+
+    - store credit (any kind) can't be more than the sale still needs after
+      loyalty points and gift cards;
+    - change paid can't be more than the cash taken, nor than the amount paid
+      over the total;
+    - the amount paid over the total (less any credit change the profile
+      allows) must be covered by cash.
+    Runs on the saved draft, so totals are the server's own."""
+    if invoice_doc.get("is_return"):
+        return
+    data = data or {}
+    precision = invoice_doc.precision("grand_total") or 2
+    tolerance = 0.5 / (10**precision)
+    currency = invoice_doc.get("currency")
+
+    def money(value):
+        return frappe.utils.fmt_money(flt(value, precision), precision, currency=currency)
+
+    grand_total = flt(invoice_doc.rounded_total or invoice_doc.grand_total)
+    credit = max(flt(data.get("redeemed_customer_credit")), 0)
+    due_before_credit = _amount_due_before_credit(invoice_doc, data)
+    if credit > due_before_credit + tolerance:
+        frappe.throw(
+            _("Store credit of {0} is more than the sale still needs ({1}). Store credit can't become change.").format(
+                money(credit), money(due_before_credit)
+            )
+        )
+
+    cash = other = 0
+    for row in invoice_doc.get("payments") or []:
+        if cstr(row.get("mode_of_payment")).strip() == "Gift Card":
+            continue
+        amount = max(flt(row.get("amount")), 0)
+        if _is_cash_payment_row(row, profile_doc):
+            cash += amount
+        else:
+            other += amount
+
+    settled = (
+        cash
+        + other
+        + _gift_card_total(data)
+        + credit
+        + max(flt(invoice_doc.get("loyalty_amount")), 0)
+        + max(flt(invoice_doc.get("write_off_amount")), 0)
+    )
+    overpaid = max(settled - grand_total, 0)
+    paid_change = max(flt(data.get("paid_change")), 0)
+    credit_change = max(flt(data.get("credit_change")), 0)
+
+    if paid_change > cash + tolerance:
+        frappe.throw(
+            _("Change of {0} is more than the cash taken ({1}). Change can only be given from cash.").format(
+                money(paid_change), money(cash)
+            )
+        )
+    if paid_change + credit_change > overpaid + tolerance:
+        frappe.throw(
+            _("Change of {0} is more than the amount paid over the total ({1}).").format(
+                money(paid_change + credit_change), money(overpaid)
+            )
+        )
+    if overpaid - credit_change > cash + tolerance:
+        frappe.throw(
+            _(
+                "Over by {0}: card, gift card or store credit cover more than the amount due, and change can only be given from cash."
+            ).format(money(overpaid))
+        )
 
 
 def _validate_customer_credit_sources(invoice_doc, data, available_credit_rows=None):
@@ -1231,7 +1378,7 @@ def _validate_customer_credit_sources(invoice_doc, data, available_credit_rows=N
     Sales Invoice name each "Invoice" row of customer_credit_dict carries.
     Without this, a crafted payload could redeem an expired credit note, or
     leave customer_credit_redemption_requested off to skip the
-    all-or-nothing check. Only genuine "Use Customer Balance" redemption
+    partial-use checks. Only genuine "Use Customer Balance" redemption
     creates "Invoice" rows (M-Pesa uses "Advance" rows), so those rows
     require that flag.
     """
@@ -1252,7 +1399,7 @@ def _validate_customer_credit_sources(invoice_doc, data, available_credit_rows=N
         return
 
     if not cint(data.get("customer_credit_redemption_requested")):
-        frappe.throw(_("Store credit can only be redeemed in full through Use Customer Balance."))
+        frappe.throw(_("Store credit can only be redeemed through Use Customer Balance."))
 
     if available_credit_rows is None:
         available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
@@ -1625,6 +1772,20 @@ def _reapply_incoming_payment_amounts(invoice_doc, incoming_rows):
         ):
             if row.get(fieldname) is not None:
                 payment.set(fieldname, row.get(fieldname))
+
+
+def _mark_no_money_return_off_pos(invoice_doc):
+    """A return that refunds no money is booked with is_pos 0, as the POS
+    already sends it (usePaymentSubmission.ts). With is_pos 1, ERPNext books
+    the credit against the original sale while the return keeps its own
+    negative outstanding too, so the customer's credit would be listed twice
+    (on the return and on the sale). Done on the server as well, so no route
+    can leave it at 1."""
+    if not invoice_doc.get("is_return"):
+        return
+    if any(abs(flt(row.get("amount"))) > 0 for row in (invoice_doc.get("payments") or [])):
+        return
+    invoice_doc.is_pos = 0
 
 
 def _apply_return_outstanding_policy(invoice_doc):
@@ -2084,6 +2245,7 @@ def update_invoice(data):
 
     _normalize_return_payment_rows(invoice_doc, conversion_rate, profile_doc)
 
+    _mark_no_money_return_off_pos(invoice_doc)
     _apply_return_outstanding_policy(invoice_doc)
 
     invoice_doc.flags.ignore_permissions = True
@@ -2481,6 +2643,7 @@ def submit_invoice(invoice, data, submit_in_background=False):
     _normalize_return_payment_rows(
         invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
     )
+    _mark_no_money_return_off_pos(invoice_doc)
     _apply_return_outstanding_policy(invoice_doc)
 
     payments = [
@@ -2511,6 +2674,8 @@ def submit_invoice(invoice, data, submit_in_background=False):
     _normalize_return_payment_rows(
         invoice_doc, invoice_doc.get("conversion_rate") or 1, profile_doc, enforce_credit_only_policy=True
     )
+    # On the saved draft, so the totals are the server's own.
+    _validate_change_only_from_cash(invoice_doc, data, profile_doc)
 
     if data.get("due_date"):
         frappe.db.set_value(

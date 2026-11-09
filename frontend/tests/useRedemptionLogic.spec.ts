@@ -132,35 +132,29 @@ describe("useRedemptionLogic", () => {
 		expect(redeemed_customer_credit.value).toBe(60);
 	});
 
-	it("blocks redemption and shows a message when available credit exceeds the invoice total", async () => {
+	it("uses credit worth more than the sale up to the sale amount and leaves the rest on the credit note", async () => {
 		(globalThis as any).frappe.call = vi.fn(async () => ({
 			message: [
-				{ type: "Invoice", credit_origin: "SINV-1", total_credit: 100, credit_to_redeem: 0 },
+				{ type: "Invoice", credit_origin: "SINV-1", total_credit: 50, credit_to_redeem: 0, expires_on: "2027-02-01" },
 			],
 		}));
 		const toastShow = vi.fn();
-
-		const invoiceDoc = ref<any>({
-			customer: "CUST-0001",
-			rounded_total: 60,
-			grand_total: 60,
-			currency: "OMR",
-			conversion_rate: 1,
-		});
+		const invoiceDoc = ref<any>({ customer: "CUST-0001", rounded_total: 45, grand_total: 45, currency: "OMR", conversion_rate: 1 });
 
 		const {
 			customer_credit_dict,
 			redeemed_customer_credit,
 			customer_credit_redemption_requested,
 			customer_credit_blocked,
+			credit_remainders,
+			credit_remainder_total,
 			get_available_credit,
 		} = useRedemptionLogic({
-			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
 			getAuthorizationContext: () => ({ supervisor: true }),
 			invoiceDoc,
 			posProfile: ref({ company: "Test Co", currency: "OMR" }),
 			customerInfo: ref({}),
-			currencyPrecision: ref(2),
+			currencyPrecision: ref(3),
 			formatFloat: (value: any) => Number(value || 0),
 			stores: { toastStore: { show: toastShow } },
 		});
@@ -168,33 +162,84 @@ describe("useRedemptionLogic", () => {
 		get_available_credit(true);
 		await flush();
 
-		expect(redeemed_customer_credit.value).toBe(0);
-		expect(customer_credit_redemption_requested.value).toBe(false);
-		expect(customer_credit_blocked.value).toBe(true);
-		expect(toastShow).toHaveBeenCalled();
-		// The rows themselves (and their real total_credit) stay visible so
-		// the UI can still show "Available Stored Value: 100" while blocked.
-		expect(customer_credit_dict.value[0].total_credit).toBe(100);
-
-		// Cart grows enough to cover the credit -- auto-applies in full
-		// without needing get_available_credit to be called again.
-		invoiceDoc.value = { ...invoiceDoc.value, rounded_total: 150, grand_total: 150 };
-		await flush();
-
 		expect(customer_credit_redemption_requested.value).toBe(true);
 		expect(customer_credit_blocked.value).toBe(false);
-		expect(customer_credit_dict.value[0].credit_to_redeem).toBe(100);
-		expect(redeemed_customer_credit.value).toBe(100);
+		expect(customer_credit_dict.value[0].credit_to_redeem).toBe(45);
+		expect(redeemed_customer_credit.value).toBe(45);
+		expect(credit_remainder_total.value).toBe(5);
+		expect(credit_remainders.value).toEqual([
+			{ credit_origin: "SINV-1", voucher: undefined, total_credit: 50, used: 45, remaining: 5 },
+		]);
+		// No red "select items worth at least..." message any more.
+		expect(toastShow).not.toHaveBeenCalled();
+
+		// Cart grows past the credit: it is all used and nothing is left over.
+		invoiceDoc.value = { ...invoiceDoc.value, rounded_total: 150, grand_total: 150 };
+		await flush();
+		expect(customer_credit_dict.value[0].credit_to_redeem).toBe(50);
+		expect(credit_remainder_total.value).toBe(0);
+
+		// And shrinks again: back to a part use.
+		invoiceDoc.value = { ...invoiceDoc.value, rounded_total: 20, grand_total: 20 };
+		await flush();
+		expect(customer_credit_dict.value[0].credit_to_redeem).toBe(20);
+		expect(credit_remainder_total.value).toBe(30);
 	});
 
-	it("sums raw total_credit values before rounding, matching the backend's real 4.411 rather than a rounded-per-row 4.42", async () => {
-		// Real production case: two return-credit rows of 2.2055 each (a
-		// proportional split that leaves a genuine 4th-decimal remainder --
-		// get_available_credit() never rounds outstanding_amount-derived
-		// rows) plus a zero row. Rounding each row to 3 decimals before
-		// summing gives 2.206 + 2.206 + 0.000 = 4.412; the backend's own
-		// _validate_customer_credit_redemption() sums the raw values first
-		// and rounds once, landing on 4.411 instead.
+	it("uses the credit that expires soonest first, advances last, so only the last one is used in part", async () => {
+		(globalThis as any).frappe.call = vi.fn(async () => ({
+			message: [
+				{ type: "Advance", credit_origin: "PE-1", total_credit: 10, credit_to_redeem: 0 },
+				{ type: "Invoice", credit_origin: "LATE", total_credit: 30, credit_to_redeem: 0, expires_on: "2027-03-01" },
+				{ type: "Invoice", credit_origin: "SOON", total_credit: 30, credit_to_redeem: 0, expires_on: "2027-01-15" },
+			],
+		}));
+		const invoiceDoc = ref<any>({ customer: "C", rounded_total: 45, grand_total: 45, currency: "OMR", conversion_rate: 1 });
+		const { customer_credit_dict, redeemed_customer_credit, credit_remainders, get_available_credit } =
+			useRedemptionLogic({
+				getAuthorizationContext: () => ({ supervisor: true }),
+				invoiceDoc,
+				posProfile: ref({ company: "Test Co", currency: "OMR" }),
+				customerInfo: ref({}),
+				currencyPrecision: ref(3),
+				formatFloat: (value: any) => Number(value || 0),
+			});
+
+		get_available_credit(true);
+		await flush();
+
+		const used = Object.fromEntries((customer_credit_dict.value as any[]).map((r) => [r.credit_origin, r.credit_to_redeem]));
+		expect(used).toEqual({ SOON: 30, LATE: 15, "PE-1": 0 });
+		expect(redeemed_customer_credit.value).toBe(45);
+		expect(credit_remainders.value.map((r) => [r.credit_origin, r.remaining])).toEqual([["LATE", 15]]);
+	});
+
+	it("leaves room for gift cards: credit only covers what the sale still needs", async () => {
+		(globalThis as any).frappe.call = vi.fn(async () => ({
+			message: [{ type: "Invoice", credit_origin: "SINV-1", total_credit: 50, credit_to_redeem: 0, expires_on: "2027-02-01" }],
+		}));
+		const giftCards = ref(30);
+		const invoiceDoc = ref<any>({ customer: "C", rounded_total: 45, grand_total: 45, currency: "OMR", conversion_rate: 1 });
+		const { redeemed_customer_credit, credit_remainder_total, get_available_credit } = useRedemptionLogic({
+			getAuthorizationContext: () => ({ supervisor: true }),
+			invoiceDoc,
+			posProfile: ref({ company: "Test Co", currency: "OMR" }),
+			customerInfo: ref({}),
+			currencyPrecision: ref(3),
+			formatFloat: (value: any) => Number(value || 0),
+			getGiftCardTotal: () => giftCards.value,
+		});
+
+		get_available_credit(true);
+		await flush();
+		expect(redeemed_customer_credit.value).toBe(15);
+		expect(credit_remainder_total.value).toBe(35);
+	});
+
+	it("rounds each credit note to the currency before adding, as the server does", async () => {
+		// Two return-credit rows of 2.2055 each. Each balance is rounded first
+		// (2.206 + 2.206 = 4.412), the same figures the server adds up in
+		// _validate_customer_credit_redemption, so the two always agree.
 		(globalThis as any).frappe.call = vi.fn(async () => ({
 			message: [
 				{ type: "Invoice", credit_origin: "SINV-1", total_credit: 2.2055, credit_to_redeem: 0 },
@@ -203,50 +248,26 @@ describe("useRedemptionLogic", () => {
 			],
 		}));
 
-		const invoiceDoc = ref<any>({
-			customer: "JUMA",
-			rounded_total: 10,
-			grand_total: 10,
-			currency: "OMR",
-			conversion_rate: 1,
-		});
+		const invoiceDoc = ref<any>({ customer: "JUMA", rounded_total: 10, grand_total: 10, currency: "OMR", conversion_rate: 1 });
 
-		const {
-			available_customer_credit,
-			redeemed_customer_credit,
-			customer_credit_dict,
-			get_available_credit,
-		} = useRedemptionLogic({
-			// These tests are about amounts; authorization is in creditAuthorization.spec.ts.
-			getAuthorizationContext: () => ({ supervisor: true }),
-			invoiceDoc,
-			posProfile: ref({ company: "Test Co", currency: "OMR" }),
-			customerInfo: ref({}),
-			currencyPrecision: ref(3),
-			// Round-half-up without plain .toFixed()'s binary-representation
-			// quirk (e.g. (2.2055).toFixed(3) === "2.205" in every JS engine,
-			// since 2.2055 is actually stored as ...499999...) -- mirrors
-			// what useInvoiceCurrency.ts's flt() now produces by routing
-			// through Frappe's own global flt() instead of raw .toFixed().
-			formatFloat: (value: any, prec = 3) =>
-				Number(
-					(Math.round((Number(value) + Number.EPSILON) * 10 ** prec) / 10 ** prec).toFixed(
-						prec,
-					),
-				),
-		});
+		const { available_customer_credit, redeemed_customer_credit, customer_credit_dict, credit_remainder_total, get_available_credit } =
+			useRedemptionLogic({
+				getAuthorizationContext: () => ({ supervisor: true }),
+				invoiceDoc,
+				posProfile: ref({ company: "Test Co", currency: "OMR" }),
+				customerInfo: ref({}),
+				currencyPrecision: ref(3),
+				formatFloat: (value: any, prec = 3) =>
+					Number((Math.round((Number(value) + Number.EPSILON) * 10 ** prec) / 10 ** prec).toFixed(prec)),
+			});
 
 		get_available_credit(true);
 		await flush();
 
-		expect(available_customer_credit.value).toBe(4.411);
-		expect(redeemed_customer_credit.value).toBe(4.411);
-		expect(
-			(customer_credit_dict.value as any[]).reduce(
-				(sum, row) => sum + Number(row.credit_to_redeem || 0),
-				0,
-			),
-		).toBeCloseTo(4.411, 6);
+		expect(available_customer_credit.value).toBe(4.412);
+		expect(redeemed_customer_credit.value).toBe(4.412);
+		expect((customer_credit_dict.value as any[]).map((r) => r.credit_to_redeem)).toEqual([2.206, 2.206, 0]);
+		expect(credit_remainder_total.value).toBe(0);
 	});
 });
 

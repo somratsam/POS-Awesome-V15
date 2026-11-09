@@ -22,13 +22,18 @@
 {%- set is_used = remaining <= 0 -%}
 {%- set is_expired = (not is_used) and frappe.utils.getdate(frappe.utils.nowdate()) > valid_to -%}
 {%- set is_partly_used = (not is_used) and remaining < original_value - 0.0005 -%}
+{#- Balance voucher: printed after a sale that used this credit note in part
+    (print_settings balance_for = that sale). -#}
+{%- set balance_sale = (print_settings.get("balance_for") or "")|string -%}
+{%- set balance_used = credit_voucher_balance_use(doc.name, balance_sale) if balance_sale and not is_used else 0 -%}
+{%- set is_balance = balance_used > 0 -%}
 {%- set returned_items = doc.items or [] -%}
 {%- set _disc = (doc.discount_amount or 0)|abs -%}
 {#- PDF (Desk Print / download) needs a fixed page height: base length plus
     about 6 mm per item line (long names take two). Till printing ignores it. -#}
 {%- set _ns = namespace(lines=0) -%}
 {%- for _it in returned_items -%}{%- set _ns.lines = _ns.lines + 1 + (1 if (_it.item_name or "")|length > 22 else 0) -%}{%- endfor -%}
-{%- set _pdf_h = (300 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0))|round(0)|int -%}
+{%- set _pdf_h = (300 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0) + (24 if is_balance else 0))|round(0)|int -%}
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body, .print-format { width: 76mm; font-family: 'Arial', sans-serif; font-size: 14px; color: #000; background: #fff; line-height: 1.5; }
@@ -64,6 +69,8 @@
   .stamp > span { display: table-cell; }
   .stamp > span:last-child { text-align: right; direction: rtl; }
   .stamp-line { border-bottom: 1px solid #000; height: 22mm; margin: 4px 0 8px 0; }
+  .balance { font-size: 13px; text-align: center; margin: 2px 0; }
+  .balance-ar { font-size: 13px; text-align: center; direction: rtl; margin: 2px 0 6px 0; }
   .note { font-size: 11px; text-align: center; line-height: 1.5; }
   .note-ar { font-size: 11px; text-align: center; direction: rtl; line-height: 1.6; }
   .print-format .meta td { padding: 1px 0 !important; }
@@ -93,7 +100,11 @@
 {% elif is_expired %}
 <div class="banner banner-box">EXPIRED — NOT VALID<br>منتهية — غير صالحة</div>
 {% endif %}
-{% if print_settings.get("is_reprint") %}
+{% if is_balance %}
+<div class="banner">*** BALANCE · رصيد ***</div>
+<div class="balance">Used {{ "%.3f"|format(balance_used) }} on sale {{ balance_sale|e }}. Remaining {{ "%.3f"|format(remaining) }}.</div>
+<div class="balance-ar">تم استخدام <span dir="ltr">{{ "%.3f"|format(balance_used) }}</span> في الفاتورة <span dir="ltr">{{ balance_sale|e }}</span>. المتبقي <span dir="ltr">{{ "%.3f"|format(remaining) }}</span>.</div>
+{% elif print_settings.get("is_reprint") %}
 <div class="banner">*** DUPLICATE ***</div>
 {% endif %}
 
@@ -111,8 +122,8 @@
 <div class="original">Remaining from original OMR {{ "%.3f"|format(original_value) }}<br>المتبقي من القيمة الأصلية</div>
 {% endif %}
 
-<div class="use">Can be used as payment for your next purchase, in one purchase of this value or more.</div>
-<div class="use-ar">يمكن استخدامها كوسيلة دفع في مشترياتك القادمة، دفعة واحدة لمشتريات بهذه القيمة أو أكثر.</div>
+<div class="use">Can be used as payment for your next purchases. Any amount not used stays on this voucher.</div>
+<div class="use-ar">يمكن استخدامها كوسيلة دفع في مشترياتك القادمة، ويبقى أي مبلغ غير مستخدم على هذه القسيمة.</div>
 
 <table class="meta" style="margin-top:8px;">
   <tr><td class="l">Validity starting date:</td><td class="v">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }}</td></tr>
