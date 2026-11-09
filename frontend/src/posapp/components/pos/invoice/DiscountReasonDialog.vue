@@ -42,23 +42,61 @@
 					:aria-label="__('Discount reason')"
 				>
 					<v-btn
-						v-for="reason in reasons"
+						v-for="reason in orderedReasons"
 						:key="reason.name"
 						:variant="selected === reason.name ? 'flat' : 'outlined'"
 						:color="selected === reason.name ? 'primary' : undefined"
 						class="discount-reason__option"
+						:class="{ 'discount-reason__option--match': isMatch(reason) }"
 						role="radio"
 						:aria-checked="selected === reason.name ? 'true' : 'false'"
+						:aria-label="optionLabel(reason)"
 						:data-reason="reason.name"
+						:data-match="isMatch(reason) ? 'true' : undefined"
 						:data-testid="`discount-reason-option-${reason.name}`"
 						@click="pick(reason)"
 					>
-						{{ reason.name }}
+						<span class="discount-reason__option-body">
+							<span class="discount-reason__option-name">{{ reason.name }}</span>
+							<!-- The reason's usual offer rate: a reminder only. -->
+							<span
+								v-if="rateOf(reason) !== null"
+								class="discount-reason__rate"
+								:class="{ 'discount-reason__rate--match': isMatch(reason) }"
+								:data-testid="`discount-reason-rate-${reason.name}`"
+							>
+								<span v-if="isMatch(reason)" aria-hidden="true">✓ </span>{{ formatOfferRate(rateOf(reason)) }}
+							</span>
+						</span>
 					</v-btn>
 				</div>
 				<v-alert v-else type="warning" variant="tonal" density="compact">
 					{{ __("No discount reasons are set up. Ask a manager to add them in POS Discount Reason.") }}
 				</v-alert>
+
+				<!-- The picked reason's usual rate differs from the line's Disc %.
+				     Never blocks: Keep records the reason as it is. -->
+				<div
+					v-if="rateWarning"
+					class="discount-reason__rate-warning"
+					role="alert"
+					data-testid="discount-reason-rate-warning"
+				>
+					<div class="discount-reason__rate-warning-text">{{ rateWarning }}</div>
+					<div class="discount-reason__rate-warning-actions">
+						<v-btn
+							variant="flat"
+							color="warning"
+							data-testid="discount-reason-change-percent"
+							@click="changePercent"
+						>
+							{{ __("Change %") }}
+						</v-btn>
+						<v-btn variant="outlined" data-testid="discount-reason-keep" @click="keep">
+							{{ __("Keep") }}
+						</v-btn>
+					</div>
+				</div>
 
 				<v-checkbox
 					v-if="request.mode === 'line' && request.otherMissingCount > 0"
@@ -89,7 +127,7 @@
 				<v-btn
 					color="primary"
 					variant="flat"
-					:disabled="!selectedReason"
+					:disabled="!selectedReason || !!rateWarning"
 					data-testid="discount-reason-confirm"
 					@click="confirm"
 				>
@@ -103,6 +141,14 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 import { useUIStore } from "../../../stores/uiStore";
+import {
+	formatOfferRate,
+	lineDiscountPercent,
+	linesOffReasonRate,
+	reasonMatchesPercent,
+	reasonOfferRate,
+	sortReasonsForLines,
+} from "../../../utils/discountReasons";
 
 defineOptions({
 	name: "DiscountReasonDialog",
@@ -123,8 +169,16 @@ const reasons = computed(() =>
 	(uiStore.discountReasons || []).filter((reason) => reason && reason.name),
 );
 
+// Reasons whose offer rate matches a line's Disc % come first.
+const orderedReasons = computed(() => sortReasonsForLines(reasons.value, request.value?.lines));
+const typedPercents = computed(() =>
+	(request.value?.lines || []).map(lineDiscountPercent).filter((percent) => percent !== null),
+);
+
 const selected = ref(null);
 const applyToOthers = ref(false);
+// The reason the offer-rate warning is showing for (null = none).
+const warningFor = ref(null);
 let lastPrintableAt = 0;
 let focusBeforeOpen = null;
 
@@ -139,6 +193,7 @@ watch(
 			const preselect = current.preselect;
 			selected.value = reasons.value.some((reason) => reason.name === preselect) ? preselect : null;
 			applyToOthers.value = false;
+			warningFor.value = null;
 			lastPrintableAt = 0;
 			focusInitialControl();
 		} else if (!current && previous) {
@@ -176,7 +231,47 @@ function lineLabel(line) {
 	return percent > 0 ? __("{0} — {1}% off", [name, Number(percent.toFixed(2))]) : name;
 }
 
-// One tap picks and confirms.
+const rateOf = (reason) => reasonOfferRate(reason);
+const isMatch = (reason) => typedPercents.value.some((percent) => reasonMatchesPercent(reason, percent));
+const percentText = (percent) => formatOfferRate(percent);
+
+function optionLabel(reason) {
+	const rate = rateOf(reason);
+	if (rate === null) return reason.name;
+	return isMatch(reason)
+		? __("{0}, usually {1}, matches this discount", [reason.name, formatOfferRate(rate)])
+		: __("{0}, usually {1}", [reason.name, formatOfferRate(rate)]);
+}
+
+const applyingToOthers = computed(() => request.value?.mode === "line" && applyToOthers.value);
+const targetLines = computed(() => [
+	...(request.value?.lines || []),
+	...(applyingToOthers.value ? request.value?.otherLines || [] : []),
+]);
+const offRateLines = (reason) => linesOffReasonRate(reason, targetLines.value);
+
+const rateWarning = computed(() => {
+	const reason = reasons.value.find((option) => option.name === warningFor.value);
+	if (!reason || selected.value !== reason.name) return "";
+	const off = offRateLines(reason);
+	if (!off.length) return "";
+	const usual = formatOfferRate(rateOf(reason));
+	if (targetLines.value.length === 1) {
+		return __("{0} is usually {1}; this line has {2}.", [
+			reason.name,
+			usual,
+			percentText(lineDiscountPercent(off[0])),
+		]);
+	}
+	const others = [...new Set(off.map((line) => percentText(lineDiscountPercent(line))))].join(", ");
+	if (off.length === 1) {
+		return __("{0} is usually {1}; one of these lines has {2}.", [reason.name, usual, others]);
+	}
+	return __("{0} is usually {1}; {2} of these lines have {3}.", [reason.name, usual, off.length, others]);
+});
+
+// One tap picks and confirms -- unless the reason's usual rate differs from
+// the Disc %, which shows the orange warning first (Change % / Keep).
 function pick(reason) {
 	selected.value = reason.name;
 	confirm();
@@ -184,9 +279,47 @@ function pick(reason) {
 
 function confirm() {
 	if (!request.value || !selectedReason.value) return;
+	if (rateWarning.value) return; // answered with Change % or Keep
+	if (offRateLines(selectedReason.value).length) {
+		warningFor.value = selectedReason.value.name;
+		focusWarning();
+		return;
+	}
+	resolve();
+}
+
+function resolve() {
 	uiStore.resolveDiscountReason({
 		reason: selectedReason.value.name,
-		applyToOthers: request.value.mode === "line" && applyToOthers.value,
+		applyToOthers: applyingToOthers.value,
+	});
+}
+
+// Records the reason with the line's Disc % as it is. Never blocked.
+function keep() {
+	if (!request.value || !selectedReason.value) return;
+	resolve();
+}
+
+// Back to the line's Disc % without recording the reason; the line prompt
+// remembers the pick for next time. From the Pay check: back to the cart.
+function changePercent() {
+	if (!request.value || !selectedReason.value) return;
+	if (request.value.mode !== "line") {
+		uiStore.resolveDiscountReason(null);
+		return;
+	}
+	uiStore.resolveDiscountReason({
+		reason: selectedReason.value.name,
+		applyToOthers: false,
+		changePercent: true,
+	});
+}
+
+function focusWarning() {
+	nextTick(() => {
+		const button = document.querySelector('[data-testid="discount-reason-change-percent"]');
+		if (button instanceof HTMLElement) button.focus();
 	});
 }
 
@@ -209,14 +342,15 @@ function handleKeydownCapture(event) {
 		event.stopPropagation();
 		return;
 	}
-	// Enter on a reason button presses that button (native click -> pick).
-	if (event.target instanceof Element && event.target.closest("[data-reason]")) return;
+	// Enter on a reason or warning button presses that button (native click).
+	if (event.target instanceof Element && event.target.closest("[data-reason], .discount-reason__rate-warning button"))
+		return;
 	event.preventDefault();
 	event.stopPropagation();
 	confirm();
 }
 
-defineExpose({ confirm, backToCart });
+defineExpose({ confirm, backToCart, keep, changePercent });
 </script>
 
 <style scoped>
@@ -263,6 +397,63 @@ defineExpose({ confirm, backToCart });
 	.discount-reason__options {
 		grid-template-columns: minmax(0, 1fr);
 	}
+}
+
+.discount-reason__option-body {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+
+/* The reason's usual offer rate: a small chip under the name. */
+.discount-reason__rate {
+	display: inline-block;
+	padding: 1px 8px;
+	border-radius: 999px;
+	font-size: 0.78rem;
+	font-weight: 600;
+	line-height: 1.4;
+	border: 1px solid currentColor;
+	opacity: 0.85;
+}
+
+.discount-reason__rate--match {
+	background: rgb(var(--v-theme-success));
+	border-color: rgb(var(--v-theme-success));
+	color: rgb(var(--v-theme-on-success));
+	opacity: 1;
+}
+
+.discount-reason__option--match:not(.v-btn--variant-flat) {
+	border-color: rgb(var(--v-theme-success));
+	border-width: 2px;
+}
+
+.discount-reason__rate-warning {
+	margin-top: 12px;
+	padding: 10px 12px;
+	border-radius: 6px;
+	border-left: 4px solid rgb(var(--v-theme-warning));
+	background: rgba(var(--v-theme-warning), 0.14);
+	color: rgb(var(--v-theme-on-surface));
+}
+
+.discount-reason__rate-warning-text {
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+
+.discount-reason__rate-warning-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.discount-reason__rate-warning-actions :deep(.v-btn) {
+	text-transform: none;
+	letter-spacing: normal;
 }
 
 .discount-reason__option :deep(.v-btn__content) {

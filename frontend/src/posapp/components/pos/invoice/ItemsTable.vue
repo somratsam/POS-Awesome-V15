@@ -41,6 +41,25 @@
 				</div>
 			</template>
 
+			<!-- Disc % title with the bank offer rates (read-only reminder). -->
+			<!-- Vuetify's default header cell, plus the ⓘ in the cell's end
+			     padding (the 80-108px column has no room for it beside the
+			     title). The sort arrow shows only while sorted by Disc %: its
+			     hidden hover copy took the room the title needs next to the ⓘ. -->
+			<template #header.discount_percentage="{ column, getSortIcon, isSorted }">
+				<div class="v-data-table-header__content">
+					<span>{{ column.title }}</span>
+					<v-icon
+						v-if="column.sortable && (!showOfferRates || isSorted(column))"
+						class="v-data-table-header__sort-icon"
+						:icon="getSortIcon(column)"
+					/>
+				</div>
+				<span v-if="showOfferRates" class="posa-disc-header__info">
+					<DiscountOfferRates :reasons="uiStore.discountReasons" />
+				</span>
+			</template>
+
 			<template v-slot:item="{ item }">
 				<CounterGridEntryRow
 					v-if="isCounterGridEntry(item)"
@@ -179,6 +198,7 @@ import BatchSerialSelectionDialog from "./BatchSerialSelectionDialog.vue";
 import { loadItemSelectorSettings } from "../../../utils/itemSelectorSettings";
 import { logComponentRender } from "../../../utils/perf";
 import CartItemRow from "./CartItemRow.vue";
+import DiscountOfferRates from "./DiscountOfferRates.vue";
 import CounterGridEntryRow from "./CounterGridEntryRow.vue";
 import ItemSalesHistoryModal from "./ItemSalesHistoryModal.vue";
 
@@ -337,6 +357,11 @@ const {
 	tableDensity,
 	containerHeight,
 } = responsive;
+
+// The ⓘ beside Disc %: only where the store asks for a discount reason.
+const showOfferRates = computed(
+	() => !props.isReturnInvoice && isDiscountReasonRequired(props.pos_profile),
+);
 
 const dynamicHeaderProps = computed(() => ({
 	class: `responsive-header container-${breakpoint.value}`,
@@ -707,7 +732,11 @@ const advanceGridEntryFromItem = (item: any, fromCellKey: CartGridColumnKey, del
 	return true;
 };
 
-const stayOnGridEntryFromItem = (item: any, fromCellKey: CartGridColumnKey) => {
+const stayOnGridEntryFromItem = (
+	item: any,
+	fromCellKey: CartGridColumnKey,
+	options: { editNow?: boolean } = {},
+) => {
 	const rowIndex = getItemIndex(item);
 	if (rowIndex < 0) {
 		eventBus?.emit("focus_item_search");
@@ -718,7 +747,7 @@ const stayOnGridEntryFromItem = (item: any, fromCellKey: CartGridColumnKey) => {
 	rememberActiveRow(rowIndex);
 	rememberSelectedRow(rowIndex);
 	activeCellKey.value = fromCellKey;
-	void focusActiveGridTarget({ activateDirectEdit: false });
+	void focusActiveGridTarget({ activateDirectEdit: Boolean(options.editNow) });
 	return true;
 };
 
@@ -1038,13 +1067,23 @@ const promptDiscountReason = async (
 		lines: [line],
 		preselect: hasDiscountReason(line)
 			? line.posa_discount_reason
-			: preselectDiscountReason(items.value, uiStore.discountReasons),
+			: line._discount_reason_hint || preselectDiscountReason(items.value, uiStore.discountReasons),
 		otherMissingCount: others.length,
+		otherLines: others,
 	});
+	if (result?.changePercent) {
+		// "Change %" on the offer-rate warning: no reason recorded (the line
+		// keeps its red "Reason?" chip and Pay still asks); the pick is
+		// preselected when the prompt opens again after the new Disc %.
+		line._discount_reason_hint = result.reason;
+		stayOnGridEntryFromItem(line, "discount_percentage", { editNow: true });
+		return;
+	}
 	if (result) {
 		for (const target of result.applyToOthers ? [line, ...others] : [line]) {
 			setLineDiscountReason(invoiceStore, target, result.reason);
 		}
+		line._discount_reason_hint = null;
 	}
 	// Back on the discount cell, as the stay-put Enter would leave it.
 	if (options.returnToCell) stayOnGridEntryFromItem(line, options.returnToCell);

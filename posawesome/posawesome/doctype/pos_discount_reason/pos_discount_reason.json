@@ -9,6 +9,7 @@
  "field_order": [
   "reason_name",
   "enabled",
+  "offer_percentage",
   "column_break_ord",
   "display_order",
   "is_system"
@@ -30,6 +31,14 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Enabled"
+  },
+  {
+   "description": "The bank's usual offer rate, shown to cashiers as a reminder next to the reason. Leave blank for reasons with no fixed rate. Never fills in or changes a discount, and is never printed.",
+   "fieldname": "offer_percentage",
+   "fieldtype": "Percent",
+   "in_list_view": 1,
+   "label": "Offer %",
+   "non_negative": 1
   },
   {
    "fieldname": "column_break_ord",
@@ -54,7 +63,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-07 12:00:00.000000",
+ "modified": "2026-11-09 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "POSAwesome",
  "name": "POS Discount Reason",

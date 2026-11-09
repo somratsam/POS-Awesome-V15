@@ -328,8 +328,113 @@ class TestCashierReasonList(unittest.TestCase):
         self.assertEqual(get_all.call_args.args[0], "POS Discount Reason")
         self.assertEqual(kwargs["filters"], {"enabled": 1, "is_system": 0})
         self.assertEqual(kwargs["order_by"], "display_order asc, name asc")
-        # Pick-only: no note flag is sent to the till.
-        self.assertEqual(kwargs["fields"], ["name", "display_order"])
+        # Pick-only: no note flag is sent to the till; the offer rate is a reminder.
+        self.assertEqual(kwargs["fields"], ["name", "display_order", "offer_percentage"])
+
+
+class TestOfferPercentage(unittest.TestCase):
+    """POS Discount Reason "Offer %": a cashier reminder, never printed or applied."""
+
+    RATES = {
+        "NBO Sadara": 20,
+        "NBO Infinite / Platinum": 20,
+        "OAB Elite / Infinite": 20,
+        "OAB Credit Card": 10,
+        "Bank Dhofar Al Riadah": 20,
+        "Bank Muscat Private Banking": 20,
+        "Bank Muscat Asalah": 15,
+        "Bank Muscat Al Jawhar": 10,
+        "Bank Muscat Oman Air Platinum": 10,
+    }
+
+    def _doc(self, name, rate):
+        from posawesome.posawesome.doctype.pos_discount_reason.pos_discount_reason import POSDiscountReason
+
+        return POSDiscountReason({"doctype": "POS Discount Reason", "reason_name": name, "offer_percentage": rate})
+
+    def test_field_is_an_optional_percent_after_enabled(self):
+        meta_path = REPO_ROOT / "posawesome" / "posawesome" / "doctype" / "pos_discount_reason" / "pos_discount_reason.json"
+        meta = json.loads(meta_path.read_text())
+        field = next(f for f in meta["fields"] if f["fieldname"] == "offer_percentage")
+        self.assertEqual((field["fieldtype"], field["label"]), ("Percent", "Offer %"))
+        self.assertFalse(field.get("reqd"))
+        self.assertNotIn("default", field)
+        order = meta["field_order"]
+        self.assertEqual(order[order.index("enabled") + 1], "offer_percentage")
+
+    def test_rate_must_be_between_0_and_100(self):
+        for bad in (-1, 100.01, 250):
+            with self.assertRaises(frappe.ValidationError):
+                self._doc("Staff", bad).validate()
+        for good, stored in ((None, 0), (0, 0), (15, 15), (12.5, 12.5), (100, 100)):
+            doc = self._doc("Staff", good)
+            doc.validate()
+            self.assertEqual(doc.offer_percentage, stored)
+
+    def test_not_recorded_never_carries_a_rate(self):
+        doc = self._doc(reasons.NOT_RECORDED, 20)
+        doc.validate()
+        self.assertEqual(doc.offer_percentage, 0)
+
+    def test_patch_rates_are_exactly_the_requested_ones(self):
+        from posawesome.patches import set_pos_discount_reason_offer_rates as patch_module
+
+        self.assertEqual(dict(patch_module.OFFER_RATES), self.RATES)
+        self.assertTrue(set(self.RATES) <= set(TestReasonDoctypeAndSeeds.NEW_LIST))
+
+    def test_patch_fills_only_blank_rates_on_existing_reasons(self):
+        from posawesome.patches import set_pos_discount_reason_offer_rates as patch_module
+
+        current = {"NBO Sadara": 0, "Bank Muscat Asalah": 12, "OAB Credit Card": None}
+        current.pop("OAB Credit Card")  # missing / renamed on this site
+        written = {}
+
+        def get_value(_doctype, name, _field):
+            return current.get(name)
+
+        def set_value(_doctype, name, field, value, update_modified=True):
+            self.assertEqual(field, "offer_percentage")
+            self.assertFalse(update_modified)
+            written[name] = value
+
+        with patch.object(patch_module.frappe, "reload_doc"), patch.object(
+            patch_module.frappe.db, "get_value", side_effect=get_value
+        ), patch.object(patch_module.frappe.db, "set_value", side_effect=set_value):
+            patch_module.execute()
+        # A manager's 12% on Asalah is kept; a missing reason is not created.
+        self.assertEqual(written, {"NBO Sadara": 20})
+
+    def test_patch_is_registered_after_the_seed(self):
+        lines = (REPO_ROOT / "posawesome" / "patches.txt").read_text().split()
+        self.assertLess(
+            lines.index("posawesome.patches.seed_pos_discount_reasons"),
+            lines.index("posawesome.patches.set_pos_discount_reason_offer_rates"),
+        )
+
+    def test_receipts_and_z_report_never_read_the_rate(self):
+        allowed = {
+            "posawesome/posawesome/api/discount_reasons.py",
+            "posawesome/posawesome/api/test_discount_reasons.py",
+            "posawesome/patches/set_pos_discount_reason_offer_rates.py",
+            "posawesome/posawesome/doctype/pos_discount_reason/pos_discount_reason.py",
+            "posawesome/posawesome/doctype/pos_discount_reason/pos_discount_reason.json",
+        }
+        app = REPO_ROOT / "posawesome"
+        readers = sorted(
+            str(path.relative_to(REPO_ROOT))
+            for path in app.rglob("*")
+            if path.suffix in (".py", ".html", ".json", ".jinja")
+            and "public" not in path.parts
+            and "offer_percentage" in path.read_text(errors="ignore")
+        )
+        self.assertEqual([r for r in readers if r not in allowed], [])
+        # The receipts and the Z Report on this site are Print Format records.
+        printed = frappe.get_all(
+            "Print Format",
+            or_filters={"html": ["like", "%offer_percentage%"], "raw_commands": ["like", "%offer_percentage%"]},
+            pluck="name",
+        )
+        self.assertEqual(printed, [])
 
 
 class TestWiring(unittest.TestCase):

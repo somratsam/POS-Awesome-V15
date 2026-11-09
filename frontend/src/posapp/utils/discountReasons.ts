@@ -12,7 +12,49 @@ const DISCOUNT_EPSILON = 0.0000001;
 export type DiscountReasonOption = {
 	name: string;
 	display_order?: number;
+	// The reason's usual bank offer rate; 0/blank = no fixed rate. A reminder
+	// for the cashier only: nothing ever applies it to a line.
+	offer_percentage?: number | null;
 };
+
+const RATE_TOLERANCE = 0.005;
+
+/** The reason's offer rate, or null when it has no fixed rate. */
+export function reasonOfferRate(reason: DiscountReasonOption | null | undefined): number | null {
+	const rate = Number(reason?.offer_percentage || 0);
+	return Number.isFinite(rate) && rate > RATE_TOLERANCE ? rate : null;
+}
+
+/** "20%", "12.5%" -- at most two decimals, no trailing zeros. */
+export const formatOfferRate = (rate: number) => `${Number(Number(rate).toFixed(2))}%`;
+
+/** The Disc % the cashier gave the line, or null when there is none. */
+export function lineDiscountPercent(line: any): number | null {
+	const percent = Number(line?.discount_percentage || 0);
+	return Number.isFinite(percent) && percent > RATE_TOLERANCE ? percent : null;
+}
+
+export function reasonMatchesPercent(reason: DiscountReasonOption, percent: number | null) {
+	const rate = reasonOfferRate(reason);
+	return rate !== null && percent !== null && Math.abs(rate - percent) < RATE_TOLERANCE;
+}
+
+/** Reasons whose rate matches one of the lines' Disc % first, otherwise in the given order. */
+export function sortReasonsForLines(reasons: DiscountReasonOption[], lines: any[] | null | undefined) {
+	const percents = (lines || []).map(lineDiscountPercent).filter((percent) => percent !== null);
+	const matches = (reason: DiscountReasonOption) =>
+		percents.some((percent) => reasonMatchesPercent(reason, percent));
+	return [...(reasons || []).filter(matches), ...(reasons || []).filter((reason) => !matches(reason))];
+}
+
+/** Lines whose Disc % differs from the reason's rate (none when the reason has no rate). */
+export function linesOffReasonRate(reason: DiscountReasonOption | null | undefined, lines: any[] | null | undefined) {
+	if (!reason || reasonOfferRate(reason) === null) return [];
+	return (lines || []).filter((line) => {
+		const percent = lineDiscountPercent(line);
+		return percent !== null && !reasonMatchesPercent(reason, percent);
+	});
+}
 
 export const isDiscountReasonRequired = (posProfile: any) =>
 	parseBooleanSetting(posProfile?.posa_require_discount_reason);

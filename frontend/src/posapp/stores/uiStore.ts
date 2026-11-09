@@ -270,13 +270,18 @@ export const useUIStore = defineStore("ui", () => {
 
   // Discount reason prompt (DiscountReasonDialog.vue). A request resolves
   // with { reason, applyToOthers }, or null when it is superseded or the
-  // cashier goes back to the cart from the Pay check.
-  type DiscountReasonResult = { reason: string; applyToOthers: boolean } | null;
+  // cashier goes back to the cart from the Pay check. changePercent: the
+  // cashier chose "Change %" on the offer-rate warning (line prompt only) --
+  // the reason is NOT to be set; it is the pick to preselect next time.
+  type DiscountReasonResult = { reason: string; applyToOthers: boolean; changePercent?: boolean } | null;
   const discountReasonRequest = ref<{
     mode: "line" | "pay";
     lines: any[];
     preselect: string | null;
     otherMissingCount: number;
+    // The other lines still missing a reason ("Also use for..."), so the
+    // offer-rate check covers them too.
+    otherLines: any[];
   } | null>(null);
   let discountReasonResolver: ((_result: DiscountReasonResult) => void) | null = null;
 
@@ -292,6 +297,7 @@ export const useUIStore = defineStore("ui", () => {
     lines: any[];
     preselect?: string | null;
     otherMissingCount?: number;
+    otherLines?: any[];
   }): Promise<DiscountReasonResult> {
     // Only one prompt at a time: a newer request cancels an unanswered one.
     if (discountReasonResolver) resolveDiscountReason(null);
@@ -300,6 +306,7 @@ export const useUIStore = defineStore("ui", () => {
       lines: request.lines || [],
       preselect: request.preselect || null,
       otherMissingCount: request.otherMissingCount || 0,
+      otherLines: request.otherLines || [],
     };
     return new Promise((resolve) => {
       discountReasonResolver = resolve;

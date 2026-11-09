@@ -6,6 +6,7 @@ import re
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import flt
 
 from posawesome.posawesome.api.discount_reasons import NOT_RECORDED
 
@@ -30,6 +31,17 @@ class POSDiscountReason(Document):
         self.is_system = 1 if is_not_recorded else 0
         if is_not_recorded:
             self.enabled = 1
+        self._check_offer_percentage(is_not_recorded)
+
+    def _check_offer_percentage(self, is_not_recorded):
+        # A reminder for cashiers only (blank/0 = no fixed rate): it never
+        # sets a discount, and the receipt and Z Report don't read it.
+        rate = flt(self.offer_percentage)
+        if is_not_recorded:
+            rate = 0
+        if rate < 0 or rate > 100:
+            frappe.throw(_("Offer % must be between 0 and 100."))
+        self.offer_percentage = rate
 
     def before_rename(self, old, new, merge=False):
         if NOT_RECORDED in (old, new):
