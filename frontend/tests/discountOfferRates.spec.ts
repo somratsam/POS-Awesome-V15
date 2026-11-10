@@ -56,6 +56,8 @@ const VBtnStub = defineComponent({
 					"data-testid": attrs["data-testid"],
 					"data-reason": attrs["data-reason"],
 					"data-match": attrs["data-match"],
+					"data-dim": attrs["data-dim"],
+					"aria-checked": attrs["aria-checked"],
 					"aria-label": attrs["aria-label"],
 					disabled: props.disabled,
 					onClick: (event: Event) => emit("click", event),
@@ -183,13 +185,22 @@ describe("DiscountReasonDialog offer rates", () => {
 	};
 	const optionNames = (wrapper: any) => wrapper.findAll("[data-reason]").map((b: any) => b.attributes("data-reason"));
 
-	it("shows each reason's rate as a chip, matching reasons first and marked", async () => {
+	it("shows each reason's rate as a chip, matching reasons first: green chip, no ✓, the others dimmed", async () => {
 		const { wrapper } = await open();
 		expect(optionNames(wrapper)).toEqual(["Bank Muscat Asalah", "NBO Sadara", "OAB Credit Card", "WGO", "Staff"]);
 		expect(wrapper.get('[data-testid="discount-reason-rate-NBO Sadara"]').text()).toBe("20%");
-		expect(wrapper.get('[data-testid="discount-reason-rate-Bank Muscat Asalah"]').text()).toContain("15%");
+		const matchChip = wrapper.get('[data-testid="discount-reason-rate-Bank Muscat Asalah"]');
+		expect(matchChip.text()).toBe("15%");
+		expect(matchChip.classes()).toContain("discount-reason__rate--match");
 		expect(wrapper.get('[data-reason="Bank Muscat Asalah"]').attributes("data-match")).toBe("true");
 		expect(wrapper.get('[data-reason="NBO Sadara"]').attributes("data-match")).toBeUndefined();
+		// A match is a hint, not a selection: no ✓, not checked, not dimmed.
+		expect(wrapper.text()).not.toContain("✓");
+		expect(wrapper.get('[data-reason="Bank Muscat Asalah"]').attributes("aria-checked")).toBe("false");
+		expect(wrapper.get('[data-reason="Bank Muscat Asalah"]').attributes("data-dim")).toBeUndefined();
+		for (const name of ["NBO Sadara", "OAB Credit Card", "WGO", "Staff"]) {
+			expect(wrapper.get(`[data-reason="${name}"]`).attributes("data-dim")).toBe("true");
+		}
 		// No rate, no chip.
 		expect(wrapper.find('[data-testid="discount-reason-rate-WGO"]').exists()).toBe(false);
 		expect(wrapper.find('[data-testid="discount-reason-rate-Staff"]').exists()).toBe(false);
@@ -199,11 +210,38 @@ describe("DiscountReasonDialog offer rates", () => {
 		wrapper.unmount();
 	});
 
-	it("a matching reason, or one without a rate, confirms in one tap as before", async () => {
-		for (const name of ["Bank Muscat Asalah", "Staff", "WGO"]) {
+	it("the ✓ and strong highlight go only on the one selected reason", async () => {
+		const { wrapper } = await open();
+		await wrapper.get('[data-reason="Staff"]').trigger("click");
+		const marks = wrapper.findAll('[data-testid="discount-reason-selected-mark"]');
+		expect(marks).toHaveLength(1);
+		expect(wrapper.get('[data-reason="Staff"]').text()).toContain("✓");
+		expect(wrapper.get('[data-reason="Staff"]').attributes("aria-checked")).toBe("true");
+		// Selected, so not dimmed even though it doesn't match.
+		expect(wrapper.get('[data-reason="Staff"]').attributes("data-dim")).toBeUndefined();
+		expect(wrapper.get('[data-reason="Bank Muscat Asalah"]').text()).not.toContain("✓");
+		wrapper.unmount();
+	});
+
+	it("nothing is dimmed when no reason matches the typed %", async () => {
+		const { wrapper } = await open({ lines: [line(12)] });
+		expect(wrapper.findAll('[data-dim="true"]')).toHaveLength(0);
+		wrapper.unmount();
+	});
+
+	it("a matching reason, or one without a rate: select, then Confirm (labelled with the rate)", async () => {
+		for (const [name, label] of [
+			["Bank Muscat Asalah", "Confirm: Bank Muscat Asalah · 15%"],
+			["Staff", "Confirm: Staff"],
+			["WGO", "Confirm: WGO"],
+		]) {
 			const { wrapper, result } = await open();
 			await wrapper.get(`[data-reason="${name}"]`).trigger("click");
 			expect(wrapper.find('[data-testid="discount-reason-rate-warning"]').exists()).toBe(false);
+			expect(ui.discountReasonRequest).not.toBeNull();
+			const confirmButton = wrapper.get('[data-testid="discount-reason-confirm"]');
+			expect(confirmButton.text()).toBe(label);
+			await confirmButton.trigger("click");
 			await expect(result).resolves.toEqual({ reason: name, applyToOthers: false });
 			wrapper.unmount();
 		}
@@ -216,7 +254,9 @@ describe("DiscountReasonDialog offer rates", () => {
 		expect(ui.discountReasonRequest).not.toBeNull();
 		const warning = wrapper.get('[data-testid="discount-reason-rate-warning"]');
 		expect(warning.text()).toContain("NBO Sadara is usually 20%; this line has 15%.");
-		expect(wrapper.get('[data-testid="discount-reason-confirm"]').attributes("disabled")).toBeDefined();
+		const confirmButton = wrapper.get('[data-testid="discount-reason-confirm"]');
+		expect(confirmButton.text()).toBe("Confirm: NBO Sadara · 20%");
+		expect(confirmButton.attributes("disabled")).toBeDefined();
 		await nextTick();
 		expect((document.activeElement as HTMLElement)?.dataset?.testid).toBe("discount-reason-change-percent");
 		// Enter outside a button, or a second tap on the same reason, never skips the question.
@@ -237,17 +277,20 @@ describe("DiscountReasonDialog offer rates", () => {
 		wrapper.unmount();
 	});
 
-	it("picking another reason clears the warning", async () => {
+	it("selecting another reason clears the warning", async () => {
 		const { wrapper, result } = await open();
 		await wrapper.get('[data-reason="NBO Sadara"]').trigger("click");
 		expect(wrapper.find('[data-testid="discount-reason-rate-warning"]').exists()).toBe(true);
 		await wrapper.get('[data-reason="Bank Muscat Asalah"]').trigger("click");
+		expect(wrapper.find('[data-testid="discount-reason-rate-warning"]').exists()).toBe(false);
+		await wrapper.get('[data-testid="discount-reason-confirm"]').trigger("click");
 		await expect(result).resolves.toEqual({ reason: "Bank Muscat Asalah", applyToOthers: false });
 		wrapper.unmount();
 	});
 
-	it("Enter on a preselected off-rate reason asks too", async () => {
+	it("a preselected off-rate reason shows the warning straight away, and Enter doesn't skip it", async () => {
 		const { wrapper } = await open({ preselect: "NBO Sadara" });
+		expect(wrapper.find('[data-testid="discount-reason-rate-warning"]').exists()).toBe(true);
 		await wrapper.get('[data-testid="discount-reason-dialog"]').trigger("keydown", { key: "Enter" });
 		expect(wrapper.get('[data-testid="discount-reason-rate-warning"]').text()).toContain("NBO Sadara is usually 20%");
 		expect(ui.discountReasonRequest).not.toBeNull();
@@ -277,6 +320,30 @@ describe("DiscountReasonDialog offer rates", () => {
 			otherLines: [line(15, { posa_row_id: "b" })],
 		});
 		await wrapper.get('[data-reason="NBO Sadara"]').trigger("click");
+		expect(wrapper.find('[data-testid="discount-reason-rate-warning"]').exists()).toBe(false);
+		await wrapper.get('[data-testid="discount-reason-confirm"]').trigger("click");
+		await expect(result).resolves.toEqual({ reason: "NBO Sadara", applyToOthers: false });
+		wrapper.unmount();
+	});
+
+	it("ticking 'Also use for' after selecting shows the warning for the other lines at once", async () => {
+		const { wrapper } = await open({
+			lines: [line(20)],
+			otherMissingCount: 1,
+			otherLines: [line(15, { posa_row_id: "b" })],
+		});
+		await wrapper.get('[data-reason="NBO Sadara"]').trigger("click");
+		expect(wrapper.find('[data-testid="discount-reason-rate-warning"]').exists()).toBe(false);
+		await wrapper.get('[data-testid="discount-reason-apply-others"]').setValue(true);
+		expect(wrapper.get('[data-testid="discount-reason-rate-warning"]').text()).toContain("one of these lines has 15%");
+		wrapper.unmount();
+	});
+
+	it("on the Pay check, a matching selection is recorded for every listed line with Confirm", async () => {
+		const { wrapper, result } = await open({ mode: "pay", lines: [line(20), line(20, { posa_row_id: "b" })] });
+		await wrapper.get('[data-reason="NBO Sadara"]').trigger("click");
+		expect(ui.discountReasonRequest).not.toBeNull();
+		await wrapper.get('[data-testid="discount-reason-confirm"]').trigger("click");
 		await expect(result).resolves.toEqual({ reason: "NBO Sadara", applyToOthers: false });
 		wrapper.unmount();
 	});
@@ -298,6 +365,7 @@ describe("DiscountReasonDialog offer rates", () => {
 		expect(optionNames(wrapper)).toEqual(["NBO Sadara", "Staff"]);
 		expect(wrapper.find(".discount-reason__rate").exists()).toBe(false);
 		await wrapper.get('[data-reason="NBO Sadara"]').trigger("click");
+		await wrapper.get('[data-testid="discount-reason-confirm"]').trigger("click");
 		await expect(result).resolves.toEqual({ reason: "NBO Sadara", applyToOthers: false });
 		wrapper.unmount();
 	});
