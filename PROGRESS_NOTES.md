@@ -8324,3 +8324,128 @@ Pull `stable`; `bench build --app posawesome`; `bench restart`. No migrate:
 the diff is the one .vue file plus two spec files. Tills get the new prompt
 on their next online page load.
 Rollback: `git checkout 6d96c985`, build, restart.
+
+## 90. Sales by Cashier (2026-11-10, `cc338683` on `develop-swan`, `d03403d7` on `stable`)
+
+**Request.** An in-POS report like the old Cegid "Total tax incl. sales by
+Saleperson": one bar per cashier with its value, store and period at the top,
+two periods to compare. Every PIN-unlocked cashier of the store sees the full
+report for their own store; never another store; no role check.
+
+**Built.**
+- Menu item **Sales by Cashier** ("Each cashier's sales for a period"), right
+  under Z Report History, shown only when the POS Profile switch is on.
+- Dialog `components/pos/reports/SalesByCashierDialog.vue` (+ `SalesByCashierBars.vue`,
+  `SalesByCashierChange.vue`, `utils/salesByCashierPeriods.ts`): presets Today /
+  Yesterday / This week (week starts on System Settings' first day) / This
+  month (default) / Last month / Custom; compare with Previous period (same
+  days one step back: 1-10 Nov -> 1-10 Oct) / Same period last year / Custom.
+  Flat CSS bars of Net with the value on each bar, Others and Cashier not
+  recorded last in grey; table Gross / Returns / Net / Sales / Avg basket
+  (Gross / Sales); store total line "Store total X = shown cashiers Y +
+  Others Z (+ Cashier not recorded)". Phone (<600px): full screen, cards
+  instead of the table. Closes itself when the till locks or another PIN
+  unlocks it. Never touches the cart.
+- API `posawesome.posawesome.api.sales_by_cashier.get_sales_by_cashier` (POST
+  only). Checks in order: `get_authorized_pos_profile` -> switch on ->
+  `get_active_terminal_cashier` (unlocked, PIN cashier assigned and enabled)
+  -> periods (From <= To, at most 366 days). Refusals come back as
+  `{allowed: false, reason}` (popup message dropped) so the till shows them in
+  the dialog. Counts submitted Sales Invoices of the profile **with a shift**
+  (`posa_pos_opening_shift`), by posting date, `base_grand_total` like the Z
+  Report. Only cashiers on the POS Profile User list and not ticked hidden get
+  a bar; hidden, former staff, deleted and test users -> Others (or, with
+  "Hide", no row); blank cashier -> Cashier not recorded. Store total always
+  includes everyone. No user ids in the response. Each opening is logged in
+  Activity Log ("Sales by Cashier opened at <store> by <PIN cashier>",
+  content "Till login: <session user>"), and at least once per 30 minutes of
+  use even if a client never says "opened".
+- Custom Fields (hand-added to `custom_field.json` + `hooks.py`):
+  `POS Profile-posa_enable_sales_by_cashier` (Check, 0, after
+  `posa_allow_credit_change_on_sales`, section Sales and Return Controls),
+  `POS Profile-posa_sales_by_cashier_hidden` (Select Group into Others / Hide,
+  default Group into Others, shown when the switch is on),
+  `POS Profile User-posa_hide_in_sales_by_cashier` (Check, 0, grid column).
+- **Arabic, for review:** `posawesome/translations/ar.csv` lines 1833-1874 are
+  draft translations (not reviewed by a native speaker). Not added because
+  core Frappe/ERPNext already translate them: From, To, New, Yesterday, This
+  month, Others. Existing rows touched by this screen that read badly:
+  "Hide" = "يخفي", "Cashier" = "أمين الصندوق" (staff say كاشير).
+
+**Checks.** vitest 284/284 files, 1790/1790 (Node 24); new specs
+mutation-checked (Navbar forwarding). Backend in isolation:
+test_sales_by_cashier 20/20 (mutation-checked: shift filter, hide tick),
+test_terminal_state 5/5, test_employees 21/21, test_dashboard_access 4/4,
+test_invoice_reporting_fields 35/35, test_discount_reasons 34/34,
+test_z_report 3/3, test_z_report_layout 6/6. System Settings 3/3,
+Asia/Muscat, `doc.precision("grand_total") == 3` afterwards. `bench build`
+exit 0 (vue-tsc, vite, Chrome 109 CSS audit). Migrate twice exit 0, field
+positions identical after the second run. Live (headless Chromium, throwaway
+cashier with no POS role, deleted afterwards, no invoice created): 1920,
+1280, 1024, 768, 390px single and compare, no horizontal overflow, cart
+unchanged after every close, dialog closed on lock; figures equal an
+independent SQL sum (Test Pos 1-10 Nov: 2,373.095); Administrator ticked
+hidden -> into Others, total unchanged; Hide mode; injected cashier list
+ignored; other store refused for a PIN cashier not assigned there. 14
+Activity Log rows from the live test were kept.
+
+**v2 design (2026-11-10, same commit): full-screen view.**
+Built from the approved mock-up (`/home/aziz/mockups/sales-by-cashier/index.html`,
+outside the repo). Frontend only: server code byte-identical to v1, no new
+field, no new library, no migrate.
+- `SalesByCashierDialog.vue` is now a full-screen `v-dialog` with
+  "← Back to till". Till (>=1280px): header with presets, range pill and
+  compare switch; four tiles (Net sales, Sales, Avg basket (before returns),
+  Returns); ranked bars; side panel (store summary or the tapped cashier).
+  Tablet (600-1279px): no side panel, compare switch in the controls row,
+  detail in a bottom sheet. Phone (<600px): chips open a period sheet
+  (presets, one-month calendar, compare switch, Period 1/2 tabs).
+- `SalesByCashierBars.vue`: initials avatar, Net value at the bar end, share
+  %; leader marked; Others / Cashier not recorded striped grey under a
+  dashed line. Compare = bullet bars: Period 1 bar, Period 2 marker, values
+  in their own column ("P2 ..."), change badge. Bars grow from zero on open
+  (55ms stagger), morph on reload, rows slide to their new rank
+  (TransitionGroup). Reduced motion (system setting) -> drawn at once, no
+  transitions.
+- `SalesByCashierCalendar.vue`: two-month range calendar (one on phone),
+  dd-mm-yyyy readouts whatever the browser language, first tap / last tap
+  with hover preview, days after today disabled, more than 366 days refused
+  with "Choose a period of one year or less.", weeks start on System
+  Settings' first day.
+- `SalesByCashierDetail.vue` (side panel and sheet), `SalesByCashierChange.vue`
+  restyled as a pill. Esc / tap outside close a calendar or sheet before the
+  view (dialog persistent while one is open). Colours come from the app's
+  Vuetify light and dark themes.
+- Rules unchanged: Net on the bars, Avg basket = Gross / Sales, Others and
+  Cashier not recorded, reconciliation line, till sales only, auto-close on
+  lock or PIN switch, opening logged.
+- Arabic for review: `ar.csv` lines 1875-1932 (new strings, month names,
+  weekday abbreviations), same status as lines 1833-1874.
+- Checks: vitest 285/285 files, 1801/1801 (new calendar spec; dialog spec
+  rewritten; Esc/persistent and reduced-motion tests mutation-checked).
+  Backend: test_sales_by_cashier 20/20, test_terminal_state 5/5,
+  test_employees 21/21; System Settings 3 / Asia/Muscat afterwards. `bench
+  build` exit 0, Chrome 109 CSS audit passed. Migrate twice exit 0, fields
+  unchanged. Live (throwaway cashier with no POS role, deleted afterwards,
+  no invoice created): 1920, 1280, 1024, 768, 390px x dark/light x
+  single/compare, no horizontal overflow, cart unchanged after every close,
+  view closed on lock. Screenshots: `/home/aziz/screenshots/sales-by-cashier-v2/`.
+- Deploy for this part alone: build + restart. The feature as a whole (v1 +
+  v2) still needs one migrate for the three fields.
+
+**Hand tests.** All of the user's hand tests on staging passed (v1 and the
+full-screen design).
+
+**Production deploy** (not done; site `site1.local`; from `c36be0f1` to
+`d03403d7`). One migrate, for the three Custom Fields (no patch, no data
+change). Backup with files; maintenance mode on; read-only name check
+(`SELECT name FROM \`tabCustom Field\` WHERE fieldname IN
+('posa_enable_sales_by_cashier', 'posa_sales_by_cashier_hidden',
+'posa_hide_in_sales_by_cashier')` -> no rows); `git pull --ff-only upstream
+stable` in apps/posawesome; migrate; build with Node 24; clear-cache;
+`sudo supervisorctl restart all`; maintenance off. Then per store: tick "Hide
+in Sales by Cashier" for Administrator and the shared terminal login under
+Applicable for Users, leave "Hidden cashiers" on Group into Others, and turn
+on "Enable Sales by Cashier" when the store is ready (default off, so nothing
+shows before that). Rollback: `git checkout c36be0f1`, build, restart; the
+three fields stay and the old code ignores them.
