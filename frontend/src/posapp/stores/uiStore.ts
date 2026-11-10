@@ -70,6 +70,16 @@ export const useUIStore = defineStore("ui", () => {
     zReportHistoryDialog.value = false;
   };
 
+  const salesByCashierDialog = ref(false);
+
+  const openSalesByCashier = () => {
+    salesByCashierDialog.value = true;
+  };
+
+  const closeSalesByCashier = () => {
+    salesByCashierDialog.value = false;
+  };
+
   const setActiveView = (view: string) => {
     activeView.value = view;
   };
@@ -397,6 +407,9 @@ export const useUIStore = defineStore("ui", () => {
     zReportHistoryDialog,
     openZReportHistory,
     closeZReportHistory,
+    salesByCashierDialog,
+    openSalesByCashier,
+    closeSalesByCashier,
     posProfile,
     stockSettings,
     companyDoc,
