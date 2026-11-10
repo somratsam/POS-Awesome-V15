@@ -1830,3 +1830,103 @@ No limit,بلا حد
 Filter Invoices by POS Profile,تصفية الفواتير حسب ملف نقاط البيع
 Search by Mobile,البحث برقم الهاتف
 Add new supplier,إضافة مورد جديد
+Sales by Cashier,المبيعات حسب الكاشير
+Each cashier's sales for a period,مبيعات كل كاشير خلال فترة
+Net sales incl. VAT,صافي المبيعات شامل ضريبة القيمة المضافة
+Period 1,الفترة 1
+Period 2,الفترة 2
+This week,هذا الأسبوع
+Last month,الشهر الماضي
+Previous period,الفترة السابقة
+Same period last year,نفس الفترة من العام الماضي
+Compare with another period,المقارنة بفترة أخرى
+Try again,حاول مرة أخرى
+Loading sales…,جارٍ تحميل المبيعات…
+No sales in this period.,لا توجد مبيعات في هذه الفترة.
+Pick another period above.,اختر فترة أخرى في الأعلى.
+Gross,الإجمالي
+Avg basket,متوسط السلة
+Net · Period 1,الصافي · الفترة 1
+Net · Period 2,الصافي · الفترة 2
+Sales 1,المبيعات 1
+Sales 2,المبيعات 2
+Store total,إجمالي المتجر
+Cashier not recorded,الكاشير غير مسجل
+Store total {0} = shown cashiers {1},إجمالي المتجر {0} = الكاشير المعروضون {1}
++ not shown {0},+ غير المعروضين {0}
++ Others {0},+ آخرون {0}
++ Cashier not recorded {0},+ الكاشير غير مسجل {0}
+Till sales only. Matches the Z Reports for these dates when every shift opened and closed within them.,مبيعات الصندوق فقط. تطابق تقارير Z لهذه التواريخ عندما تُفتح كل وردية وتُغلق ضمنها.
+Not shown: cashiers hidden by the store and staff no longer assigned.,غير المعروضين: كاشير أخفاهم المتجر وموظفون لم يعودوا مُعيّنين له.
+Others: cashiers hidden by the store and staff no longer assigned.,آخرون: كاشير أخفاهم المتجر وموظفون لم يعودوا مُعيّنين له.
+You are not assigned to this store.,أنت غير مُعيّن لهذا المتجر.
+Sales by Cashier is turned off for this store.,تقرير المبيعات حسب الكاشير متوقف لهذا المتجر.
+Unlock the till with your PIN to see this report.,افتح الصندوق برمزك السري لعرض هذا التقرير.
+The From date must be on or before the To date.,"يجب أن يكون تاريخ ""من"" في تاريخ ""إلى"" أو قبله."
+Choose a period of one year or less.,اختر فترة لا تزيد عن سنة واحدة.
+Choose a From and a To date.,"اختر تاريخ ""من"" وتاريخ ""إلى""."
+This report needs a connection to the server.,يحتاج هذا التقرير إلى اتصال بالخادم.
+Couldn't load the report. Check the connection and try again.,تعذّر تحميل التقرير. تحقق من الاتصال وحاول مرة أخرى.
+Couldn't load the report.,تعذّر تحميل التقرير.
+Enable Sales by Cashier,تفعيل المبيعات حسب الكاشير
+Hidden cashiers in Sales by Cashier,الكاشير المخفيون في المبيعات حسب الكاشير
+Hide in Sales by Cashier,إخفاء في المبيعات حسب الكاشير
+Group into Others,"تجميع ضمن ""آخرون"""
+Back to till,العودة إلى الصندوق
+Compare,مقارنة
+vs,مقابل
+vs {0},مقابل {0}
+Net sales by cashier,صافي المبيعات حسب الكاشير
+Net sales,صافي المبيعات
+Till sales · incl. VAT,مبيعات الصندوق · شامل الضريبة
+Receipts in this period,الإيصالات في هذه الفترة
+Avg basket (before returns),متوسط السلة (قبل المرتجعات)
+Gross ÷ sales,الإجمالي ÷ المبيعات
+{0}% of gross,{0}% من الإجمالي
+was {0}%,كان {0}%
+{0} sales,{0} مبيعات
+Hidden accounts and former staff,حسابات مخفية وموظفون سابقون
+Top seller,الأعلى مبيعاً
+Cashiers shown,الكاشير المعروضون
+Tap a bar to see one cashier.,اضغط على شريط لعرض كاشير واحد.
+#{0} of {1},#{0} من {1}
+{0}% of the store's net sales,{0}% من صافي مبيعات المتجر
+Sales · Period 2,المبيعات · الفترة 2
+Store summary,ملخص المتجر
+Store,المتجر
+P2 {0},ف2 {0}
+Now tap the last day.,الآن اضغط على اليوم الأخير.
+"Tap the first day, then the last day.",اضغط على اليوم الأول ثم اليوم الأخير.
+Previous month,الشهر السابق
+Next month,الشهر التالي
+January,يناير
+February,فبراير
+March,مارس
+April,أبريل
+May,مايو
+June,يونيو
+July,يوليو
+August,أغسطس
+September,سبتمبر
+October,أكتوبر
+November,نوفمبر
+December,ديسمبر
+Jan,يناير
+Feb,فبراير
+Mar,مارس
+Apr,أبريل
+May,مايو
+Jun,يونيو
+Jul,يوليو
+Aug,أغسطس
+Sep,سبتمبر
+Oct,أكتوبر
+Nov,نوفمبر
+Dec,ديسمبر
+Su,أحد
+Mo,إثنين
+Tu,ثلاثاء
+We,أربعاء
+Th,خميس
+Fr,جمعة
+Sa,سبت

@@ -458,6 +458,16 @@ export default {
 					tone: "secondary",
 					handler: "openZReportHistoryAction",
 				},
+				this.isEnabledSetting(this.posProfile?.posa_enable_sales_by_cashier)
+					? {
+							id: "sales-by-cashier",
+							label: __("Sales by Cashier"),
+							subtitle: __("Each cashier's sales for a period"),
+							icon: "mdi-chart-bar",
+							tone: "secondary",
+							handler: "openSalesByCashierAction",
+						}
+					: null,
 			];
 
 			return actions.filter(Boolean);
@@ -664,6 +674,10 @@ export default {
 				case "openZReportHistoryAction":
 					this.closeMenu();
 					this.$emit("open-z-report-history");
+					break;
+				case "openSalesByCashierAction":
+					this.closeMenu();
+					this.$emit("open-sales-by-cashier");
 					break;
 				case "openLanguageDialog":
 					this.closeMenu();
@@ -890,6 +904,7 @@ export default {
 		"logout",
 		"refresh-cache-usage",
 		"open-z-report-history",
+		"open-sales-by-cashier",
 	],
 };
 </script>
