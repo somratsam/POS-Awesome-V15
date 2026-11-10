@@ -8275,3 +8275,52 @@ the patch and gets its rate by hand in Desk. Tills see the rates on their next
 online page load. No fixture, no print format, no receipt change.
 Rollback: `git checkout e2f9d460`, build, restart; the extra column stays and
 is ignored by the old code.
+
+## 89. Discount reason prompt in two steps: select, then Confirm (2026-11-10, `7262f2f7` on `develop-swan`, `c36be0f1` on `stable`)
+
+**Request.** A single tap recorded a reason at once, so a mis-tap went
+straight onto the line. Also, the green ✓ on a matching rate chip looked like
+a selection.
+
+**Built** (`DiscountReasonDialog.vue` only; no backend, doctype, patch or
+fixture change).
+- A tap only **selects**. The selected reason gets flat primary, a ring, bold
+  text and a ✓ in front of its name. Only that one reason has the ✓, never a
+  rate match. Another tap changes the selection, and nothing is recorded
+  until **Confirm**.
+- Confirm reads "Confirm: Bank Muscat Asalah · 15%" (or "Confirm: Staff"
+  with no rate). It wraps instead of clipping and is disabled with nothing
+  selected.
+- Rate match = green chip only (✓ removed from the chip). When some reasons
+  match the typed Disc %, the others are dimmed (opacity 0.55, still
+  tappable, never dimmed while selected). Nothing is dimmed when no reason
+  matches.
+- The orange "X is usually 20%; this line has 15%" line (Change % / Keep)
+  now shows **as soon as** an off-rate reason is selected, including a
+  preselected one and right after ticking "Also use for N other lines".
+  Confirm stays disabled while it shows. `warningFor` state removed: the
+  warning comes from the selection.
+- Keyboard: Enter on a reason that isn't selected selects it, and a second
+  Enter confirms. Enter on a warning/footer button presses that button.
+  Enter elsewhere confirms the selection (nothing happens with none
+  selected).
+- Result contract unchanged: `{ reason, applyToOthers }`, so the cart, Pay
+  check and server need no change.
+
+**Checks.** vitest 280/280 files, 1765/1765 (Node 24). Backend in isolation:
+test_discount_reasons 34/34, test_invoice_reporting_fields 35/35. System
+Settings verified 3/3, Asia/Muscat afterwards (`doc.precision("grand_total")
+== 3`). `bench build --app posawesome` exit 0. No migrate needed (nothing
+doctype/fixture/print-format-shaped touched). Security: reason names and
+the Confirm label are rendered with `{{ }}` text interpolation, no
+`v-html`. Enter selection looks the name up in the loaded reason list.
+The server still checks the reason exists (`sanitize_discount_reason_payload`,
+`frappe.db.exists`). No new whitelisted method.
+
+**Hand tests.** All of the user's hand tests on staging passed.
+
+**Production deploy** (site `site1.local`; from `6d96c985` to `c36be0f1`).
+Pull `stable`; `bench build --app posawesome`; `bench restart`. No migrate:
+the diff is the one .vue file plus two spec files. Tills get the new prompt
+on their next online page load.
+Rollback: `git checkout 6d96c985`, build, restart.
