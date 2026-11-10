@@ -47,17 +47,30 @@
 						:variant="selected === reason.name ? 'flat' : 'outlined'"
 						:color="selected === reason.name ? 'primary' : undefined"
 						class="discount-reason__option"
-						:class="{ 'discount-reason__option--match': isMatch(reason) }"
+						:class="{
+							'discount-reason__option--selected': selected === reason.name,
+							'discount-reason__option--dim': isDimmed(reason),
+						}"
 						role="radio"
 						:aria-checked="selected === reason.name ? 'true' : 'false'"
 						:aria-label="optionLabel(reason)"
 						:data-reason="reason.name"
 						:data-match="isMatch(reason) ? 'true' : undefined"
+						:data-dim="isDimmed(reason) ? 'true' : undefined"
 						:data-testid="`discount-reason-option-${reason.name}`"
-						@click="pick(reason)"
+						@click="select(reason)"
 					>
 						<span class="discount-reason__option-body">
-							<span class="discount-reason__option-name">{{ reason.name }}</span>
+							<span class="discount-reason__option-name">
+								<!-- ✓ only on the selected reason, never on a rate match. -->
+								<span
+									v-if="selected === reason.name"
+									class="discount-reason__selected-mark"
+									aria-hidden="true"
+									data-testid="discount-reason-selected-mark"
+									>✓
+								</span>{{ reason.name }}
+							</span>
 							<!-- The reason's usual offer rate: a reminder only. -->
 							<span
 								v-if="rateOf(reason) !== null"
@@ -65,7 +78,7 @@
 								:class="{ 'discount-reason__rate--match': isMatch(reason) }"
 								:data-testid="`discount-reason-rate-${reason.name}`"
 							>
-								<span v-if="isMatch(reason)" aria-hidden="true">✓ </span>{{ formatOfferRate(rateOf(reason)) }}
+								{{ formatOfferRate(rateOf(reason)) }}
 							</span>
 						</span>
 					</v-btn>
@@ -74,8 +87,9 @@
 					{{ __("No discount reasons are set up. Ask a manager to add them in POS Discount Reason.") }}
 				</v-alert>
 
-				<!-- The picked reason's usual rate differs from the line's Disc %.
-				     Never blocks: Keep records the reason as it is. -->
+				<!-- The selected reason's usual rate differs from the line's Disc %.
+				     Shown as soon as it is selected; never blocks: Keep records
+				     the reason as it is. -->
 				<div
 					v-if="rateWarning"
 					class="discount-reason__rate-warning"
@@ -128,10 +142,11 @@
 					color="primary"
 					variant="flat"
 					:disabled="!selectedReason || !!rateWarning"
+					class="discount-reason__confirm"
 					data-testid="discount-reason-confirm"
 					@click="confirm"
 				>
-					{{ __("Confirm") }}
+					{{ confirmLabel }}
 				</v-btn>
 			</v-card-actions>
 		</v-card>
@@ -175,10 +190,9 @@ const typedPercents = computed(() =>
 	(request.value?.lines || []).map(lineDiscountPercent).filter((percent) => percent !== null),
 );
 
+// Two steps: a tap only selects (strong highlight + ✓); Confirm records.
 const selected = ref(null);
 const applyToOthers = ref(false);
-// The reason the offer-rate warning is showing for (null = none).
-const warningFor = ref(null);
 let lastPrintableAt = 0;
 let focusBeforeOpen = null;
 
@@ -193,7 +207,6 @@ watch(
 			const preselect = current.preselect;
 			selected.value = reasons.value.some((reason) => reason.name === preselect) ? preselect : null;
 			applyToOthers.value = false;
-			warningFor.value = null;
 			lastPrintableAt = 0;
 			focusInitialControl();
 		} else if (!current && previous) {
@@ -233,6 +246,17 @@ function lineLabel(line) {
 
 const rateOf = (reason) => reasonOfferRate(reason);
 const isMatch = (reason) => typedPercents.value.some((percent) => reasonMatchesPercent(reason, percent));
+// When some reasons match the typed %, the others are dimmed (still tappable).
+const anyMatch = computed(() => reasons.value.some(isMatch));
+const isDimmed = (reason) => anyMatch.value && !isMatch(reason) && selected.value !== reason.name;
+
+const reasonText = (reason) => {
+	const rate = rateOf(reason);
+	return rate === null ? reason.name : `${reason.name} · ${formatOfferRate(rate)}`;
+};
+const confirmLabel = computed(() =>
+	selectedReason.value ? __("Confirm: {0}", [reasonText(selectedReason.value)]) : __("Confirm"),
+);
 const percentText = (percent) => formatOfferRate(percent);
 
 function optionLabel(reason) {
@@ -251,8 +275,8 @@ const targetLines = computed(() => [
 const offRateLines = (reason) => linesOffReasonRate(reason, targetLines.value);
 
 const rateWarning = computed(() => {
-	const reason = reasons.value.find((option) => option.name === warningFor.value);
-	if (!reason || selected.value !== reason.name) return "";
+	const reason = selectedReason.value;
+	if (!reason) return "";
 	const off = offRateLines(reason);
 	if (!off.length) return "";
 	const usual = formatOfferRate(rateOf(reason));
@@ -270,18 +294,18 @@ const rateWarning = computed(() => {
 	return __("{0} is usually {1}; {2} of these lines have {3}.", [reason.name, usual, off.length, others]);
 });
 
-// One tap picks and confirms -- unless the reason's usual rate differs from
-// the Disc %, which shows the orange warning first (Change % / Keep).
-function pick(reason) {
+// A tap only selects; another tap changes the selection. A reason whose
+// usual rate differs from the Disc % shows the orange warning right away.
+function select(reason) {
 	selected.value = reason.name;
-	confirm();
+	if (rateWarning.value) focusWarning();
 }
 
+// Confirm (button or Enter) records the selection. With the orange warning
+// showing, the answer is Change % or Keep instead.
 function confirm() {
 	if (!request.value || !selectedReason.value) return;
-	if (rateWarning.value) return; // answered with Change % or Keep
-	if (offRateLines(selectedReason.value).length) {
-		warningFor.value = selectedReason.value.name;
+	if (rateWarning.value) {
 		focusWarning();
 		return;
 	}
@@ -342,15 +366,24 @@ function handleKeydownCapture(event) {
 		event.stopPropagation();
 		return;
 	}
-	// Enter on a reason or warning button presses that button (native click).
-	if (event.target instanceof Element && event.target.closest("[data-reason], .discount-reason__rate-warning button"))
+	const target = event.target instanceof Element ? event.target : null;
+	// Enter on a warning or footer button presses that button (native click).
+	if (target?.closest(".discount-reason__rate-warning button, .v-card-actions button")) return;
+	// Enter on a reason: selects it if it isn't selected yet, otherwise confirms.
+	const option = target?.closest("[data-reason]");
+	if (option instanceof HTMLElement && option.dataset.reason !== selected.value) {
+		event.preventDefault();
+		event.stopPropagation();
+		const reason = reasons.value.find((candidate) => candidate.name === option.dataset.reason);
+		if (reason) select(reason);
 		return;
+	}
 	event.preventDefault();
 	event.stopPropagation();
 	confirm();
 }
 
-defineExpose({ confirm, backToCart, keep, changePercent });
+defineExpose({ confirm, backToCart, keep, changePercent, select });
 </script>
 
 <style scoped>
@@ -426,9 +459,39 @@ defineExpose({ confirm, backToCart, keep, changePercent });
 	opacity: 1;
 }
 
-.discount-reason__option--match:not(.v-btn--variant-flat) {
-	border-color: rgb(var(--v-theme-success));
-	border-width: 2px;
+/* The one selected reason: strong highlight (flat primary) plus a ring. */
+.discount-reason__option--selected {
+	box-shadow: 0 0 0 3px rgba(var(--v-theme-primary), 0.45);
+	font-weight: 700;
+}
+
+.discount-reason__selected-mark {
+	font-weight: 700;
+}
+
+/* Reasons not matching the typed % while some do: dimmed, still tappable. */
+.discount-reason__option--dim {
+	opacity: 0.55;
+}
+
+.discount-reason__option--dim:hover,
+.discount-reason__option--dim:focus-visible {
+	opacity: 0.85;
+}
+
+/* "Confirm: Bank Muscat Oman Air Platinum · 10%" wraps instead of clipping. */
+.discount-reason__confirm {
+	height: auto !important;
+	min-height: 36px;
+	padding-block: 6px;
+	text-transform: none;
+	letter-spacing: normal;
+	max-width: 100%;
+}
+
+.discount-reason__confirm :deep(.v-btn__content) {
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 
 .discount-reason__rate-warning {

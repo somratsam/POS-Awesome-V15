@@ -146,12 +146,44 @@ describe("DiscountReasonDialog", () => {
 		return { wrapper, result };
 	};
 
-	it("one tap on any reason confirms it -- including Other / General, with nothing to type", async () => {
+	it("a tap only selects; Confirm (showing the selection) records it -- with nothing to type", async () => {
 		const { wrapper, result } = await open();
 		expect(wrapper.text()).toContain("Navy 38 — 10% off");
 		expect(wrapper.find("input:not([type='checkbox'])").exists()).toBe(false);
+		const confirmButton = () => wrapper.get('[data-testid="discount-reason-confirm"]');
+		expect(confirmButton().text()).toBe("Confirm");
+		expect(confirmButton().attributes("disabled")).toBeDefined();
 		await wrapper.get('[data-testid="discount-reason-option-Other / General"]').trigger("click");
-		await expect(result).resolves.toEqual({ reason: "Other / General", applyToOthers: false });
+		expect(ui.discountReasonRequest).not.toBeNull();
+		expect(wrapper.get('[data-reason="Other / General"]').attributes("aria-checked")).toBe("true");
+		expect(confirmButton().text()).toBe("Confirm: Other / General");
+		expect(confirmButton().attributes("disabled")).toBeUndefined();
+		// Another tap changes the selection; still nothing recorded.
+		await wrapper.get('[data-testid="discount-reason-option-Staff"]').trigger("click");
+		expect(ui.discountReasonRequest).not.toBeNull();
+		expect(wrapper.get('[data-reason="Other / General"]').attributes("aria-checked")).toBe("false");
+		expect(confirmButton().text()).toBe("Confirm: Staff");
+		await confirmButton().trigger("click");
+		await expect(result).resolves.toEqual({ reason: "Staff", applyToOthers: false });
+		wrapper.unmount();
+	});
+
+	it("Enter on a focused reason that isn't selected selects it; a second Enter confirms", async () => {
+		const { wrapper, result } = await open();
+		const staff = wrapper.get('[data-reason="Staff"]');
+		(staff.element as HTMLElement).focus();
+		await staff.trigger("keydown", { key: "Enter" });
+		expect(ui.discountReasonRequest).not.toBeNull();
+		expect(staff.attributes("aria-checked")).toBe("true");
+		await staff.trigger("keydown", { key: "Enter" });
+		await expect(result).resolves.toEqual({ reason: "Staff", applyToOthers: false });
+		wrapper.unmount();
+	});
+
+	it("Enter with nothing selected and focus off the reasons records nothing", async () => {
+		const { wrapper } = await open();
+		await wrapper.get('[data-testid="discount-reason-dialog"]').trigger("keydown", { key: "Enter" });
+		expect(ui.discountReasonRequest).not.toBeNull();
 		wrapper.unmount();
 	});
 
@@ -245,6 +277,7 @@ describe("DiscountReasonDialog", () => {
 		expect(wrapper.text()).toContain("Also use for 2 other discounted line(s) without a reason");
 		await wrapper.get('[data-testid="discount-reason-apply-others"]').setValue(true);
 		await wrapper.get('[data-testid="discount-reason-option-Staff"]').trigger("click");
+		await wrapper.get('[data-testid="discount-reason-confirm"]').trigger("click");
 		await expect(result).resolves.toEqual({ reason: "Staff", applyToOthers: true });
 		wrapper.unmount();
 	});
