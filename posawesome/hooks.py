@@ -45,6 +45,9 @@ doctype_js = {
     "Stock Entry": "posawesome/api/stock_entry.js",
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_list_js = {
+    "Sales Invoice": "posawesome/api/sales_invoice_list.js",
+}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -93,9 +96,11 @@ after_migrate = []
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
+# Sales Invoice Desk List / Report view / export: submitted only, except
+# System Manager and Administrator (POS and other queries untouched).
+permission_query_conditions = {
+    "Sales Invoice": "posawesome.posawesome.api.sales_invoice_list_lock.get_permission_query_conditions",
+}
 #
 # has_permission = {
 # 	"Event": "frappe.desk.doctype.event.event.has_permission",
@@ -528,6 +533,7 @@ fixtures = [
                     "Sales Invoice Item-brand-hidden",
                     "Sales Invoice Item-brand-read_only",
                     "Sales Invoice Item-item_group-hidden",
+                    "Sales Invoice-posting_date-in_standard_filter",
                 ),
             ]
         ],
