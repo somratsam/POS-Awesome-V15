@@ -17,13 +17,14 @@ import frappe
 from frappe import _
 from frappe.core.doctype.user_permission.user_permission import get_user_permissions
 from frappe.query_builder.functions import Count
-from frappe.utils import cstr, escape_html, flt, format_datetime, get_datetime, getdate, strip_html, today
+from frappe.utils import cstr, escape_html, flt, format_datetime, get_datetime, getdate, strip_html
+
+from posawesome.posawesome.api.item_selling_price import get_standard_selling_prices
 
 REPORT_NAME = "Upload Stock Check"
 UPLOAD_DOCTYPE = "Stock Reconciliation"
 RECEIPT_DOCTYPE = "Stock Entry"
 RECEIPT_PURPOSE = "Material Receipt"
-PRICE_LIST = "Standard Selling"
 SIZE_ATTRIBUTES = ("Size",)
 COLOUR_ATTRIBUTES = ("Color", "Colour")
 # Season / Collection are made by hand on each site, not shipped as fixtures.
@@ -229,32 +230,8 @@ def _get_attributes(item_codes):
 
 
 def _get_prices(item_codes, stock_uoms):
-    """Today's Standard Selling price, picked the way ERPNext's get_item_price does:
-    the item's stock UOM (or no UOM), no customer/supplier/batch, valid today,
-    newest Valid From first."""
-    on = getdate(today())
-    candidates = frappe.get_all(
-        "Item Price",
-        filters={
-            "price_list": PRICE_LIST,
-            "selling": 1,
-            "item_code": ["in", item_codes],
-            "customer": ["is", "not set"],
-            "supplier": ["is", "not set"],
-            "batch_no": ["is", "not set"],
-        },
-        fields=["item_code", "uom", "price_list_rate", "valid_from", "valid_upto"],
-    )
-    best = {}
-    for p in candidates:
-        if cstr(p.uom) not in ("", cstr(stock_uoms.get(p.item_code))):
-            continue
-        if (p.valid_from and getdate(p.valid_from) > on) or (p.valid_upto and getdate(p.valid_upto) < on):
-            continue
-        key = (getdate(p.valid_from) if p.valid_from else getdate("1900-01-01"), cstr(p.uom))
-        if p.item_code not in best or key > best[p.item_code][0]:
-            best[p.item_code] = (key, flt(p.price_list_rate))
-    return {code: rate for code, (_key, rate) in best.items()}
+    """Today's Standard Selling price (shared rule, see item_selling_price)."""
+    return get_standard_selling_prices(item_codes, stock_uoms)
 
 
 def _check_report_access():

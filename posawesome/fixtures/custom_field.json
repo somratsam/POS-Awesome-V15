@@ -9121,6 +9121,18 @@
 	},
 	{
 		"doctype": "Custom Field",
+		"dt": "Item",
+		"fieldname": "posa_selling_price",
+		"fieldtype": "Currency",
+		"label": "Selling Price",
+		"description": "Current Standard Selling price, kept in sync from Item Price automatically (0 = no price). For reports; not used to value stock.",
+		"read_only": 1,
+		"no_copy": 1,
+		"insert_after": "sales_uom",
+		"name": "Item-posa_selling_price"
+	},
+	{
+		"doctype": "Custom Field",
 		"dt": "POS Profile",
 		"fieldname": "posa_allow_item_quick_edit",
 		"fieldtype": "Check",

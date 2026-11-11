@@ -149,6 +149,11 @@ doc_events = {
     "Asset Capitalization": {
         "validate": "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
     },
+    "Item Price": {
+        "after_insert": "posawesome.posawesome.api.item_selling_price.on_item_price_change",
+        "on_update": "posawesome.posawesome.api.item_selling_price.on_item_price_change",
+        "after_delete": "posawesome.posawesome.api.item_selling_price.on_item_price_change",
+    },
     "Item": {
         "after_insert": "posawesome.posawesome.api.item_processing.alternates.clear_alternate_item_caches",
         "on_update": "posawesome.posawesome.api.item_processing.alternates.clear_alternate_item_caches",
@@ -214,6 +219,8 @@ scheduler_events = {
         # watermark to ever catch -- see rewards_sync.py's module docstring).
         "*/15 * * * *": ["posawesome.posawesome.api.rewards_sync.run_incremental_sync"],
         "0 2 * * *": ["posawesome.posawesome.api.rewards_sync.run_full_refresh"],
+        # Item.posa_selling_price: prices whose Valid From/Upto starts or ends today.
+        "5 0 * * *": ["posawesome.posawesome.api.item_selling_price.daily_refresh"],
     },
 }
 
@@ -498,6 +505,7 @@ fixtures = [
                     "POS Invoice-posa_below_cost_override_details",
                     "User-posa_pos_pin",
                     "Stock Entry-posa_destination_store",
+                    "Item-posa_selling_price",
                 ),
             ]
         ],
