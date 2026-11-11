@@ -183,6 +183,7 @@ doc_events = {
         "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
     },
     "Customer": {
+        "before_insert": "posawesome.posawesome.api.customer_store.before_insert",
         "validate": "posawesome.posawesome.api.customer.validate",
         "after_insert": "posawesome.posawesome.api.customer.after_insert",
     },
@@ -385,6 +386,7 @@ fixtures = [
                     "Customer-posa_birthday",
                     "Customer-posa_loyalty_portal_code",
                     "Customer-posa_is_generic_customer",
+                    "Customer-posa_store",
                     "Sales Order-posa_offers",
                     "Sales Order-posa_coupons",
                     "Sales Order Item-posa_row_id",

@@ -38,6 +38,15 @@ def validate(doc, method):
     validate_referral_code(doc)
     ensure_loyalty_portal_code(doc)
     validate_mobile(doc)
+    validate_store(doc)
+
+
+def validate_store(doc):
+    # Store (posa_store) is read-only after creation except for System
+    # Manager (customer_store.py).
+    from .customer_store import validate as keep_store_read_only
+
+    keep_store_read_only(doc)
 
 
 def validate_mobile(doc):

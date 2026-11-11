@@ -2087,6 +2087,8 @@ def update_invoice(data):
                     "customer_group": "All Customer Groups",
                     "territory": "All Territories",
                     "customer_type": "Individual",
+                    # Store filter on the Desk Customer list (customer_store.py).
+                    "posa_store": pos_profile,
                 }
             )
             cust.flags.ignore_permissions = True
