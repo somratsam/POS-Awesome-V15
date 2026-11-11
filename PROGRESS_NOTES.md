@@ -8449,3 +8449,195 @@ Applicable for Users, leave "Hidden cashiers" on Group into Others, and turn
 on "Enable Sales by Cashier" when the store is ready (default off, so nothing
 shows before that). Rollback: `git checkout c36be0f1`, build, restart; the
 three fields stay and the old code ignores them.
+
+## 91. X Report (mid-shift): approved plan, ON HOLD (2026-11-11, plan only, nothing built)
+
+**Request.** A report of the current open shift's figures at any time,
+without closing it, so staff can check sales and the cash in the drawer
+mid-day. It must never change anything: no closing, no closing record, no
+counters, no print status. Figures must agree with the Z Report.
+
+**Status.** Approved, ON HOLD. No code written; build starts only when the
+user says so.
+
+### What the investigation found
+- `creation.build_closing_shift(opening)` returns an **unsaved** POS Closing
+  Shift (`frappe.new_doc`, its docstring: "No side effects") with
+  `pos_transactions`, `grand_total`, `net_total`, taxes and
+  `payment_reconciliation` (opening and expected per mode, cash net of
+  change, cash movements). It reads invoices with `submit_printed=0`.
+- Parity on staging (read-only, rolled back): the 12 latest closed shifts
+  rebuilt with `build_closing_shift` from their opening shift matched the
+  stored closing on grand total, net total, the invoice list and the expected
+  amount of every payment mode -- **12/12**; POS Closing Shift count 58 before
+  and after.
+- **Write paths to avoid**: `make_closing_shift_from_opening` and
+  `fetch_shift_invoices(..., submit_printed=1)` both call
+  `submit_printed_invoices`, which submits the shift's printed drafts. The X
+  Report must never call them. (`delete_draft_invoices` runs only on closing
+  submit.)
+- **Printed-drafts mismatch**: at closing, drafts with `posa_is_printed = 1`
+  are submitted first, so they are in the Z Report but not in an earlier X
+  Report. Unprinted drafts (held carts) never count (deleted at closing when
+  `posa_allow_delete` is on). Staging has drafts in several open shifts.
+- **Blind count**: POS Profile `hide_expected_amount` hides Expected Cash on
+  the closing screen, client-side only today (section 81; no store uses it).
+  The X Report must enforce it on the server.
+- `get_z_report_data(name)` needs a submitted closing; the "Z Report" print
+  format is bound to POS Closing Shift (`get_z_report_data(doc.name)` inside
+  the template), so the X paper can't use it. `printHtmlViaQz(html)`
+  (qzTray.ts) already prints ready HTML silently.
+- The till's own shift comes from `shifts.check_opening_shift`: the session
+  user's latest Open shift.
+
+### Decisions (user, 2026-11-11)
+- Every PIN-unlocked cashier assigned to the POS Profile may run it; **no role
+  check**.
+- **No Activity Log entry** (the report writes nothing at all).
+- Paper: a **thick border box** (not a solid black band), "X REPORT" and
+  "NOT A CLOSING REPORT" at **top and bottom**.
+- **Menu only** (under Z Report History); no button on the closing screen.
+- **v1** = the Z Report rows + printed-drafts warning + unsynced-sales
+  warning + opening float and expected cash.
+- **No new field, no migrate**; deploy = build + restart.
+
+### Where it lives
+Menu item **X Report**, subtitle "Current shift figures, without closing",
+right under Z Report History (above Sales by Cashier). Opens an on-screen
+receipt-style view (dialog; full screen on a phone) with **Refresh** and
+**Print**; it does not print by itself.
+
+### Server design and authorization
+New `posawesome/posawesome/api/x_report.py`, whitelisted
+`get_x_report(pos_profile)` (POST):
+1. `get_authorized_pos_profile(pos_profile)` -- this store only.
+2. `get_active_terminal_cashier(profile)` -- unlocked till, PIN cashier
+   assigned to the profile and enabled; locked -> refusal.
+3. Shift found **on the server**: the session user's latest POS Opening Shift
+   with docstatus 1, status Open, this POS Profile (same rule as
+   `check_opening_shift`). The client sends no shift name. None -> refusal
+   "no_shift".
+4. `closing = build_closing_shift(opening.as_dict())` -- never saved,
+   inserted or submitted.
+5. `data = build_shift_report_data(closing)` (below), plus: store name, shift
+   number, opening time (`period_start_date`), PIN cashier's full name,
+   printed-at (server time), printed drafts (count and amount: docstatus 0,
+   `posa_is_printed` 1, this shift -- read-only query).
+6. Blind count: when the profile has `hide_expected_amount`, the reply leaves
+   out Expected cash **and** the Cash line under payments (float + cash taken
+   would reveal it); the screen and paper print "Expected cash hidden (blind
+   count)".
+7. Returns the data and the rendered paper HTML
+   (`frappe.render_template("posawesome/templates/print/x_report.html", ...)`).
+   Expected refusals come back as `{allowed: false, reason}` like Sales by
+   Cashier (no Frappe popup). No Activity Log, no write of any kind.
+
+### Z Report refactor
+Split `z_report.get_z_report_data` into
+`build_shift_report_data(doc)` (all calculations, unchanged) and the existing
+`get_z_report_data(name)` (authorization + docstatus check + call). Z passes
+the stored submitted closing; X passes the in-memory one. Regression test:
+for every submitted closing on staging, the Z dataset after the refactor is
+**byte-identical** to before (JSON dump compare); the existing 31 Z Report
+tests still pass. The "Z Report" print format is **not** touched.
+
+### Paper template
+`posawesome/templates/print/x_report.html` (a file, not a Print Format
+record -- no migrate): same 76mm styles, section order and labels as the Z
+Report ("Today's Operations", "Today's Payments", "Customer Credit",
+"Takings", "Cash Balance", "Additional Information"), with no Closing #, no
+Actual Closing / Difference / Variance / Approved By. A parity test checks X
+has the same sections and figures as Z for the same shift.
+
+### Wireframes
+On screen:
+```
+┌────────────────────────────────────────────────────┐
+│ X Report                                        ✕  │
+│ ▌X REPORT · NOT A CLOSING REPORT · shift still open│  ← amber band
+│ Swan Galleria · Shift 0058                         │
+│ Opened 07-11-2026 21:11 · Cashier now: Aziz        │
+│ Figures at 11-11-2026 14:32                        │
+├────────────────────────────────────────────────────┤
+│ ⚠ 2 printed sales are still drafts (139.300 OMR).  │
+│   They will be counted at closing.                 │
+│ ⚠ 1 sale on this till is waiting to sync.          │
+│ TODAY'S OPERATIONS   (Z rows: Gross Sales, of which │
+│   exchanges, Returns, Net Sales, counts, items,     │
+│   Discounts Granted)                                │
+│ TODAY'S PAYMENTS     (cash net of change)           │
+│ CUSTOMER CREDIT      (Issued, Redeemed, Left)       │
+│ CASH IN DRAWER       Opening float / Expected now   │
+│ ADDITIONAL INFORMATION (VAT etc.)                   │
+├────────────────────────────────────────────────────┤
+│ [↻ Refresh]                          [🖨 Print]     │
+└────────────────────────────────────────────────────┘
+```
+Paper (76mm, thick border box per the decision):
+```
+╔══════════════════════════════╗
+║          X  REPORT           ║
+║  *** NOT A CLOSING REPORT ***║
+╚══════════════════════════════╝
+       Shift still open
+Store            Swan Galleria
+Shift            0058 (open)
+Opened           07-11-2026 21:11
+Cashier          Aziz
+Printed          11-11-2026 14:32
+- - - - - - - - - - - - - - - -
+TODAY'S OPERATIONS     (same rows as Z)
+TODAY'S PAYMENTS       (same rows, cash net of change)
+CUSTOMER CREDIT        (same rows)
+CASH IN DRAWER
+ Opening float           50.000
+ Expected now           662.400
+ADDITIONAL INFORMATION (VAT etc., same rows)
+- - - - - - - - - - - - - - - -
+Printed drafts not counted yet:
+ 2 sales            139.300 OMR
+Sales waiting to sync on this till: 1
+Figures so far. The Z Report at
+closing is the final record.
+╔══════════════════════════════╗
+║          X  REPORT           ║
+║  *** NOT A CLOSING REPORT ***║
+╚══════════════════════════════╝
+```
+The unsynced-sales count comes from the till's offline queue (an integer
+added to the printed HTML on the till, escaped); it is informational only.
+
+### Failure cases
+- Mismatch with the Z Report at closing: only from sales after the X was
+  printed, printed drafts (warned), unsynced offline sales (warned).
+- No open shift / shift closed meanwhile: "There is no open shift on this
+  till." -- nothing to print.
+- Till locked: server refusal "Unlock the till with your PIN to see this
+  report."; the view closes when the till locks.
+- Offline: "This report needs a connection to the server."
+- PIN switch: the view closes; reopening shows the new cashier.
+- QZ Tray unavailable: the existing browser-print fallback.
+
+### Test plan
+Backend: Z dataset byte-identical before/after the refactor on all submitted
+staging closings; X dataset from `build_closing_shift(opening)` equals the
+stored Z for closed shifts; **no INSERT/UPDATE/DELETE** during an X call
+(record every SQL statement), closing count, shift status, invoice docstatus
+and `posa_is_printed` unchanged; printed drafts counted in the warning, not
+the figures; access (other store, locked till, no PIN cashier, unassigned
+cashier, no open shift, client-sent shift name ignored); blind count leaves
+Expected cash and the Cash line out of the reply. Frontend: menu item and
+caller wiring (Navbar, Pos), sections and labels, warnings, Print calls
+`printHtmlViaQz` with the server HTML and falls back, Refresh, no-shift /
+locked / offline / error states, close on lock or PIN switch, cart untouched.
+Live: X Report on staging, then close that shift and compare with its Z
+Report line by line. Full 6-item regression check.
+
+### Ranked ideas (value vs effort)
+1. Z Report rows -- v1. 2. Printed-drafts warning -- v1. 3. Unsynced-sales
+warning -- v1. 4. Opening float and expected cash -- v1. 5. Cash paid in/out
+as its own line -- v1.1. 6. Held carts count ("not in these figures") --
+v1.1. 7. Discounts by discount reason -- v2. 8. Per-cashier split (link to
+Sales by Cashier) -- v2. 9. Sales by hour so far -- v2.
+
+**Deploy (when built).** Build + restart only; no migrate, no new field.
