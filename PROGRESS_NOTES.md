@@ -8751,3 +8751,180 @@ Manager, so those roles now see selling prices -- accepted by the user.
    Save As for the fixed-columns saved report.
 Rollback: `git checkout d03403d7`, restart; the field stays (values freeze),
 the old code ignores it.
+
+## 93. Sales Invoice List / Report view: Posting Date range at the top, and submitted invoices only for staff (2026-11-11, `f2fe2a14` on `develop-swan`, `58255b8f` on `stable`)
+
+**Request.** (1) One From - To Posting Date range at the top of the Sales
+Invoice List and Report view (like the date search in POS Invoice
+Management); no default range. (2) Staff (Accounts User / Accounts Manager)
+see only submitted invoices there and in the export, whatever the filters;
+System Manager and Administrator still see drafts and cancelled invoices.
+A real lock, not a default filter. A "Submitted only" label for staff.
+
+**Found first (live, staging; Frappe v16 / ERPNext 16.26).**
+- List and Report view both read `frappe.listview_settings["Sales Invoice"]`;
+  `custom_filter_configs` adds fields to the top row (FilterArea
+  `make_standard_filters`, condition from `df.match_type || df.condition`).
+  Two top fields can't share a fieldname, so ERPNext's single-date
+  `posting_date` (in_standard_filter) had to go.
+- Frappe only pushes `=` / `like` / `descendants of` filters back into a top
+  field (`set_standard_filter`): a saved or linked Between range lands under
+  the Filter button, and a single date sent to a DateRange field is dropped
+  (`DateRange.parse`). `set_standard_filter` also overwrites the field's
+  `df.match_type`. Order: init (saved filters applied) -> setup_view
+  (`settings.onload`) -> before_refresh (route options: clear, then add).
+- `permission_query_conditions` is applied by both v16 query paths
+  (`model/db_query.py` and `database/query.py`), for every permission-checked
+  query on the doctype. A lock everywhere would break the POS:
+  `get_draft_invoices` (`invoices.py`) lists held drafts with
+  `frappe.get_list` as the terminal user, and the staging terminal user
+  `testserver@swan.com` holds Accounts User.
+- Desk's list traffic all goes through `frappe.desk.reportview.*` /
+  `frappe.desk.listview.*` (list, report, count, sidebar stats, group-by
+  counts, export, and the client `frappe.db.get_list` / `count`). The
+  background export (`export_in_background`) runs
+  `frappe.desk.reportview.run_report_view_export_job` in a worker with no
+  request, but `frappe.local.job.method` names it. `/api/v2/method/...`
+  does not set `form_dict.cmd`. The POS frontend uses none of these
+  endpoints for Sales Invoice; no ERPNext desk script does either.
+- Neither Accounts role has export permission on Sales Invoice on staging;
+  on production Accounts User does.
+- Production (checked by the user): locked users maxandcooman, swangalleria1,
+  ventiseioman, swangalleriaqcc plus test/demo accounts; exempt
+  Administrator, it.department, Swan.inventory (System Manager). Drafts and
+  cancelled invoices in the last 90 days all from the POS, except 1 desk
+  draft by maxdemo (demo).
+
+**Built.**
+- `api/sales_invoice_list.js`, registered with `doctype_list_js`, so it loads
+  after ERPNext's own list JS and extends its settings (ERPNext's onload
+  still runs first):
+  - Appends a `posting_date` DateRange top field, condition Between.
+  - `moveInitialFilters` (in onload): posting_date `Between` / `=` filters
+    already applied (saved view, saved report) move from under the Filter
+    button into the box; a single date becomes that day to that day.
+  - `wrapAdd`: wraps this list's `filter_area.add()` (both call forms) for
+    links and route options -- ranges/single dates go into the box, the rest
+    pass on with one refresh. Other conditions (>=, <, Timespan) stay under
+    the Filter button.
+  - `widen`: min-width 220px, or the To date is cut off at Frappe's
+    `col-md-2`.
+  - `addSubmittedOnlyLabel`: grey "Submitted only" pill beside the range for
+    users without System Manager (same rule as the server), hover note.
+- Property Setter `Sales Invoice-posting_date-in_standard_filter` = 0,
+  hand-added to `property_setter.json` + the hooks fixture list. Posting Date
+  stays a list column (Report view default columns), in the Filter button
+  and in sorting.
+- `api/sales_invoice_list_lock.py`, registered as Sales Invoice's
+  `permission_query_conditions`: returns ``tabSales Invoice`.`docstatus` = 1``
+  only when the user is not Administrator / System Manager AND the query
+  comes from `frappe.desk.reportview.*` / `frappe.desk.listview.*` (cmd, or
+  the `/method/` request path for v2) or the background export job.
+  Everything else -- POS, link-field search (`frappe.desk.search`), ERPNext
+  reports, `/api/resource`, `frappe.client.get_list` -- is untouched. It
+  locks what the list, report and export show; a draft or cancelled invoice
+  still opens by name.
+- If Frappe renames those endpoints the lock stops applying (fails open:
+  staff see drafts again, nothing breaks); `test_sales_invoice_list_lock`
+  asserts the names Frappe's own JS uses.
+
+**Verified on staging** (headless Chromium; staging 267 submitted incl. 72
+returns, 30 drafts, 9 cancelled). Throwaway Accounts User, with export
+turned on for Accounts User temporarily (`update_permission_property`, as
+on production) and reset afterwards (`reset_perms`, 0 Custom DocPerm as
+before):
+- Range: typed 01-10 Nov -> 152 = SQL with both ends (before the lock);
+  calendar clicks 2 and 9 Nov -> 146; reload keeps the range, 1 list
+  request; single-date link 05 Nov -> 05-05; range link 01-03 Nov -> 18;
+  `>=` stays under Filter; an old saved single date opens as that day.
+- Lock, staff: list 267 ("20 of 267"), range 01-10 Nov 129 (of 152),
+  reload 129, Clear Filters 267 with the label still there, links
+  `docstatus=0` and `status=Cancelled` -> 0, `is_return=1` -> 72, Saved
+  Filter "Status = Draft" from the Saved Filters button -> 0, sidebar status
+  counts without Draft/Cancelled, `frappe.db.count` 267, Report view 267.
+  Excel export all rows: 267 rows, database confirms all docstatus 1, 72
+  returns; range export 129, all submitted. Background export: staging has
+  no outgoing Email Account, so the job failed at `send_report_email` after
+  building the file; the same job body run as the staff user (email step
+  stubbed) gave 267 rows, all submitted. POS `get_draft_invoices` over HTTP
+  as the same user: 30 (unchanged). A cancelled invoice still opens.
+- Administrator: no label, 306, drafts link 30, cancelled 9; their Sales
+  Invoice user settings backed up and restored.
+- Layout: 1920 / 1400 / 1100 / 768px, List and Report: full range readable,
+  label beside it, no overlap, no sideways scroll; phone 390px (filters
+  behind Frappe's toggle): box and label visible, scrollWidth 390.
+
+**Regression check.** Frontend 286/286 files, 1812/1812
+(`salesInvoicePostingDateRange.spec.ts` 11 tests, runs the real JS against
+fakes; mutation-checked: single-date conversion removed -> 2 fail, `wrapAdd`
+off -> 2 fail, exemption removed -> 1 fail). Backend in isolation:
+`test_sales_invoice_list_lock` 9/9 (condition off -> 5 fail; desk-only
+scoping removed -> POS test fails), `test_sales_invoice_posting_date_range`
+4/4 (hook removed -> 2 fail), `test_payment_processing` 35/35,
+`test_payments` 12/12, `test_submitted_invoice_edit_customer` 9/9,
+`test_submitted_invoice_edit_supervisor` 13/13,
+`test_return_generic_customer_credit_guard` 8/8, `test_credit_voucher`
+51/51, `test_pos_access` 12/12, `test_shifts` 8/8,
+`test_offline_sync_invoices` 4/4, `test_invoice_reporting_fields` 35/35,
+`test_api_imports` 4/4, `test_closing_security` 11/11, `test_z_report` 3/3,
+`test_pos_closing_shift` 10/10, plus the hook/fixture modules from section
+92. Fail identically with these changes stashed (pre-existing, to fix next):
+`test_invoices` and `test_submitted_invoice_shift_security` (ImportError in
+their fake frappe), `test_credit_exchange` and
+`test_submitted_invoice_edits_credit_badge` (setup: duplicate "Standard
+Buying" Price List), `test_sales_by_cashier` (1 failure, 4.38 vs 4.375 at
+the bootstrap's precision 2), and `test_gift_card_invoice_fields`,
+`test_invoice_cancel_hooks`, `test_workspace_gift_card` (section 92).
+System Settings restored to 3 / 3 / Asia/Muscat, `precision("grand_total")`
+3. `bench build` exit 0. Migrate twice, exit 0, Sales Invoice Property
+Setters identical. Security: the condition is a fixed string; the request's
+method name is only compared with a fixed prefix; no whitelisted method; the
+label uses `.text()`.
+
+**Production deploy, combined with section 92** (site `site1.local`;
+`stable` `d03403d7` -> `c4ca2cfa` (Selling Price) -> `58255b8f` (this)).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `d03403d7`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name='Item-posa_selling_price' OR (dt='Item' AND fieldname='posa_selling_price');
+   SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='tabItem' AND column_name='posa_selling_price';
+   SELECT name FROM \`tabPatch Log\` WHERE patch LIKE '%backfill_item_selling_price%';
+   SELECT name FROM \`tabScheduled Job Type\` WHERE method LIKE '%item_selling_price%';
+   SELECT name FROM \`tabProperty Setter\` WHERE name='Sales Invoice-posting_date-in_standard_filter' OR (doc_type='Sales Invoice' AND field_name='posting_date' AND property='in_standard_filter');
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype='Sales Invoice' AND script_type='Permission Query';
+   SELECT name FROM \`tabClient Script\` WHERE dt='Sales Invoice' AND view='List' AND enabled=1;"
+   grep -n "Sales Invoice" ~/frappe-bench/apps/*/*/hooks.py | grep -iE "permission_query|list_js"
+   ```
+   (the grep must print nothing before the pull; posawesome adds both after it).
+   Optional, for step 5: `SELECT COUNT(*) FROM \`tabItem Price\` WHERE price_list='Standard Selling';`
+4. `git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `58255b8f`.
+5. `bench --site site1.local migrate` -- exit 0; read
+   `Item Selling Price backfill: <N> items checked, <M> with a Standard
+   Selling price, <K> updated.` (M close to the step 3 count) and the
+   `<X> item(s) hold stock but have no price:` list if any. The Property
+   Setter prints nothing.
+6. No `bench build`: nothing in `d03403d7..58255b8f` touches the POS bundle
+   (`sales_invoice_list.js` is served as is with the DocType meta).
+7. `bench --site site1.local clear-cache` (the list JS is cached with the
+   meta), then `sudo supervisorctl restart all` (new hooks).
+8. Checks:
+   - `SELECT value FROM \`tabProperty Setter\` WHERE name='Sales Invoice-posting_date-in_standard_filter';` -> 0.
+   - `echo 'print(frappe.get_hooks("permission_query_conditions").get("Sales Invoice"))' | bench --site site1.local console`
+     -> `['posawesome.posawesome.api.sales_invoice_list_lock.get_permission_query_conditions']`.
+   - Selling Price: the mismatch query of section 92 -> 0;
+     `bench --site site1.local scheduler status` -> enabled.
+   - Staff login (a demo account, e.g. swangalleriaTest; hard-refresh
+     once): Sales Invoice list shows the Posting Date range and "Submitted
+     only"; total = `SELECT COUNT(*) FROM \`tabSales Invoice\` WHERE docstatus=1`;
+     a range matches the same query with `posting_date BETWEEN`; Report view
+     -> Export (Excel, all rows): Document Status column only "Submitted",
+     row count = that SQL count; Status filter "Draft" -> empty.
+   - it.department: no label; total = all invoices (drafts and cancelled
+     included).
+   - POS: hold an invoice on a terminal and reopen it from Drafts -- still
+     listed. Stock Balance -> Add Column -> Item (Item Code) -> Selling Price.
+Rollback of this commit only: `git checkout c4ca2cfa`, clear-cache, restart;
+then delete the Property Setter `Sales Invoice-posting_date-in_standard_filter`
+to bring back ERPNext's single date at the top. Rollback of both: section 92.
