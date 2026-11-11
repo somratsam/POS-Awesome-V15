@@ -8928,3 +8928,157 @@ label uses `.text()`.
 Rollback of this commit only: `git checkout c4ca2cfa`, clear-cache, restart;
 then delete the Property Setter `Sales Invoice-posting_date-in_standard_filter`
 to bring back ERPNext's single date at the top. Rollback of both: section 92.
+
+## 94. Customer Store: a Store filter on the Desk Customer list (2026-11-12, `2238955e` on `develop-swan`, `aea4114c` on `stable`)
+
+**Request.** A Store filter at the top of the Desk Customer list: staff pick
+a POS Profile (MAX&Co, Ventisei MO, SWAN GALLERIA MCC, Swan Galleria ...) and
+see the customers that store created. A filter only -- it must not change who
+sees which customers in Desk or the POS; POS search, creation, loyalty and
+credit unchanged. Walk-ins blank; customers a store login creates in Desk
+also get its store; corrections by IT only. (A POS-side customer screen is
+for later.)
+
+**Found first.**
+- Nothing on Customer recorded the store. `create_customer` (customers.py)
+  receives the POS Profile but only checks it via
+  `assert_pos_profile_write_allowed`, which checks existence and company --
+  not that the user is on the profile (the name comes from the client). The
+  customer created during a sale (`update_invoice`, creation.py) sets no
+  store either. `owner` ("Created By") was the only clue.
+- Production: one login per store, each on exactly one POS Profile; 37
+  customers owned by Administrator; store logins have POS Profile User
+  Permissions with Apply To All Document Types = 1. Staging has the same kind
+  of permission on the transit test users.
+- A plain Link to POS Profile on Customer would make Frappe apply those User
+  Permissions to Customer (list, form, link search) -- store logins would see
+  only their store's customers. `ignore_user_permissions` on the field is
+  honoured in all three (db_query `add_user_permissions`, permissions.py
+  `check_user_permission_on_link_fields`, desk/search.py
+  `validate_ignore_user_permissions`, which the Link control passes for the
+  top filter too, so the Store dropdown lists every store).
+- The POS reads customers with `frappe.get_all` (no permissions):
+  `get_customer_names`, `search_customers`, `get_customer_info`.
+
+**Built.**
+- Custom Field `Customer-posa_store` "Store": Link POS Profile, read_only,
+  no_copy, ignore_user_permissions, in_standard_filter, print_hide,
+  insert_after `territory` (main Customer section, not collapsible -- checked
+  live with `frappe.get_meta`; no other field after territory). Hand-added to
+  `custom_field.json` as text (the file is tab-indented; a json.dump rewrite
+  reformatted all 10,000 lines and was reverted).
+- `api/customer_store.py`:
+  - `before_insert` (Customer doc_event): walk-in -> blank; a profile set by
+    the caller is kept only if the creating user is on its POS Profile User
+    list or is System Manager/Administrator; otherwise the user's single
+    store; otherwise blank. Never throws.
+  - `validate` (called from `customer.validate` via `validate_store()`):
+    after creation, a change by anyone but System Manager/Administrator is
+    reverted -- read-only also through the API.
+- `create_customer` and the during-a-sale path pass `posa_store`.
+- Patch `backfill_customer_store`: creates the field from the fixture, then
+  fills blank customers only: walk-in blank; creating user on exactly one
+  POS Profile -> that store; else the first submitted Sales Invoice's
+  `pos_profile`; else blank. `frappe.db.set_value(..., update_modified=False)`:
+  no Version, Customer `modified` unchanged (POS customer delta sync and the
+  rewards sync don't re-download everyone). Prints a summary.
+
+**Verified on staging.** Patch: 53 checked, 34 filled (first invoice, Test
+Pos), 17 no invoice + 2 walk-ins blank; every Customer `modified` and the
+Customer Version count identical before/after both migrates. Headless
+Chromium as a throwaway store login (Accounts User + Sales User, POS Profile
+User on Test Pos, User Permission POS Profile = Test Pos, apply to all):
+top row ID / Customer Name / Customer Group / Territory / Store / Generic;
+all 54 customers listed (one made for store "test 222"); the Store dropdown
+lists both stores (request carries `ignore_user_permissions=1`); picking
+"test 222" -> 1 of 1; Test Pos -> 34; reload keeps it, Clear Filters -> 54;
+the other store's customer opens, Store read-only after Territory; Sales
+Invoice customer picker finds it; Desk-created customer -> Test Pos; POS
+`create_customer` -> Test Pos, and claiming "test 222" -> Test Pos (not on
+it); `frappe.client.set_value` of Store as staff -> unchanged; POS customer
+list for the store login = everyone; 1920/1400/1100/768 and phone 390
+without sideways scroll. The during-a-sale path was not verified live (the
+console call stopped at the POS terminal lock -- cashier PIN); covered by the
+code and `before_insert` tests.
+
+**Regression check.** Frontend 286/286 files, 1812/1812 (no frontend file
+changed; `bench build` N/A). Backend in isolation: `test_customer_store` 9/9
+(mutation-checked: ignore_user_permissions off on the live field -> 4 fail,
+membership check skipped -> 1, read-only guard removed -> 1);
+`test_customer` 12/12 -- it failed 1 with the first version (the guard ran
+on its fake doc); fixed by the separate `validate_store()` and the test now
+expects it (call removed -> fails); `test_customers` 4/4,
+`test_customer_mobile` 14/14, `test_offline_sync_customers` 4/4,
+`test_rewards_sync` 3/3, `test_customer_credit_invoice_fields` 2/2,
+`test_credit_voucher` 51/51, `test_stored_value` 2/2, `test_gift_cards`
+14/14, `test_return_generic_customer_credit_guard` 8/8,
+`test_submitted_invoice_edit_customer` 9/9, `test_pos_access` 12/12,
+`test_overview_loyalty` 4/4, `test_payment_processing` 35/35,
+`test_offline_sync_invoices` 4/4, `test_sales_invoice_list_lock` 9/9,
+`test_sales_invoice_posting_date_range` 4/4, `test_item_selling_price`
+11/11, `test_invoice_reporting_fields` 35/35, `test_api_imports` 4/4 and 5
+hook/fixture modules. The 8 pre-existing failures (section 93) unchanged.
+System Settings restored to 3 / 3 / Asia/Muscat, precision 3. Migrate twice,
+exit 0, idempotent.
+
+**Production deploy: everything not yet on production** (site
+`site1.local`; `stable` `d03403d7` -> `c4ca2cfa` Selling Price (92) ->
+`58255b8f` Sales Invoice range + lock (93) -> `aea4114c` Customer Store
+(94)).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `d03403d7`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name IN ('Item-posa_selling_price','Customer-posa_store') OR (dt='Item' AND fieldname='posa_selling_price') OR (dt='Customer' AND fieldname='posa_store');
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='tabItem' AND column_name='posa_selling_price') OR (table_name='tabCustomer' AND column_name='posa_store'));
+   SELECT name FROM \`tabPatch Log\` WHERE patch LIKE '%backfill_item_selling_price%' OR patch LIKE '%backfill_customer_store%';
+   SELECT name FROM \`tabScheduled Job Type\` WHERE method LIKE '%item_selling_price%';
+   SELECT name FROM \`tabProperty Setter\` WHERE name='Sales Invoice-posting_date-in_standard_filter' OR (doc_type='Sales Invoice' AND field_name='posting_date' AND property='in_standard_filter') OR (doc_type='Customer' AND property='field_order');
+   SELECT name FROM \`tabCustom Field\` WHERE dt='Customer' AND insert_after='territory';
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype IN ('Sales Invoice','Customer') AND script_type='Permission Query';
+   SELECT name FROM \`tabClient Script\` WHERE enabled=1 AND ((dt='Sales Invoice' AND view='List') OR dt='Customer');"
+   grep -n "Sales Invoice\|\"Customer\"" ~/frappe-bench/apps/*/*/hooks.py | grep -iE "permission_query|list_js|before_insert"
+   ```
+   (the grep must print nothing; posawesome adds these after the pull).
+   Optional: `SELECT COUNT(*) FROM \`tabItem Price\` WHERE price_list='Standard Selling';`
+   and note the time, for the Version check in step 8.
+4. `git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `aea4114c`.
+5. `bench --site site1.local migrate` -- exit 0. Two patch summaries:
+   - `Item Selling Price backfill: <N> items checked, <M> with a Standard
+     Selling price, <K> updated.` (M close to the step 3 count), then
+     possibly `<X> item(s) hold stock but have no price:` and their codes.
+   - `Customer Store backfill: <T> customers without a store, <F> filled.`
+     then, in any order, `by creating user: 183`, `by first invoice: 35`,
+     `by no invoice (blank): 9`, `by walk-in (blank): 1`, and per store
+     `MAX&Co: 77`, `Ventisei MO: 36`, `SWAN GALLERIA MCC: 33`,
+     `Swan Galleria: 28`, `Max Demo: 7`, `Swan Galleria T: 16`,
+     `Test Pos: 21` (F = 218, T = 228 per the 11-11 preview; customers
+     added since then shift these a little).
+   The Sales Invoice Property Setter prints nothing.
+6. No `bench build`: nothing in `d03403d7..aea4114c` touches the POS bundle;
+   `sales_invoice_list.js` is served with the DocType meta.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Checks:
+   - Hooks: `echo 'print(frappe.get_hooks("permission_query_conditions").get("Sales Invoice"), frappe.get_hooks("doc_events")["Customer"].get("before_insert"))' | bench --site site1.local console`
+     -> the `sales_invoice_list_lock` and `customer_store.before_insert` paths.
+   - Selling Price: section 92's mismatch query -> 0; `bench --site
+     site1.local scheduler status` -> enabled; Stock Balance -> Add Column ->
+     Item (Item Code) -> Selling Price fills.
+   - Customer Store: `SELECT posa_store, COUNT(*) FROM tabCustomer GROUP BY 1;`
+     matches step 5; `SELECT COUNT(*) FROM tabVersion WHERE ref_doctype='Customer' AND creation > '<step 3 time>';` -> 0.
+   - As a store login (hard-refresh once): Customer list shows Store; the
+     total is every customer; the Store dropdown lists all stores; picking
+     another store shows its customers. Sales Invoice list shows the Posting
+     Date range and "Submitted only"; total = `SELECT COUNT(*) FROM \`tabSales Invoice\` WHERE docstatus=1`;
+     Report view -> Export (Excel, all rows): Document Status only
+     "Submitted", same row count.
+   - As it.department: no "Submitted only"; Sales Invoice total includes
+     drafts and cancelled.
+   - POS at one store: search an existing customer from another store (found),
+     create a new customer -> its Store is that store; hold an invoice and
+     reopen it from Drafts.
+Rollback: Customer Store only -> `git checkout 58255b8f`, clear-cache,
+restart (the field stays with its values; the old code ignores it).
+Sales Invoice work too -> `git checkout c4ca2cfa` and delete the Property
+Setter `Sales Invoice-posting_date-in_standard_filter`. Everything -> section 92.
