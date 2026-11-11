@@ -8641,3 +8641,113 @@ v1.1. 7. Discounts by discount reason -- v2. 8. Per-cashier split (link to
 Sales by Cashier) -- v2. 9. Sales by hour so far -- v2.
 
 **Deploy (when built).** Build + restart only; no migrate, no new field.
+
+## 92. Item Selling Price: Standard Selling price on the Item, for Stock Balance's Add Column (2026-11-11, `b24b7888` on `develop-swan`, `c4ca2cfa` on `stable`)
+
+**Request.** The selling price as a column in ERPNext's own Stock Balance,
+picked like the Sales Invoice report fields (sections 54/70): the Item
+carries its Standard Selling price and stays in sync whenever an Item Price
+is created, changed or deleted. Cost is not tracked; Valuation Rate is 0 on
+purpose. (A separate "Stock Balance with Price" report was proposed first,
+then put on hold in favour of this.)
+
+**Found first (live, staging; ERPNext 16.26).**
+- Stock Balance is a Script Report, so its column menu item is **Add Column**
+  (Report View calls it Pick Columns). It offers every value field of each
+  Link column's doctype -- Item via `item_code` -- including hidden ones, and
+  reads it with `frappe.desk.query_report.get_data_for_custom_field`
+  (`frappe.get_list`, Item read permission). Picked columns are not saved
+  unless the report is saved with Save As; with a picked column the report
+  runs live instead of as a prepared report.
+- One selling list, Standard Selling, on both POS Profiles: 1,420 prices, one
+  per item, all on variants and in the stock UOM, no customer/batch/end-date
+  prices. VAT 5% inclusive. 7 items hold stock with no price (test items).
+- **Item.standard_rate ("Standard Selling Rate") was rejected.** ERPNext's
+  `get_valuation_rate()` (stock_ledger.py) falls back to Item
+  `valuation_rate`, then `standard_rate`, then a buying price when the item
+  has no ledger entry yet in that warehouse (an entry with valuation 0 stops
+  the chain). Swan has perpetual inventory on. Rolled-back trial, item never
+  in `Stores - S`: a Material Receipt with no rate is refused today ("Valuation
+  Rate ... is required"); with `standard_rate` = 97.65 it was accepted and
+  posted Stock In Hand Dr 97.65 / Stock Adjustment Cr 97.65. Material
+  Transfers stayed at 0 either way. ERPNext also only uses the field when an
+  Item is created (it makes an Item Price).
+- Item Quick Edit (`item_quick_edit.py`) writes the retail price into
+  `standard_rate`, and Data Import can set it: staging item `43649930030014`
+  has 46.4 from the 05-08-2026 Item import. Separate change, later.
+- Frappe v16 Currency columns are `NOT NULL DEFAULT 0`: an item with no price
+  shows 0, not blank (the lowest real price is 10).
+
+**Built.**
+- Custom Field `Item-posa_selling_price` (Currency, "Selling Price",
+  read-only, no_copy, after `sales_uom` on the Sales tab; no insert_after
+  tie). Hand-added to `custom_field.json` + the hooks fixture list. Not in
+  Item Variant Settings, so variants never copy it; Desk's Duplicate skips it.
+- `api/item_selling_price.py`:
+  - `get_standard_selling_prices()`: the picking rule, now shared with
+    Upload Stock Check (its `_get_prices` calls it). Standard Selling, stock
+    UOM or blank, no customer/supplier/batch, valid today, newest Valid From.
+  - `refresh_items(codes=None)`: writes only changed values with
+    `frappe.db.set_value(..., update_modified=False)` -- no Item save, no
+    hooks, no Version, Item `modified` unchanged (POS caches and the rewards
+    sync see no catalog change). Never writes `standard_rate`.
+  - Item Price `after_insert` / `on_update` / `after_delete` ->
+    `on_item_price_change`: the price's item, plus the previous item when the
+    item code or price list was edited. Data Import and Item Quick Edit go
+    through these hooks.
+  - Cron `5 0 * * *` -> `daily_refresh()`: prices whose Valid From / Valid
+    Upto starts or ends a window, item renames, direct database writes.
+- Patch `backfill_item_selling_price`: creates the field from the fixture
+  (patches run before fixture sync), fills every Item, prints a summary and
+  the items that hold stock with no price. Idempotent.
+
+**Verified on staging.** Backfill: 1,420 items priced, 0 mismatches against
+Item Price, 7 stock items without a price (the test items above); Item
+`modified` and Version rows unchanged. Migrate twice, exit 0, field position
+and every Item's value and `modified` identical after the second run. Stock
+Balance via `query_report.run` with the custom column, as Administrator and
+as a store user: 1,421 rows, 1,417 priced, `45240197030024` 50 x 97.65.
+Headless Chromium: Add Column -> Item (Item Code) lists "Selling Price" (and
+ERPNext's "Standard Selling Rate", left as is); the column fills next to
+Balance Qty. The prepared report it generated was deleted.
+
+**Regression check.** Frontend 285/285 files, 1801/1801. Backend in isolation:
+`test_item_selling_price` 11/11 (mutation-checked: hook disabled -> 5 fail;
+`update_modified=False` removed -> 1 fail), `test_upload_stock_check` 20/20,
+`test_api_imports` 4/4, `test_item_quick_edit` 8/8,
+`test_offline_sync_item_prices` 4/4, `test_stock_transit` 39/39,
+`test_invoice_reporting_fields` 35/35, `test_discount_reasons` 34/34,
+`test_item_sale_controls` 30/30 and 10 more modules reading hooks/fixtures;
+`test_gift_card_invoice_fields` (1 failure), `test_invoice_cancel_hooks` (2
+errors), `test_workspace_gift_card` (2 failures) fail identically with these
+changes stashed -- pre-existing. System Settings 3 / Asia/Muscat,
+`doc.precision("grand_total") == 3` afterwards. `bench build` N/A (no
+frontend file). Security: no whitelisted method; ORM filters only; Item is
+readable by 8 roles while Item Price is readable only by Sales/Purchase Master
+Manager, so those roles now see selling prices -- accepted by the user.
+
+**Production deploy** (site `site1.local`; `stable` `d03403d7` -> `c4ca2cfa`).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -- if it is not
+   `d03403d7`, section 90's steps (build) are in this deploy too.
+2. `bench --site site1.local backup --with-files`
+3. Name check -- each must return no rows:
+   ```
+   bench --site site1.local mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE name='Item-posa_selling_price' OR (dt='Item' AND fieldname='posa_selling_price'); SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='tabItem' AND column_name='posa_selling_price'; SELECT name FROM \`tabPatch Log\` WHERE patch LIKE '%backfill_item_selling_price%'; SELECT name FROM \`tabScheduled Job Type\` WHERE method LIKE '%item_selling_price%';"
+   ```
+4. Optional, for the summary: `SELECT COUNT(*) FROM \`tabItem Price\` WHERE price_list='Standard Selling';`
+5. `git pull --ff-only upstream stable`
+6. `bench --site site1.local migrate` -- read the patch's output:
+   `Item Selling Price backfill: <N> items checked, <M> with a Standard
+   Selling price, <K> updated.` (M close to the step 4 count), then
+   `<X> item(s) hold stock but have no price:` with up to 50 item codes if
+   any -- those show 0 until an Item Price is added.
+7. `sudo supervisorctl restart all` (hooks changed; no build for this commit).
+8. Check: `SELECT COUNT(*) FROM \`tabItem Price\` ip JOIN tabItem i ON
+   i.name=ip.item_code WHERE ip.price_list='Standard Selling' AND
+   ROUND(ip.price_list_rate,9)<>ROUND(i.posa_selling_price,9);` -> 0 (unless
+   an item has several Standard Selling prices with different dates);
+   `bench --site site1.local scheduler status` -> enabled (daily refresh).
+9. Stock Balance -> Add Column -> Item (Item Code) -> Selling Price; then
+   Save As for the fixed-columns saved report.
+Rollback: `git checkout d03403d7`, restart; the field stays (values freeze),
+the old code ignores it.
