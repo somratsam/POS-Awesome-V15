@@ -523,6 +523,9 @@ def create_customer(
                     "posa_birthday": formatted_birthday,
                     "customer_type": customer_type,
                     "gender": gender,
+                    # Store filter on the Desk Customer list; kept only if
+                    # this user is on the profile (customer_store.py).
+                    "posa_store": pos_profile.get("name"),
                 }
             )
             if customer_group:

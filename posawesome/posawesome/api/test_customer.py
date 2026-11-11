@@ -218,11 +218,13 @@ class TestValidateStillRunsReferralCodeCheck(unittest.TestCase):
                 module, "ensure_loyalty_portal_code", side_effect=lambda d: calls.append("loyalty")
             ),
             patch.object(module, "validate_mobile", side_effect=lambda d: calls.append("mobile")),
+            patch.object(module, "validate_store", side_effect=lambda d: calls.append("store")),
         ):
             module.validate(doc, method=None)
 
-        # The mobile check (clean number, one customer per number) runs too.
-        self.assertEqual(calls, ["referral", "loyalty", "mobile"])
+        # The mobile check (clean number, one customer per number) and the
+        # read-only Store guard run too.
+        self.assertEqual(calls, ["referral", "loyalty", "mobile", "store"])
 
 
 if __name__ == "__main__":
