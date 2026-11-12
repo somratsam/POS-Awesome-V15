@@ -9082,3 +9082,137 @@ Rollback: Customer Store only -> `git checkout 58255b8f`, clear-cache,
 restart (the field stays with its values; the old code ignores it).
 Sales Invoice work too -> `git checkout c4ca2cfa` and delete the Property
 Setter `Sales Invoice-posting_date-in_standard_filter`. Everything -> section 92.
+
+## 95. Sales credited to: staff performance follows the chosen Sales Person (2026-11-12, `e3d5a32a` on `develop-swan`, `65a32a5e` on `stable`)
+
+**Request.** Sales by Cashier should credit the Sales Person chosen on the
+sale, not only the PIN cashier who rang it up (purpose: staff performance).
+Each Sales Person is linked to the PIN cashier's user. Decisions: returns
+follow the original sale's credited person; past invoices are filled from
+their saved Sales Person by a re-runnable command (the user links Sales
+Persons on production after deploy and will not link "Aziz", so its 56 test
+invoices stay with their PIN cashier); the dropdown keeps using the POS
+Profile's Allowed Sales Persons with a server-side check and never shows
+group headings; only System Manager sets "POS User" on a Sales Person and
+changes the Sales Team of a submitted invoice; the POS dashboard's Staff /
+Cashier Performance uses the same rule; "Rung up by others" in the detail
+panel. Production (user's count): 66 submitted invoices with a Sales Person
+(Aziz 56, Omar 6, Abeer 2, Raifah 1, Maryam 1); Sales Team rows on Customer: 0.
+
+**Found first.**
+- The POS writes one Sales Team row at 100%; `posa_cashier` is the PIN
+  cashier (authoritative, set server-side). Sales Person had no user link
+  (only `employee`).
+- Pre-existing bug: the till's Sales Person list (`get_sales_person_names`)
+  was called without a POS Profile, so the server used the user's FIRST POS
+  Profile User row -- Administrator on Test Pos saw "test 222"'s list.
+  Production logins have one store each, so no visible effect there.
+
+**Built.**
+- Custom Fields (hand-added to `custom_field.json`):
+  `Sales Invoice-posa_credited_user` "Sales Credited To" (Link User) and
+  `-posa_credited_user_name` (Data), both read-only, no_copy, print_hide,
+  allow_on_submit, after `posa_cashier_name`; `Sales Person-posa_user`
+  "POS User" (Link User, unique, after `employee`, hidden on groups,
+  read-only unless System Manager).
+- `api/sales_credit.py`: rules (top-share Sales Team row -> its POS User,
+  else the PIN cashier; a return against an invoice -> the original's
+  credit); `set_credited_user` from `invoice.validate` and
+  `before_update_after_submit` (which first refuses a Sales Team change by
+  anyone but System Manager/Administrator -- contact/incentive edits still
+  allowed; `invoice.js` shows the table read-only to them);
+  `on_update_after_submit` moves submitted returns with a corrected original;
+  `check_pos_sales_team` in both POS submit paths (`update_invoice`,
+  `submit_invoice`): enabled, not a group, on the Allowed list if set --
+  till refuses, offline sync drops the row and writes an Error Log
+  "POS Sales Person dropped on offline sync", Edit Invoice amendments skip;
+  `validate_sales_person` (Sales Person validate): non-System-Manager
+  changes to POS User silently reverted, group/duplicate refused;
+  `refresh_sales_credit` behind `bench --site <site> posa-refresh-sales-credit
+  [--dry-run]` (`posawesome/commands.py`): recomputes every submitted
+  invoice, writes only differences with `update_modified=False`, prints
+  checked/changed/blank/unchanged, moves and unlinked Sales Persons.
+- `sales_by_cashier.py` groups by `COALESCE(NULLIF(posa_credited_user,''),
+  posa_cashier)` and adds `by_others`; `dashboard.py`'s staff report uses the
+  same expression (discount/void and branch sections stay on the PIN
+  cashier). `SalesByCashierDetail.vue`: "Rung up by others: N sales".
+- `utils.fetch_sales_person_names`: enabled and not group only; a profile
+  name from the client is authorized with `get_authorized_pos_profile`
+  (not on it -> empty list). `useInvoiceDetails.ts` sends the till's
+  profile name and respects an empty server list (profile list only as the
+  offline fallback).
+- 11 draft Arabic rows in `ar.csv`.
+
+**Verified on staging.** Refresh: dry run 267 checked / 256 would change
+(blank) / 11 unchanged; real run 256; rerun 0; `modified` and Version counts
+unchanged; one return credited to its original's seller. Headless Chromium:
+POS User editable for Administrator, hidden on "Sales Team", read-only for a
+Sales Master Manager (API change ignored); POS sale by PIN cashier "Tmp
+Cashier" with "_Tmp Seller" (dropdown `_Tmp Seller`, `aziz` -- no group) ->
+ACC-SINV-2026-00354 cashier Tmp Cashier, credited Tmp Seller; return 00355
+(rung by Administrator) -> Tmp Seller; Sales Team changed after submit moved
+both and back, 4 Versions; Sales by Cashier shows Tmp Seller with "Rung up by
+others 1 sale" at 1920/768/390 without sideways scroll; dashboard staff
+report credits the seller. Console: Accounts User changing the Sales Person
+of 00354 -> "Only a System Manager can change the Sales Person of a
+submitted invoice."; incentive edit saves. Throwaway users disabled, PINs
+cleared; 00354/00355 kept.
+
+**Regression check.** Frontend 287/287 files, 1818/1818. Backend in
+isolation: `test_sales_credit` 37/37 (mutation-checked: 7 rule breaks + the
+after-submit guard each caught), `test_sales_by_cashier` 24/24,
+`test_invoice_reporting_fields` 35/35 and `test_discount_reasons` 34/34
+(their validate stub lists gained `set_credited_user`), `test_customers` 4,
+`test_dashboard_access` 4, `test_api_imports` 4, `test_pos_access` 12,
+`test_terminal_state` 5, `test_offline_sync_invoices` 4, `test_payments` 12,
+`test_credit_voucher` 51, `test_customer_credit_invoice_fields` 2,
+`test_return_generic_customer_credit_guard` 8,
+`test_submitted_invoice_edit_customer` 9,
+`test_submitted_invoice_edit_supervisor` 13, `test_sales_invoice_list_lock`
+9, `test_sales_invoice_posting_date_range` 4, `test_invoice_line_backfill`
+11. Pre-existing failures unchanged (same 13 tests with the change stashed).
+`bench build` exit 0; migrate twice, exit 0, idempotent. System Settings
+restored to 3 / 3 / Asia/Muscat.
+
+**Production deploy** (site `site1.local`; `stable` `aea4114c` -> `65a32a5e`).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `aea4114c`.
+   (Older -> sections 92-94 are not on production yet: do section 94's steps
+   3-8 in the same run.)
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows and the greps print nothing:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name IN ('Sales Invoice-posa_credited_user','Sales Invoice-posa_credited_user_name','Sales Person-posa_user') OR (dt='Sales Invoice' AND fieldname IN ('posa_credited_user','posa_credited_user_name')) OR (dt='Sales Person' AND fieldname='posa_user');
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='tabSales Invoice' AND column_name LIKE 'posa_credited_user%') OR (table_name='tabSales Person' AND column_name='posa_user'));
+   SELECT name FROM \`tabProperty Setter\` WHERE doc_type='Sales Person' AND property='field_order';
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype IN ('Sales Invoice','Sales Person') AND doctype_event IN ('Before Save (Submitted Document)','After Save (Submitted Document)','Before Validate','Before Save');
+   SELECT name FROM \`tabClient Script\` WHERE enabled=1 AND dt IN ('Sales Person','Sales Invoice') AND view='Form';"
+   cd ~/frappe-bench && bench --help 2>/dev/null | grep -i "refresh-sales-credit"
+   grep -n "\"Sales Person\"" apps/*/*/hooks.py
+   ```
+4. `git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `65a32a5e`.
+5. `bench --site site1.local migrate` -- exit 0 (3 new fields, no patch).
+6. `bench build --app posawesome` -- exit 0 (POS bundle: Sales by Cashier
+   panel, Sales Person list).
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Fields and hooks:
+   `echo 'm=frappe.get_meta("Sales Invoice"); print(m.get_field("posa_credited_user").allow_on_submit, frappe.get_meta("Sales Person").get_field("posa_user").unique, frappe.get_hooks("doc_events")["Sales Invoice"]["before_update_after_submit"])' | bench --site site1.local console`
+   -> `1 1 [...sales_credit.before_update_after_submit]`.
+9. Dry run: `bench --site site1.local posa-refresh-sales-credit --dry-run`
+   -> "N submitted invoices checked, M would change (M were blank), K
+   unchanged" (K = sales submitted since step 7, already filled), "Credited to someone other than their PIN cashier: 0", and
+   under "Sales Persons on invoices without a POS User": Aziz 56, Omar 6,
+   Abeer 2, Raifah 1, Maryam 1 (plus any since the count).
+10. Real run: `bench --site site1.local posa-refresh-sales-credit` -> same
+    numbers with "changed"; run it again -> "0 changed".
+11. As System Manager, Desk -> Sales Person -> each (not Aziz) -> POS User =
+    that person's PIN cashier user -> Save. Then dry run again -> moves
+    "PIN cashier -> <name>: n", then the real run, then once more -> 0 changed.
+12. Checks: POS Sales by Cashier for a store with a linked seller -> the sale
+    under the seller, "Rung up by others" in the panel; the till's Sales
+    Person dropdown lists only the store's Allowed Sales Persons, no group
+    heading; as a non-System-Manager Desk user, a submitted invoice's Sales
+    Team table is read-only.
+Rollback: `git checkout aea4114c`, `bench build --app posawesome`,
+clear-cache, restart. The 3 fields stay with their values; the old code
+ignores them.
