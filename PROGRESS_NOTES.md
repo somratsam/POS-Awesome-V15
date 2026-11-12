@@ -9216,3 +9216,153 @@ restored to 3 / 3 / Asia/Muscat.
 Rollback: `git checkout aea4114c`, `bench build --app posawesome`,
 clear-cache, restart. The 3 fields stay with their values; the old code
 ignores them.
+
+## 96. Staff Sales Performance: managers' Desk report across stores (2026-11-12, `3061fb38` on `develop-swan`, `798693f3` on `stable`)
+
+**Request.** A Desk view for managers of staff performance across all stores,
+with the same credited-person rules as Sales by Cashier (section 95), store
+and date filters, and export. Decisions: report access flexible -- System
+Manager sees all stores; any role added later through "Role Permission for
+Page and Report" sees only its own stores (POS Profile User list or POS
+Profile User Permission), the Stores filter offers only those, enforced on
+the server including export; for now System Manager only. Till sales by
+default. Staff hidden in a store's Sales by Cashier (Administrator, shared
+store logins) are hidden here too, their sales counted in "Others".
+
+**Found first.**
+- The POS dashboard's Staff / Cashier Performance can't do this: it runs
+  inside the POS with a store session, whole months only, no per-store split,
+  user ids, top 20, no export.
+- `frappe.desk.query_report.save_report` ("Save as") makes a Custom Report
+  with no roles; `Report.set_doctype_roles` then gives it the ref doctype's
+  roles (Sales Invoice: Accounts User, Accounts Manager) -- wider than this
+  report's. Role Permission for Page and Report writes a Custom Role that
+  replaces the report's own roles (`Report.is_permitted`).
+- Running a report needs read + report permission on its ref doctype (Sales
+  Invoice) and exporting needs Export on it (`frappe.permissions.can_export`).
+  On staging, by default, nobody but Administrator has Export on Sales Invoice.
+- Frappe's Data formatter doesn't escape HTML; frappe-charts draws axis
+  labels as text and tooltips as HTML.
+
+**Built.** Standard Script Report `posawesome/posawesome/report/staff_sales_performance/`
+(ref doctype Sales Invoice, role System Manager, no Frappe total row):
+- `execute`: checks the report itself first (`is_permitted` -- also covers
+  Save-as copies, export and print, which all call it); stores = requested
+  (each must be allowed, else PermissionError) or all allowed; System
+  Manager/Administrator = every POS Profile of the company, others = POS
+  Profile User rows + POS Profile User Permissions of that company; none ->
+  empty report with a message. One parameterized query grouped by store and
+  `sales_by_cashier.CREDITED_SQL`; till = `posa_pos_opening_shift` set;
+  per store, `_shown_cashiers` decides own row vs "Others"; no cashier ->
+  "Cashier not recorded". Sum raw, round once (sales_by_cashier helpers).
+- Group by Staff: one row per person ("N stores"), stores folded under it
+  (Frappe tree view, collapsed); a single-store person has no copy of itself
+  underneath, so an export doesn't double-count. Group by Staff and store:
+  one flat row each. Bold Total row last (store totals = Sales by Cashier's).
+  Columns: Staff, Store, Gross sales, Returns, Net sales, Sales, Avg basket
+  (gross / sales), Rung up by others, Share of net. Summary tiles and a bar
+  chart (top 15). Tree row ids are not user ids.
+- `get_store_options` (whitelisted, report check first) feeds the Stores
+  MultiSelectList with the user's stores only.
+- Staff and store names escaped in the table formatter; `<`/`>` replaced by
+  `‹`/`›` in chart labels (keeps "MAX&Co" readable on the axis).
+- 13 draft Arabic rows in `ar.csv`.
+
+**Verified on staging.** Store totals equal Sales by Cashier's
+`_fetch_period` (Test Pos 1-12 Nov 2,411.695; 1 Jan-12 Nov 12,620.795).
+Headless Chromium as Administrator at 1920: both stores offered, Total bold,
+tiles and chart, Aziz with two temporary "test 222" rows -> "2 stores" and
+expands to both; CSV export matches the screen; Staff and store / All POS
+sales. A throwaway store user (Accounts User + a throwaway role): before
+access the report, its store list and a Save-as copy refused; the role added
+through the real Role Permission for Page and Report screen (System Manager
+kept); on Test Pos's list -> dropdown and data Test Pos only, "test 222"
+refused in run and export (export path tested in the console past Frappe's
+own Export gate); switched to a User Permission for "test 222" -> only test
+222, Test Pos refused; 1400/768/390 without sideways scroll. A name with an
+HTML tag showed as text, nothing ran. All temporary data removed; report
+back to System Manager only.
+
+**Regression check.** Frontend 287/287 files, 1818/1818. Backend in
+isolation: `test_staff_sales_performance` 16/16 (mutation-checked: all
+stores for everyone, no store refusal, no report check, hidden staff not
+grouped, till ignored -- each caught), `test_sales_credit` 37,
+`test_sales_by_cashier` 24, `test_dashboard_access` 4, `test_api_imports` 4,
+`test_pos_access` 12, `test_sales_invoice_list_lock` 9,
+`test_sales_invoice_posting_date_range` 4, `test_invoice_reporting_fields`
+35, `test_terminal_state` 5, `test_customer_store` 9. `bench build` exit 0;
+migrate twice, exit 0, one report record, unchanged. System Settings
+restored to 3 / 3 / Asia/Muscat.
+
+**Production deploy: sections 95 + 96 together** (site `site1.local`;
+`stable` `aea4114c` -> `65a32a5e` Sales credited to (95) -> `798693f3` Staff
+Sales Performance (96)). Section 95's own deploy steps are replaced by these.
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `aea4114c`.
+   (Older -> sections 92-94 are not on production yet: add section 94's
+   steps 3-8 to this run.)
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows, the commands print nothing:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name IN ('Sales Invoice-posa_credited_user','Sales Invoice-posa_credited_user_name','Sales Person-posa_user') OR (dt='Sales Invoice' AND fieldname IN ('posa_credited_user','posa_credited_user_name')) OR (dt='Sales Person' AND fieldname='posa_user');
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='tabSales Invoice' AND column_name LIKE 'posa_credited_user%') OR (table_name='tabSales Person' AND column_name='posa_user'));
+   SELECT name FROM \`tabProperty Setter\` WHERE doc_type='Sales Person' AND property='field_order';
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype IN ('Sales Invoice','Sales Person') AND doctype_event IN ('Before Save (Submitted Document)','After Save (Submitted Document)','Before Validate','Before Save');
+   SELECT name FROM \`tabClient Script\` WHERE enabled=1 AND dt IN ('Sales Person','Sales Invoice') AND view='Form';
+   SELECT name, report_type, is_standard FROM \`tabReport\` WHERE name='Staff Sales Performance' OR report_name='Staff Sales Performance';
+   SELECT name FROM \`tabCustom Role\` WHERE report='Staff Sales Performance';"
+   cd ~/frappe-bench
+   bench --help 2>/dev/null | grep -i "refresh-sales-credit"
+   grep -n "\"Sales Person\"" apps/*/*/hooks.py
+   find apps -type d -path "*/report/staff_sales_performance"
+   ```
+   Also note, for step 10 (not a blocker): who may run and export reports on
+   Sales Invoice --
+   `bench --site site1.local mariadb -e "SELECT 'custom' src, role, \`read\`, report, export FROM \`tabCustom DocPerm\` WHERE parent='Sales Invoice' AND permlevel=0 UNION ALL SELECT 'standard', role, \`read\`, report, export FROM tabDocPerm WHERE parent='Sales Invoice' AND permlevel=0;"`
+   (Custom rows, when present, replace the standard ones.)
+4. `cd apps/posawesome && git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `798693f3`.
+5. `bench --site site1.local migrate` -- exit 0 (3 fields, the report; no patch).
+6. `bench build --app posawesome` -- exit 0 (POS bundle: Sales by Cashier
+   panel, Sales Person list).
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Fields, hooks and report:
+   ```
+   echo 'm=frappe.get_meta("Sales Invoice"); r=frappe.get_doc("Report","Staff Sales Performance"); print(m.get_field("posa_credited_user").allow_on_submit, frappe.get_meta("Sales Person").get_field("posa_user").unique, frappe.get_hooks("doc_events")["Sales Invoice"]["before_update_after_submit"], frappe.get_hooks("doc_events")["Sales Person"]["validate"], r.report_type, r.ref_doctype, [x.role for x in r.roles])' | bench --site site1.local console
+   ```
+   -> `1 1 [...sales_credit.before_update_after_submit] [...sales_credit.validate_sales_person] Script Report Sales Invoice ['System Manager']`.
+9. Refresh: `bench --site site1.local posa-refresh-sales-credit --dry-run`
+   -> "N submitted invoices checked, M would change (M were blank), K
+   unchanged" (K = sales since step 7), "Credited to someone other than
+   their PIN cashier: 0", unlinked: Aziz 56, Omar 6, Abeer 2, Raifah 1,
+   Maryam 1 (plus any since). Then the real run
+   `bench --site site1.local posa-refresh-sales-credit` -> same numbers,
+   "changed"; once more -> "0 changed".
+10. Checks:
+    - POS at one store: Sales by Cashier opens with the same figures as
+      before the deploy (nothing linked yet: everyone is their PIN
+      cashier); the detail panel shows "Rung up by others"; the Sales Person
+      dropdown lists only that store's Allowed Sales Persons, no "Sales
+      Team" heading; a sale with a Sales Person submits.
+    - Desk as a user who is not System Manager: a submitted Sales Invoice's
+      Sales Team table is read-only; Sales Person -> POS User read-only.
+    - Desk as System Manager: /app/query-report/Staff Sales Performance
+      (also POS Awesome sidebar -> Reports) -> this month, Till sales, all
+      stores; for one store its Net equals that store's Sales by Cashier
+      for the same dates; Group by "Staff and store" shows one row per
+      person per store; Menu -> Export (CSV) downloads. A System Manager
+      without Accounts User/Manager gets "You don't have permission to get a
+      report on: Sales Invoice" -- the report needs read + report on Sales
+      Invoice (step 3's query).
+    - Store logins: the report is not in their sidebar and the URL says
+      "You don't have access to Report: Staff Sales Performance".
+11. Later, after linking Sales Persons (System Manager, Desk -> Sales Person
+    -> POS User, all but Aziz): dry run -> "PIN cashier -> <name>: n"
+    lines; real run; once more -> 0 changed. To give the report to another
+    role: Role Permission for Page and Report -> Report -> Staff Sales
+    Performance -> tick the role, keep System Manager -> Update; that role
+    also needs read + report on Sales Invoice, and Export to export.
+Rollback: report only -> `git checkout 65a32a5e`, clear-cache, restart,
+then delete the Report "Staff Sales Performance" in Desk (and its Custom
+Role, if one was made). Everything -> `git checkout aea4114c`,
+`bench build --app posawesome`, clear-cache, restart and delete that Report
+too; the 3 fields stay with their values, the old code ignores them.
