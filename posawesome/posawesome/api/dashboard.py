@@ -1631,6 +1631,21 @@ def _collect_customer_report(
     return report
 
 
+def _staff_credit_expression(parent_doctype: str) -> str:
+    """Who a sale counts for in staff performance.
+
+    "Sales credited to" (sales_credit.py: the chosen Sales Person's POS User,
+    else the PIN cashier; a return follows the original invoice), the same
+    rule as Sales by Cashier. Invoices not filled yet, and doctypes without
+    the field (POS Invoice), use the PIN cashier as before.
+    """
+    cashier_field = _pick_first_column(parent_doctype, ["posa_cashier", "owner", "cashier", "modified_by"])
+    cashier_expression = f"coalesce(inv.{cashier_field}, '')" if cashier_field else "''"
+    if frappe.db.has_column(parent_doctype, "posa_credited_user"):
+        return f"coalesce(nullif(inv.posa_credited_user, ''), {cashier_expression})"
+    return cashier_expression
+
+
 def _collect_staff_cashier_performance_report(
     profile_names: list[str],
     company: str,
@@ -1695,11 +1710,7 @@ def _collect_staff_cashier_performance_report(
         parent_discount_expression = (
             f"abs(coalesce(inv.{parent_discount_field}, 0))" if parent_discount_field else "0"
         )
-        cashier_field = _pick_first_column(
-            parent_doctype,
-            ["posa_cashier", "owner", "cashier", "modified_by"],
-        )
-        cashier_expression = f"coalesce(inv.{cashier_field}, '')" if cashier_field else "''"
+        cashier_expression = _staff_credit_expression(parent_doctype)
         is_return_expression = (
             "ifnull(inv.is_return, 0)" if frappe.db.has_column(parent_doctype, "is_return") else "0"
         )

@@ -44,6 +44,10 @@
 				<span>{{ __("Returns") }}</span><b>{{ formatMoney(row.values[0].returns) }}</b>
 				<span>{{ __("Sales") }}</span><b>{{ row.values[0].sales }}</b>
 				<span>{{ __("Avg basket (before returns)") }}</span><b>{{ basket(row.values[0]) }}</b>
+				<template v-if="row.kind === 'cashier'">
+					<span>{{ __("Rung up by others") }}</span
+					><b data-testid="sbc-detail-by-others">{{ byOthersText(row.values[0]) }}</b>
+				</template>
 				<template v-if="view.compare">
 					<i class="sbc-detail__sep"></i>
 					<span>{{ __("Net · Period 2") }}</span><b data-testid="sbc-detail-p2">{{ formatMoney(row.values[1].net) }}</b>
@@ -77,6 +81,12 @@ const row = computed(() => props.view.rows.find((candidate) => candidate.key ===
 const rank = computed(() => (row.value ? props.view.cashiers.indexOf(row.value) : -1));
 
 const basket = (values) => (values.avg_basket === null || values.avg_basket === undefined ? "—" : props.formatMoney(values.avg_basket));
+
+// Sales credited to this person (as Sales Person) that another PIN cashier rang up.
+const byOthersText = (values) => {
+	const count = Number(values?.by_others) || 0;
+	return count === 1 ? __("1 sale") : __("{0} sales", [count]);
+};
 
 const shareText = computed(() => {
 	if (!row.value || !(store.value.net > 0.0005)) return "";

@@ -146,6 +146,7 @@ class TestValidateHookWiring(unittest.TestCase):
             "auto_set_delivery_charges",
             "calc_delivery_charges",
             "apply_tax_inclusive",
+            "set_credited_user",
         )
         patches = [patch.object(invoice, name) for name in names]
         for p in patches:

@@ -9,4 +9,10 @@ frappe.ui.form.on("Sales Invoice", {
 			};
 		});
 	},
+	refresh: function (frm) {
+		// The Sales Team decides who a sale is credited to: after submit only
+		// a System Manager may change it (the server refuses anyone else).
+		const locked = frm.doc.docstatus === 1 && !frappe.user.has_role("System Manager");
+		frm.set_df_property("sales_team", "read_only", locked ? 1 : 0);
+	},
 });

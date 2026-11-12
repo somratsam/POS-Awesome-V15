@@ -9,6 +9,7 @@ from frappe.utils import add_days, flt
 
 from posawesome.posawesome.api.discount_reasons import apply_discount_reasons
 from posawesome.posawesome.api.invoice_reporting_fields import set_invoice_reporting_fields
+from posawesome.posawesome.api.sales_credit import set_credited_user
 from posawesome.posawesome.api.item_sale_controls import (
     validate_pos_invoice_item_sale_controls,
 )
@@ -32,6 +33,7 @@ def validate(doc, method):
     calc_delivery_charges(doc)
     apply_tax_inclusive(doc)
     set_invoice_reporting_fields(doc)
+    set_credited_user(doc)
 
 
 def before_submit(doc, method):

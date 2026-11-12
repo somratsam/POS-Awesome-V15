@@ -1930,3 +1930,14 @@ We,أربعاء
 Th,خميس
 Fr,جمعة
 Sa,سبت
+Rung up by others,سجّلها كاشير آخر
+1 sale,عملية بيع واحدة
+POS User,مستخدم نقطة البيع
+Sales Credited To,المبيعات محسوبة لـ
+Sales Credited To Name,اسم من تحسب له المبيعات
+"{0} is a group heading, not a Sales Person. Choose a Sales Person.","{0} مجموعة وليس مندوب مبيعات. اختر مندوب مبيعات."
+Sales Person {0} is not allowed for this store.,مندوب المبيعات {0} غير مسموح به في هذا الفرع.
+Sales Person {0} does not exist.,مندوب المبيعات {0} غير موجود.
+{0} is already the POS User of Sales Person {1}.,{0} هو مستخدم نقطة البيع لمندوب المبيعات {1} بالفعل.
+"A group heading can't have a POS User. Link the user to a Sales Person instead.","لا يمكن ربط مستخدم نقطة البيع بمجموعة. اربط المستخدم بمندوب مبيعات."
+Only a System Manager can change the Sales Person of a submitted invoice.,يمكن لمدير النظام فقط تغيير مندوب المبيعات في فاتورة معتمدة.

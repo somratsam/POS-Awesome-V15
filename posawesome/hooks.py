@@ -172,6 +172,12 @@ doc_events = {
         "before_submit": "posawesome.posawesome.api.invoice.before_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
         "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
+        # Sales Team after submit: System Manager only; "Sales credited to" follows it.
+        "before_update_after_submit": "posawesome.posawesome.api.sales_credit.before_update_after_submit",
+        "on_update_after_submit": "posawesome.posawesome.api.sales_credit.on_update_after_submit",
+    },
+    "Sales Person": {
+        "validate": "posawesome.posawesome.api.sales_credit.validate_sales_person",
     },
     "POS Invoice": {
         "validate": [
@@ -488,6 +494,9 @@ fixtures = [
                     "Sales Invoice-posa_cashier",
                     "POS Invoice-posa_cashier",
                     "Sales Invoice-posa_cashier_name",
+                    "Sales Invoice-posa_credited_user",
+                    "Sales Invoice-posa_credited_user_name",
+                    "Sales Person-posa_user",
                     "Sales Invoice Item-posa_item_size",
                     "Sales Invoice Item-posa_item_color",
                     "Sales Invoice Item-posa_item_variant_of",
