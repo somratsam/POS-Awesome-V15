@@ -6,6 +6,12 @@ check -- every cashier of the store sees the same report -- and never another
 store: the profile is re-authorized for the session and the PIN cashier must
 be assigned to it (get_active_terminal_cashier).
 
+Who a sale counts for: "Sales credited to" on the invoice (sales_credit.py)
+-- the chosen Sales Person's POS User, else the PIN cashier; a return counts
+for whoever was credited on the original invoice. Invoices not filled yet
+fall back to the PIN cashier. "by_others" is how many of a person's sales
+another PIN cashier rang up.
+
 What it counts: submitted Sales Invoices of this POS Profile that belong to a
 till shift (posa_pos_opening_shift set), by posting date. That is the same
 set of invoices as the Z Reports, so a shift's Net here is its Z Report
@@ -100,23 +106,31 @@ def _parse_period(from_date, to_date) -> tuple[Any, Any]:
     return start, end
 
 
+# "Sales credited to" (sales_credit.py), or the PIN cashier on invoices not
+# filled yet.
+CREDITED_SQL = "COALESCE(NULLIF(si.posa_credited_user, ''), si.posa_cashier, '')"
+CREDITED_NAME_SQL = "COALESCE(NULLIF(si.posa_credited_user_name, ''), si.posa_cashier_name)"
+
+
 def _fetch_period(profile_name: str, company: str, start, end) -> list[dict[str, Any]]:
     return frappe.db.sql(
         """
-        SELECT si.posa_cashier AS cashier,
-               MAX(si.posa_cashier_name) AS cashier_name,
+        SELECT {credited} AS cashier,
+               MAX({credited_name}) AS cashier_name,
                SUM(CASE WHEN si.is_return = 0 THEN si.base_grand_total ELSE 0 END) AS gross,
                SUM(CASE WHEN si.is_return = 1 THEN si.base_grand_total ELSE 0 END) AS returns,
                SUM(si.base_grand_total) AS net,
-               SUM(CASE WHEN si.is_return = 0 THEN 1 ELSE 0 END) AS sales
+               SUM(CASE WHEN si.is_return = 0 THEN 1 ELSE 0 END) AS sales,
+               SUM(CASE WHEN si.is_return = 0 AND {credited} <> IFNULL(si.posa_cashier, '')
+                        THEN 1 ELSE 0 END) AS by_others
         FROM `tabSales Invoice` si
         WHERE si.docstatus = 1
           AND si.company = %(company)s
           AND si.pos_profile = %(profile)s
           AND IFNULL(si.posa_pos_opening_shift, '') <> ''
           AND si.posting_date BETWEEN %(start)s AND %(end)s
-        GROUP BY si.posa_cashier
-        """,
+        GROUP BY {credited}
+        """.format(credited=CREDITED_SQL, credited_name=CREDITED_NAME_SQL),
         {"company": company, "profile": profile_name, "start": start, "end": end},
         as_dict=True,
     )
@@ -141,7 +155,7 @@ def _shown_cashiers(profile_name: str) -> set[str]:
 
 
 def _empty_values() -> dict[str, float]:
-    return {"gross": 0.0, "returns": 0.0, "net": 0.0, "sales": 0}
+    return {"gross": 0.0, "returns": 0.0, "net": 0.0, "sales": 0, "by_others": 0}
 
 
 def _add(target: dict[str, float], row: dict[str, Any]):
@@ -149,6 +163,7 @@ def _add(target: dict[str, float], row: dict[str, Any]):
     target["returns"] += flt(row.get("returns"))
     target["net"] += flt(row.get("net"))
     target["sales"] += cint(row.get("sales"))
+    target["by_others"] += cint(row.get("by_others"))
 
 
 def _finish(values: dict[str, float], precision: int) -> dict[str, Any]:
@@ -159,6 +174,7 @@ def _finish(values: dict[str, float], precision: int) -> dict[str, Any]:
         "returns": flt(values["returns"], precision),
         "net": flt(values["net"], precision),
         "sales": sales,
+        "by_others": cint(values["by_others"]),
         "avg_basket": flt(values["gross"] / sales, precision) if sales else None,
     }
 

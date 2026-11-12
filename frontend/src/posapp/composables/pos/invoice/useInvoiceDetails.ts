@@ -293,9 +293,14 @@ export function useInvoiceDetails(options: InvoiceDetailsOptions) {
 
 		frappe.call({
 			method: "posawesome.posawesome.api.utilities.get_sales_person_names",
+			// This till's store: the server otherwise uses the user's first POS Profile.
+			args: profile?.name ? { pos_profile: profile.name } : {},
 			callback: function (r: any) {
 				salesPersonsFetchedAt = Date.now();
-				if (r.message && r.message.length > 0) {
+				// The server's answer is the list, even when it is empty: the
+				// profile's own rows may hold a group heading or a disabled
+				// Sales Person, which the server leaves out (and refuses at submit).
+				if (Array.isArray(r.message)) {
 					sales_persons.value = r.message.map((sp: any) => ({
 						value: sp.name,
 						title: sp.sales_person_name,

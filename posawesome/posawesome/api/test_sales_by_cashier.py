@@ -43,18 +43,22 @@ class _Base(unittest.TestCase):
         frappe.set_user("Administrator")
 
     def invoice(self, net, cashier="a@sbc.test", name=None, *, profile=STORE, shift=SHIFT,
-                date="2026-10-05", docstatus=1, cashier_name=None):
+                date="2026-10-05", docstatus=1, cashier_name=None, credited=None, credited_name=None):
         self.seq += 1
+        names = {"a@sbc.test": "Alice A", "b@sbc.test": "Bilal B"}
         frappe.db.sql(
             """INSERT INTO `tabSales Invoice`
                (name, docstatus, company, pos_profile, posting_date, is_return,
-                grand_total, base_grand_total, posa_cashier, posa_cashier_name, posa_pos_opening_shift)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                grand_total, base_grand_total, posa_cashier, posa_cashier_name, posa_pos_opening_shift,
+                posa_credited_user, posa_credited_user_name)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 name or f"_SBC-INV-{self.seq}", docstatus, self.company, profile, date,
                 1 if net < 0 else 0, net, net, cashier or None,
-                cashier_name if cashier_name is not None else ({"a@sbc.test": "Alice A", "b@sbc.test": "Bilal B"}.get(cashier) or cashier),
+                cashier_name if cashier_name is not None else (names.get(cashier) or cashier),
                 shift or None,
+                credited,
+                credited_name if credited_name is not None else (names.get(credited) or credited),
             ),
         )
 
@@ -189,13 +193,13 @@ class TestFigures(_Base):
         self.assertEqual(result["currency"], frappe.get_cached_value("Company", self.company, "default_currency"))
         rows = {row["label"]: (row["kind"], row["values"][0]) for row in result["rows"]}
         self.assertEqual([row["label"] for row in result["rows"]], ["Alice A", "Bilal B", "Others", "Cashier not recorded"])
-        self.assertEqual(rows["Alice A"], ("cashier", {"gross": 160, "returns": -30, "net": 130, "sales": 4, "avg_basket": 40}))
-        self.assertEqual(rows["Bilal B"], ("cashier", {"gross": 80, "returns": 0, "net": 80, "sales": 1, "avg_basket": 80}))
-        self.assertEqual(rows["Others"], ("others", {"gross": 30, "returns": 0, "net": 30, "sales": 2, "avg_basket": 15}))
+        self.assertEqual(rows["Alice A"], ("cashier", {"gross": 160, "returns": -30, "net": 130, "sales": 4, "by_others": 0, "avg_basket": 40}))
+        self.assertEqual(rows["Bilal B"], ("cashier", {"gross": 80, "returns": 0, "net": 80, "sales": 1, "by_others": 0, "avg_basket": 80}))
+        self.assertEqual(rows["Others"], ("others", {"gross": 30, "returns": 0, "net": 30, "sales": 2, "by_others": 0, "avg_basket": 15}))
         self.assertEqual(rows["Cashier not recorded"][0], "not_recorded")
         self.assertEqual(rows["Cashier not recorded"][1]["net"], 5)
         totals = result["totals"]
-        self.assertEqual(totals["store"][0], {"gross": 275, "returns": -30, "net": 245, "sales": 8, "avg_basket": 34.375})
+        self.assertEqual(totals["store"][0], {"gross": 275, "returns": -30, "net": 245, "sales": 8, "by_others": 0, "avg_basket": 34.375})
         self.assertEqual((totals["shown_net"][0], totals["others_net"][0], totals["not_recorded_net"][0]), (210, 30, 5))
 
     def test_store_total_matches_an_independent_sum(self):
@@ -222,8 +226,8 @@ class TestFigures(_Base):
         result = self.call(compare_from="2026-11-01", compare_to="2026-11-30")
         self.assertEqual(result["periods"], [{"from": "2026-10-01", "to": "2026-10-31"}, {"from": "2026-11-01", "to": "2026-11-30"}])
         rows = {row["label"]: row["values"] for row in result["rows"]}
-        self.assertEqual(rows["Alice A"][1], {"gross": 400, "returns": 0, "net": 400, "sales": 1, "avg_basket": 400})
-        self.assertEqual(rows["Bilal B"][1], {"gross": 0, "returns": 0, "net": 0, "sales": 0, "avg_basket": None})
+        self.assertEqual(rows["Alice A"][1], {"gross": 400, "returns": 0, "net": 400, "sales": 1, "by_others": 0, "avg_basket": 400})
+        self.assertEqual(rows["Bilal B"][1], {"gross": 0, "returns": 0, "net": 0, "sales": 0, "by_others": 0, "avg_basket": None})
         self.assertEqual(result["totals"]["store"][1]["net"], 400)
 
     def test_no_user_ids_leave_the_server(self):
@@ -237,7 +241,44 @@ class TestFigures(_Base):
     def test_empty_period(self):
         result = self.call()
         self.assertEqual(result["rows"], [])
-        self.assertEqual(result["totals"]["store"][0], {"gross": 0, "returns": 0, "net": 0, "sales": 0, "avg_basket": None})
+        self.assertEqual(result["totals"]["store"][0], {"gross": 0, "returns": 0, "net": 0, "sales": 0, "by_others": 0, "avg_basket": None})
+
+
+class TestCreditedPerson(_Base):
+    """Sales by Cashier counts "Sales credited to", falling back to the PIN cashier."""
+
+    def test_sale_counts_for_the_credited_person_not_the_pin_cashier(self):
+        self.assign("a@sbc.test")
+        self.assign("b@sbc.test")
+        self.invoice(100, "a@sbc.test", credited="b@sbc.test")  # b chosen as Sales Person
+        self.invoice(40, "a@sbc.test", credited="a@sbc.test")
+        self.invoice(10, "a@sbc.test")  # not filled yet: the PIN cashier
+        rows = {row["label"]: row["values"][0] for row in self.call()["rows"]}
+        self.assertEqual(rows["Bilal B"], {"gross": 100, "returns": 0, "net": 100, "sales": 1, "by_others": 1, "avg_basket": 100})
+        self.assertEqual(rows["Alice A"], {"gross": 50, "returns": 0, "net": 50, "sales": 2, "by_others": 0, "avg_basket": 25})
+
+    def test_return_counts_for_the_credited_person_and_is_not_rung_up_by_others(self):
+        self.assign("a@sbc.test")
+        self.assign("b@sbc.test")
+        self.invoice(100, "a@sbc.test", credited="b@sbc.test")
+        self.invoice(-30, "a@sbc.test", credited="b@sbc.test")  # return of b's sale, rung up by a
+        rows = {row["label"]: row["values"][0] for row in self.call()["rows"]}
+        self.assertEqual(rows["Bilal B"], {"gross": 100, "returns": -30, "net": 70, "sales": 1, "by_others": 1, "avg_basket": 100})
+        self.assertNotIn("Alice A", rows)
+
+    def test_credited_person_not_on_the_store_list_goes_to_others(self):
+        self.assign("a@sbc.test")
+        self.invoice(100, "a@sbc.test", credited="elsewhere@sbc.test")
+        result = self.call()
+        self.assertEqual([row["label"] for row in result["rows"]], ["Others"])
+        self.assertEqual(result["totals"]["store"][0]["net"], 100)
+
+    def test_no_cashier_but_a_credited_person_is_not_cashier_not_recorded(self):
+        self.assign("b@sbc.test")
+        self.invoice(25, None, credited="b@sbc.test")
+        rows = {row["label"]: row["values"][0] for row in self.call()["rows"]}
+        self.assertEqual(rows["Bilal B"]["net"], 25)
+        self.assertNotIn("Cashier not recorded", rows)
 
 
 class TestBuildReport(unittest.TestCase):

@@ -447,6 +447,7 @@ class TestWiring(unittest.TestCase):
             "calc_delivery_charges",
             "apply_tax_inclusive",
             "set_invoice_reporting_fields",
+            "set_credited_user",
         )
         patches = [patch.object(invoice, name) for name in names]
         for p in patches:

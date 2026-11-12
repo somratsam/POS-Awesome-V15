@@ -298,14 +298,23 @@ def fetch_sales_person_names(pos_profile=None):
     logger.info("Fetching sales persons...")
 
     try:
-        profile = _resolve_pos_profile_input(pos_profile) or get_active_pos_profile()
+        if isinstance(pos_profile, str) and pos_profile.strip() and not pos_profile.strip().startswith("{"):
+            # The till's own store, and only one this user is assigned to. Without
+            # it the user's first POS Profile was used, which for a user on several
+            # stores could be another store's Allowed Sales Persons list.
+            from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
+
+            profile = get_authorized_pos_profile(pos_profile.strip()).as_dict()
+        else:
+            profile = _resolve_pos_profile_input(pos_profile) or get_active_pos_profile()
         allowed = []
         if profile:
             allowed = [
                 d.get("sales_person") for d in profile.get("posa_sales_persons", []) if d.get("sales_person")
             ]
 
-        filters = {"enabled": 1}
+        # Never a group heading such as "Sales Team": a sale is credited to a person.
+        filters = {"enabled": 1, "is_group": 0}
         if allowed:
             filters["name"] = ["in", allowed]
             sales_persons = frappe.get_all(
