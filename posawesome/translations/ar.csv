@@ -1941,3 +1941,16 @@ Sales Person {0} does not exist.,مندوب المبيعات {0} غير موجو
 {0} is already the POS User of Sales Person {1}.,{0} هو مستخدم نقطة البيع لمندوب المبيعات {1} بالفعل.
 "A group heading can't have a POS User. Link the user to a Sales Person instead.","لا يمكن ربط مستخدم نقطة البيع بمجموعة. اربط المستخدم بمندوب مبيعات."
 Only a System Manager can change the Sales Person of a submitted invoice.,يمكن لمدير النظام فقط تغيير مندوب المبيعات في فاتورة معتمدة.
+Staff Sales Performance,أداء مبيعات الموظفين
+Choose a Company.,اختر الشركة.
+Store {0} is not one of your stores for company {1}.,المتجر {0} ليس من متاجرك في الشركة {1}.
+You are not assigned to any store of {0}.,أنت غير مُعيَّن لأي متجر في {0}.
+{0} stores,{0} متاجر
+Gross sales,إجمالي المبيعات
+Share of net,الحصة من الصافي
+Rung up by another cashier,سجّلها كاشير آخر
+Till sales,مبيعات الصندوق
+All POS sales,كل مبيعات نقاط البيع
+Staff and store,الموظف والمتجر
+Sales counted,المبيعات المحتسبة
+None chosen = all your stores,بدون اختيار = كل متاجرك
