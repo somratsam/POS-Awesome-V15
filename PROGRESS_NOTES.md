@@ -9366,3 +9366,143 @@ then delete the Report "Staff Sales Performance" in Desk (and its Custom
 Role, if one was made). Everything -> `git checkout aea4114c`,
 `bench build --app posawesome`, clear-cache, restart and delete that Report
 too; the 3 fields stay with their values, the old code ignores them.
+
+## 97. Sales Person auto-fill from the PIN cashier (2026-11-14, `7150c5aa` on `develop-swan`, `674d936a` on `stable`)
+
+**Request.** So that ERPNext's own Sales Person reports (Sales Person
+Commission Summary, Sales Person-wise Transaction Summary, Target Variance,
+Gross Profit by Sales Person) cover POS sales, every POS invoice should have
+a Sales Person. Decisions: a chosen Sales Person is kept; none chosen -> the
+PIN cashier's linked Sales Person (Sales Person.posa_user, section 95) at
+100%; none linked -> empty. The auto-fill ignores the store's Allowed Sales
+Persons list (staff covering a shift at another store). Returns against an
+invoice always copy the original's Sales Team, set by the server, whatever
+was picked; returns without an original fall back to the cashier. Edit
+Invoice keeps the original's credit and is never auto-filled; fix the bug
+where the credit moved to the editing supervisor. Backfill as a re-runnable
+command; mismatched returns overwritten to match and listed. No commission
+rates are used.
+
+**Found first.**
+- ERPNext's `make_sales_return` copies `sales_team`, but the POS return
+  (Returns.vue) builds the invoice from scratch without it, and the till's
+  Payments.vue writes `sales_team` only when the dropdown changes.
+- Every POS submit path goes through `invoice_processing/creation.py`
+  `submit_invoice`: foreground, background, offline sync (trusted source
+  "offline_sync") and Edit Invoice (`submitted_invoice_edits.py`, source
+  "submitted_amendment", a `copy_doc` of the original, so its Sales Team
+  comes along). An amendment's `posa_cashier` is the editor, so
+  `set_credited_user` credited the editor when no Sales Person was linked.
+- ERPNext's `calculate_contribution` sets allocated_amount =
+  amount_eligible_for_commission x % and incentives = allocated x
+  commission_rate; `validate_sales_team` refuses a disabled Sales Person.
+
+**Built.**
+- `sales_credit.py`:
+  - `apply_pos_sales_team(invoice_doc, profile_doc)` (replaces the
+    `check_pos_sales_team` call in `submit_invoice`; `update_invoice` still
+    only checks): amendments (source or `amended_from`) untouched; returns
+    against an invoice -> the original's Sales Team rows (empty if any of its
+    Sales Persons is now disabled); otherwise the existing check of a chosen
+    Sales Person, and if none -> `linked_sales_person(posa_cashier)` (enabled,
+    not a group) at 100%.
+  - `original_cashier()` walks `amended_from` to the first invoice's
+    `posa_cashier`; `set_credited_user` and `refresh_sales_credit` use it for
+    amendments.
+  - `fill_pos_sales_team(dry_run)`: submitted Sales Invoices with a POS
+    Profile. Non-returns with an empty team -> cashier's own (amendments: the
+    first invoice's cashier); unlinked stay empty and are counted per
+    cashier. Returns against an invoice -> the original's (expected) team; a
+    different one is overwritten and listed. Writes Sales Team rows directly
+    (allocated amount, commission rate, incentives as ERPNext computes) --
+    the invoice's `modified` and Version history are unchanged, no ledger
+    entries.
+- `commands.py`: `bench --site <site> posa-fill-sales-person [--dry-run]`.
+- Till: on a return against an invoice the Sales Person box is disabled with
+  "A return keeps the original sale's Sales Person." (1 draft Arabic row).
+- `test_creation.py` stubs `sales_credit` (its fake `frappe` has no
+  get_meta/get_all).
+
+**Verified on staging** (headless Chromium, throwaway users AF Cashier ->
+"_AF Cashier SP", AF Plain unlinked, supervisor AF Super -> "_AF Super SP";
+both stores allow only "aziz"): sale with none chosen -> cashier's own at
+100%, allocated net of VAT; its POS return -> box locked with the note,
+original's team at minus; exchange (return then "continue to new sale", paid
+by the credit) -> cashier's own; offline sale through the real offline-sync
+endpoint (the offline screen was blocked by stock of the test item) with the
+"Sales Team" heading picked -> dropped and logged, cashier's own used; Edit
+Invoice of an unlinked cashier's sale -> credit stays with AF Plain, no
+Sales Person; of a linked one -> team kept, allocated recalculated after a
+discount; AF Cashier selling at "test 222" -> own Sales Person; chosen
+"aziz" kept, its credit-note return copied it. ERPNext's Commission Summary
+lists the same invoices as Staff Sales Performance (5 sales, 1 return; the
+difference in amount is VAT). Real runs on staging: fill 278 checked, 119
+changed (97 filled, 22 returns, 0 overwritten); refresh 3 changed (Edit
+Invoice amendments back to the original cashier); second runs 0.
+
+**Regression check.** Frontend 288/288 files, 1821/1821. Backend in
+isolation: `test_sales_credit` 51/51 (mutation-checked: no auto-fill,
+returns not copied, amendments filled, credit to editor, fill keeping wrong
+returns, disabled own Sales Person used -- each caught),
+`test_staff_sales_performance` 16, `test_sales_by_cashier` 24,
+`test_invoice_reporting_fields` 35, `test_discount_reasons` 34,
+`test_offline_sync_invoices` 4, `test_submitted_invoice_edit_customer` 9,
+`test_submitted_invoice_edit_supervisor` 13, `test_credit_voucher` 51,
+`test_return_generic_customer_credit_guard` 8, `test_payments` 12,
+`test_api_imports` 4, `test_pos_access` 12, `test_dashboard_access` 4,
+`test_customer_credit_invoice_fields` 2, `test_sales_invoice_list_lock` 9,
+`test_invoice_line_backfill` 11; `test_creation` 8 errors, the same 8 with
+the change stashed; `test_invoices`, `test_submitted_invoice_shift_security`
+fail as before. `bench build` exit 0. No migrate (no doctype, fixture or
+print format). System Settings restored to 3 / 3 / Asia/Muscat.
+
+**Notes.** An amendment now counts as "Rung up by others" under the original
+seller (its PIN cashier is the editor). A return of a sale whose Sales
+Person was disabled since gets no Sales Person at the till (ERPNext refuses
+disabled ones); the backfill copies it as it is.
+
+**Production deploy** (site `site1.local`; `stable` `798693f3` -> `674d936a`;
+after section 96's deploy).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `798693f3`.
+   (Older -> do section 96's deploy first.)
+2. `bench --site site1.local backup`
+3. Name check -- prints nothing:
+   `cd ~/frappe-bench && bench --help 2>/dev/null | grep -i "fill-sales-person"`
+4. `cd apps/posawesome && git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `674d936a`.
+5. No migrate (no doctype, field, fixture or print format changed).
+6. `cd ~/frappe-bench && bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Command and hook check:
+   ```
+   bench --help 2>/dev/null | grep -iE "fill-sales-person|refresh-sales-credit"
+   echo 'from posawesome.posawesome.api import sales_credit as s; from posawesome.posawesome.api.invoice_processing import creation as c; print(hasattr(s,"fill_pos_sales_team"), c.apply_pos_sales_team is s.apply_pos_sales_team)' | bench --site site1.local console
+   ```
+   -> both commands listed; `True True`.
+9. Checks (before linking):
+   - POS: a sale with no Sales Person chosen submits; its Sales Team is
+     empty (nobody linked yet). A sale with a Sales Person chosen keeps it.
+   - POS return of that second sale: the Sales Person box is greyed out with
+     "A return keeps the original sale's Sales Person."; the submitted
+     return has the same Sales Person at 100%, minus amount.
+   - Sales by Cashier / Staff Sales Performance: same figures as before for
+     earlier dates.
+10. After linking Sales Persons (Desk -> Sales Person -> POS User):
+    - `bench --site site1.local posa-fill-sales-person --dry-run` -> "N
+      submitted POS invoices checked, M would change", filled / amendments
+      / returns counts, any overwritten returns listed (expected 0: before
+      this change a POS return had no Sales Team), "Left empty" per unlinked
+      cashier (e.g. Aziz). Then the real run -> same numbers, "changed";
+      once more -> "0 changed".
+    - `bench --site site1.local posa-refresh-sales-credit --dry-run` ->
+      "PIN cashier -> <name>" lines only for sales where a different Sales
+      Person was chosen, plus any Edit Invoice amendments moving back from
+      the editor to the original cashier; real run; once more -> "0 changed".
+    - A new POS sale with no choice -> the PIN cashier's own Sales Person at
+      100%; at another store too.
+    - ERPNext Sales Person Commission Summary (this month, one Sales Person)
+      -> the same invoices as that person's row in Staff Sales Performance
+      with Sales counted "All POS sales" (amounts differ by VAT: ERPNext
+      uses net).
+Rollback: `git checkout 798693f3`, `bench build --app posawesome`,
+clear-cache, restart. Sales Team rows written by the fill stay (they are
+ordinary rows; the old code keeps them).
