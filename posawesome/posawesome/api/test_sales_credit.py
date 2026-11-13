@@ -388,9 +388,9 @@ class TestRefresh(_Base):
         sale = self.bare_invoice(sales_person=SP_UNLINKED)
         self.run_refresh()
         self.assertEqual(frappe.db.get_value("Sales Invoice", sale, "posa_credited_user"), CASHIER)
-        frappe.db.set_value("Sales Person", SP_UNLINKED, "posa_user", "Administrator")
+        frappe.db.set_value("Sales Person", SP_UNLINKED, "posa_user", "test1@example.com")
         result = self.run_refresh()
-        self.assertEqual(frappe.db.get_value("Sales Invoice", sale, "posa_credited_user"), "Administrator")
+        self.assertEqual(frappe.db.get_value("Sales Invoice", sale, "posa_credited_user"), "test1@example.com")
         self.assertEqual(result["changed"], 1)
 
 
@@ -410,6 +410,176 @@ class TestDashboard(_Base):
         self.assertIn("posa_credited_user", dashboard._staff_credit_expression("Sales Invoice"))
 
 
+def _team(doc):
+    return [(row.sales_person, row.allocated_percentage) for row in doc.get("sales_team") or []]
+
+
+class TestAutoFill(_Base):
+    """apply_pos_sales_team: what the POS saves at submit."""
+
+    def setUp(self):
+        super().setUp()
+        self.people()
+        self.allowed_b_only = frappe._dict(posa_sales_persons=[frappe._dict(sales_person=SP_B)])
+
+    def test_a_chosen_sales_person_is_kept(self):
+        doc = self.doc(cashier=USER_A, sales_team=[{"sales_person": SP_B, "allocated_percentage": 100}])
+        sales_credit.apply_pos_sales_team(doc, self.allowed_b_only)
+        self.assertEqual(_team(doc), [(SP_B, 100)])
+
+    def test_a_chosen_sales_person_is_still_checked(self):
+        doc = self.doc(cashier=USER_A, sales_team=[{"sales_person": SP_GROUP, "allocated_percentage": 100}])
+        with self.assertRaises(frappe.ValidationError):
+            sales_credit.apply_pos_sales_team(doc, self.allowed_b_only)
+
+    def test_none_chosen_is_the_cashiers_own_even_at_another_store(self):
+        doc = self.doc(cashier=USER_A)
+        sales_credit.apply_pos_sales_team(doc, self.allowed_b_only)  # SP_A not on this store's list
+        self.assertEqual(_team(doc), [(SP_A, 100)])
+
+    def test_a_cashier_without_a_sales_person_stays_empty(self):
+        doc = self.doc(cashier=CASHIER)
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [])
+        frappe.db.set_value("Sales Person", SP_A, "enabled", 0)
+        doc = self.doc(cashier=USER_A)
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [])
+
+    def test_offline_sync_drops_a_bad_choice_then_uses_the_cashiers_own(self):
+        frappe.flags.posa_trusted_shift_audit = {"source": "offline_sync"}
+        doc = self.doc(cashier=USER_A, sales_team=[{"sales_person": SP_OFF, "allocated_percentage": 100}])
+        with patch.object(frappe, "log_error"):
+            sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [(SP_A, 100)])
+
+    def test_a_return_always_takes_the_originals_team(self):
+        original = self.bare_invoice(cashier=USER_A, sales_person=SP_B)
+        for picked in (None, SP_A, SP_GROUP, SP_OFF):
+            team = [{"sales_person": picked, "allocated_percentage": 100}] if picked else []
+            doc = self.doc(cashier=CASHIER, is_return=1, return_against=original, sales_team=team)
+            sales_credit.apply_pos_sales_team(doc, self.allowed_b_only)
+            self.assertEqual(_team(doc), [(SP_B, 100)], picked)
+
+    def test_a_return_of_a_sale_without_one_stays_empty(self):
+        original = self.bare_invoice(cashier=CASHIER)
+        doc = self.doc(cashier=USER_A, is_return=1, return_against=original,
+                       sales_team=[{"sales_person": SP_A, "allocated_percentage": 100}])
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [])
+
+    def test_a_return_of_a_now_disabled_sales_person_stays_empty(self):
+        original = self.bare_invoice(cashier=USER_A, sales_person=SP_OFF)
+        doc = self.doc(cashier=USER_A, is_return=1, return_against=original)
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [])
+
+    def test_a_return_without_an_original_is_like_a_sale(self):
+        doc = self.doc(cashier=USER_A, is_return=1)
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [(SP_A, 100)])
+
+    def test_edit_invoice_is_never_filled(self):
+        doc = self.doc(cashier=USER_A)
+        doc.amended_from = "X"
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [])
+        frappe.flags.posa_trusted_shift_audit = {"source": "submitted_amendment"}
+        doc = self.doc(cashier=USER_A, sales_team=[{"sales_person": SP_GROUP, "allocated_percentage": 100}])
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [(SP_GROUP, 100)])
+
+
+class TestEditInvoiceCredit(_Base):
+    def amend(self, original, cashier, sales_team=None):
+        doc = self.doc(cashier=cashier, sales_team=sales_team)
+        doc.amended_from = original
+        return doc
+
+    def test_credit_stays_with_the_original_cashier_not_the_editor(self):
+        self.people()
+        first = self.bare_invoice(cashier=CASHIER, docstatus=2)
+        second = self.bare_invoice(cashier=USER_B, docstatus=2)
+        frappe.db.set_value("Sales Invoice", second, "amended_from", first)
+        doc = self.amend(second, cashier="Administrator")
+        sales_credit.set_credited_user(doc)
+        self.assertEqual(doc.posa_credited_user, CASHIER)
+        self.assertEqual(doc.posa_cashier, "Administrator")  # the editor stays recorded
+
+    def test_a_linked_sales_person_still_wins(self):
+        self.people()
+        first = self.bare_invoice(cashier=CASHIER, docstatus=2)
+        doc = self.amend(first, cashier="Administrator", sales_team=[{"sales_person": SP_A, "allocated_percentage": 100}])
+        sales_credit.set_credited_user(doc)
+        self.assertEqual(doc.posa_credited_user, USER_A)
+
+    def test_refresh_uses_the_same_rule(self):
+        first = self.bare_invoice(cashier=CASHIER, docstatus=2)
+        amended = self.bare_invoice(cashier=USER_B, credited=USER_B)
+        frappe.db.set_value("Sales Invoice", amended, "amended_from", first)
+        with patch.object(frappe.db, "commit"):
+            sales_credit.refresh_sales_credit(verbose=False)
+        self.assertEqual(frappe.db.get_value("Sales Invoice", amended, "posa_credited_user"), CASHIER)
+
+
+class TestFillPastInvoices(_Base):
+    def pos_invoice(self, *, cashier, sales_person=None, is_return=0, return_against=None, amended_from=None,
+                    docstatus=1, eligible=50):
+        name = self.bare_invoice(cashier=cashier, sales_person=sales_person, is_return=is_return,
+                                 return_against=return_against, docstatus=docstatus)
+        frappe.db.sql(
+            """UPDATE `tabSales Invoice` SET pos_profile = '_SC Store', amended_from = %s,
+               amount_eligible_for_commission = %s, base_net_total = %s, modified = '2026-10-05 10:00:00'
+               WHERE name = %s""",
+            (amended_from, eligible, eligible, name),
+        )
+        return name
+
+    def team_of(self, name):
+        return [(r.sales_person, r.allocated_percentage, r.allocated_amount)
+                for r in frappe.get_all("Sales Team", filters={"parent": name}, fields=["sales_person", "allocated_percentage", "allocated_amount"], order_by="idx")]
+
+    def fill(self, **kwargs):
+        with patch.object(frappe.db, "commit"):
+            return sales_credit.fill_pos_sales_team(verbose=False, **kwargs)
+
+    def test_fills_overwrites_returns_and_is_rerunnable(self):
+        self.people()
+        frappe.db.set_value("Sales Person", SP_B, "commission_rate", 10)
+        sale = self.pos_invoice(cashier=USER_A)                                   # -> SP_A
+        chosen = self.pos_invoice(cashier=USER_A, sales_person=SP_B)              # kept
+        unlinked = self.pos_invoice(cashier=CASHIER)                              # stays empty
+        ret = self.pos_invoice(cashier=CASHIER, is_return=1, return_against=sale, eligible=-20)          # -> SP_A
+        wrong = self.pos_invoice(cashier=USER_A, sales_person=SP_A, is_return=1, return_against=chosen,
+                                 eligible=-10)                                     # SP_A -> SP_B
+        first = self.pos_invoice(cashier=USER_B, docstatus=2)
+        amended = self.pos_invoice(cashier=CASHIER, amended_from=first)           # -> SP_B (first cashier)
+
+        dry = self.fill(dry_run=True)
+        self.assertEqual(self.team_of(sale), [])
+        summary = self.fill()
+        self.assertEqual(dry["changed"], summary["changed"])
+        self.assertEqual(self.team_of(sale), [(SP_A, 100, 50)])
+        self.assertEqual(self.team_of(chosen), [(SP_B, 100, 0)])  # untouched (bare row)
+        self.assertEqual(self.team_of(unlinked), [])
+        self.assertEqual(self.team_of(ret), [(SP_A, 100, -20)])
+        self.assertEqual(self.team_of(wrong), [(SP_B, 100, -10)])
+        self.assertEqual(self.team_of(amended), [(SP_B, 100, 50)])
+        self.assertEqual(frappe.db.get_value("Sales Team", {"parent": wrong}, "incentives"), -1)
+        self.assertIn(
+            {"return": wrong, "original": chosen, "was": [SP_A], "now": [SP_B]}, summary["returns_overwritten"]
+        )
+        self.assertIn(CASHIER, summary["left_empty_cashier_not_linked"])
+        self.assertEqual(str(frappe.db.get_value("Sales Invoice", sale, "modified")), "2026-10-05 10:00:00")
+        mine = {sale, chosen, unlinked, ret, wrong, amended}
+        again = self.fill(dry_run=True)
+        self.assertFalse(mine & {item["return"] for item in again["returns_overwritten"]})
+        self.assertEqual([self.team_of(n) for n in sorted(mine)], [self.team_of(n) for n in sorted(mine)])
+        self.fill()
+        self.assertEqual(self.team_of(sale), [(SP_A, 100, 50)])
+        self.assertEqual(len(self.team_of(ret)), 1)
+
+
 class TestWiring(unittest.TestCase):
     def test_invoice_validate_sets_the_credited_person(self):
         from posawesome.posawesome.api import invoice
@@ -425,7 +595,10 @@ class TestWiring(unittest.TestCase):
 
     def test_both_pos_submit_paths_check_the_sales_person(self):
         self.assertIn("check_pos_sales_team(invoice_doc, profile_doc)", inspect.getsource(creation.update_invoice))
-        self.assertIn("check_pos_sales_team(invoice_doc, profile_doc)", inspect.getsource(creation.submit_invoice))
+        # submit checks the choice, then fills or copies (apply_pos_sales_team calls the check)
+        self.assertIn("apply_pos_sales_team(invoice_doc, profile_doc)", inspect.getsource(creation.submit_invoice))
+        self.assertNotIn("apply_pos_sales_team", inspect.getsource(creation.update_invoice))
+        self.assertIn("check_pos_sales_team(invoice_doc, profile_doc)", inspect.getsource(sales_credit.apply_pos_sales_team))
 
     def test_credit_fields_can_change_after_submit(self):
         meta = frappe.get_meta("Sales Invoice")
@@ -436,3 +609,4 @@ class TestWiring(unittest.TestCase):
         from posawesome import commands
 
         self.assertIn("posa-refresh-sales-credit", [command.name for command in commands.commands])
+        self.assertIn("posa-fill-sales-person", [command.name for command in commands.commands])

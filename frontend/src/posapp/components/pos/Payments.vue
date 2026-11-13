@@ -249,6 +249,7 @@
 							:sales-persons="sales_persons"
 							:sales-person="sales_person"
 							:readonly="readonly"
+							:follows-original="!!(invoice_doc?.is_return && invoice_doc?.return_against)"
 							:print-formats="print_formats"
 							:print-format="print_format"
 							:show-print-format="

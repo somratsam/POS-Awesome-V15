@@ -31,6 +31,25 @@ set or changed only by a System Manager (validate_sales_person).
 POS checks on the chosen Sales Person (check_pos_sales_team): enabled, not a
 group heading, and on the POS Profile's "Allowed Sales Persons" list when
 one is set.
+
+Every POS sale gets a Sales Person when one can be known, so ERPNext's
+Sales Person reports and commission see the same people
+(apply_pos_sales_team, at submit):
+- A Sales Person chosen on the till is kept (after the checks above).
+- None chosen: the PIN cashier's own Sales Person (the one whose POS User
+  they are) at 100% -- whatever the store's Allowed list, so staff covering
+  another store still get it. A cashier without one: left empty.
+- A return against an invoice always gets the original's Sales Team,
+  whatever was picked on the till (a disabled Sales Person can't be put on
+  a new invoice, so then it is left empty; the credit still follows the
+  original). A return without an original is treated like a sale.
+- Edit Invoice (an amendment) keeps the Sales Team it copied from the
+  original, and its credit stays with the original sale: with no linked
+  Sales Person, the PIN cashier of the first invoice in the chain, not the
+  supervisor who made the edit (original_cashier).
+
+`fill_pos_sales_team` (bench --site <site> posa-fill-sales-person) applies
+the same rules to past submitted POS invoices.
 """
 
 from __future__ import annotations
@@ -39,7 +58,7 @@ from collections import Counter, defaultdict
 
 import frappe
 from frappe import _
-from frappe.utils import cstr, flt
+from frappe.utils import cint, cstr, flt
 
 CREDITED_USER_FIELD = "posa_credited_user"
 CREDITED_NAME_FIELD = "posa_credited_user_name"
@@ -114,6 +133,19 @@ def user_full_name(user):
     return cstr(frappe.db.get_value("User", user, "full_name")).strip() or user
 
 
+def original_cashier(doctype, amended_from, cashier=None):
+    """The PIN cashier of the first invoice of an Edit Invoice chain."""
+    current, seen = cstr(amended_from).strip(), set()
+    while current and current not in seen:
+        seen.add(current)
+        row = frappe.db.get_value(doctype, current, ["amended_from", CASHIER_FIELD], as_dict=True)
+        if not row:
+            break
+        cashier = cstr(row.get(CASHIER_FIELD)).strip() or cashier
+        current = cstr(row.get("amended_from")).strip()
+    return cstr(cashier).strip() or None
+
+
 def set_credited_user(doc, method=None):
     """Fill "Sales credited to" on a Sales Invoice (validate / update after submit)."""
     if not _has_credit_fields(doc.doctype):
@@ -121,7 +153,11 @@ def set_credited_user(doc, method=None):
     if doc.get("is_return") and cstr(doc.get("return_against")).strip():
         credited = _stored_credit(doc.doctype, doc.return_against) or cstr(doc.get(CASHIER_FIELD)).strip() or None
     else:
-        credited = credit_for(doc.get("sales_team"), doc.get(CASHIER_FIELD))
+        cashier = doc.get(CASHIER_FIELD)
+        if cstr(doc.get("amended_from")).strip():
+            # Edit Invoice: posa_cashier is whoever made the edit.
+            cashier = original_cashier(doc.doctype, doc.amended_from, cashier)
+        credited = credit_for(doc.get("sales_team"), cashier)
     doc.set(CREDITED_USER_FIELD, credited)
     doc.set(CREDITED_NAME_FIELD, user_full_name(credited))
 
@@ -198,10 +234,9 @@ def check_pos_sales_team(invoice_doc, profile_doc):
     rows = [row for row in (invoice_doc.get("sales_team") or []) if cstr(row.get("sales_person")).strip()]
     if not rows:
         return
-    audit = getattr(frappe.flags, "posa_trusted_shift_audit", None) or {}
-    source = audit.get("source")
-    if source == AMENDMENT_SOURCE:
-        return
+    source = _trusted_source()
+    if source == AMENDMENT_SOURCE or _is_return_against(invoice_doc):
+        return  # the original's Sales Team (apply_pos_sales_team)
 
     names = {cstr(row.get("sales_person")).strip() for row in rows}
     info = {
@@ -235,6 +270,62 @@ def check_pos_sales_team(invoice_doc, profile_doc):
         )
         return
     frappe.throw(problems[0][1], title=_("Sales Person"))
+
+
+def _trusted_source():
+    audit = getattr(frappe.flags, "posa_trusted_shift_audit", None) or {}
+    return audit.get("source") if isinstance(audit, dict) else None
+
+
+def _is_return_against(doc):
+    return bool(cint(doc.get("is_return")) and cstr(doc.get("return_against")).strip())
+
+
+def linked_sales_person(user):
+    """The enabled Sales Person whose POS User is this user, if any."""
+    user = cstr(user).strip()
+    if not user or not frappe.get_meta("Sales Person").has_field(SALES_PERSON_USER_FIELD):
+        return None
+    return frappe.db.get_value(
+        "Sales Person", {SALES_PERSON_USER_FIELD: user, "enabled": 1, "is_group": 0}, "name"
+    )
+
+
+def _team_rows(doctype, name):
+    return frappe.get_all(
+        "Sales Team",
+        filters={"parent": name, "parenttype": doctype, "parentfield": "sales_team"},
+        fields=["sales_person", "allocated_percentage"],
+        order_by="idx asc",
+        ignore_permissions=True,
+    )
+
+
+def apply_pos_sales_team(invoice_doc, profile_doc):
+    """The POS invoice's Sales Team at submit (see the module docstring)."""
+    if invoice_doc.get("doctype") not in ("Sales Invoice", "POS Invoice"):
+        return
+    if _trusted_source() == AMENDMENT_SOURCE or cstr(invoice_doc.get("amended_from")).strip():
+        return  # Edit Invoice keeps what it copied from the original
+    if _is_return_against(invoice_doc):
+        rows = [r for r in _team_rows(invoice_doc.doctype, invoice_doc.return_against) if cstr(r.sales_person).strip()]
+        names = [r.sales_person for r in rows]
+        enabled = set(
+            frappe.get_all("Sales Person", filters={"name": ["in", names], "enabled": 1}, pluck="name", ignore_permissions=True)
+        ) if names else set()
+        if any(name not in enabled for name in names):
+            rows = []  # ERPNext refuses a disabled Sales Person on a new invoice
+        invoice_doc.set(
+            "sales_team",
+            [{"sales_person": r.sales_person, "allocated_percentage": r.allocated_percentage} for r in rows],
+        )
+        return
+    check_pos_sales_team(invoice_doc, profile_doc)
+    if any(cstr(row.get("sales_person")).strip() for row in invoice_doc.get("sales_team") or []):
+        return
+    own = linked_sales_person(invoice_doc.get(CASHIER_FIELD))
+    if own:
+        invoice_doc.set("sales_team", [{"sales_person": own, "allocated_percentage": 100}])
 
 
 # --- Sales Person: POS User --------------------------------------------------
@@ -281,11 +372,29 @@ def refresh_sales_credit(dry_run=False, verbose=True):
         frappe.throw(_("Run bench migrate first: the Sales credited to fields are missing."))
 
     invoices = frappe.db.sql(
-        f"""SELECT name, is_return, return_against, `{CASHIER_FIELD}` AS cashier,
+        f"""SELECT name, is_return, return_against, amended_from, `{CASHIER_FIELD}` AS cashier,
                    `{CREDITED_USER_FIELD}` AS credited, `{CREDITED_NAME_FIELD}` AS credited_name
             FROM `tabSales Invoice` WHERE docstatus = 1""",
         as_dict=True,
     )
+    chain = {
+        row.name: row
+        for row in frappe.db.sql(
+            f"""SELECT name, amended_from, `{CASHIER_FIELD}` AS cashier FROM `tabSales Invoice`
+                WHERE IFNULL(amended_from, '') <> '' OR name IN (
+                    SELECT amended_from FROM `tabSales Invoice` WHERE IFNULL(amended_from, '') <> '')""",
+            as_dict=True,
+        )
+    }
+
+    def first_cashier(inv):
+        # Edit Invoice: the credit stays with the first invoice's PIN cashier.
+        cashier, current, seen = inv.cashier, cstr(inv.amended_from).strip(), set()
+        while current and current not in seen and current in chain:
+            seen.add(current)
+            cashier = cstr(chain[current].cashier).strip() or cashier
+            current = cstr(chain[current].amended_from).strip()
+        return cashier
     team = defaultdict(list)
     for row in frappe.db.sql(
         """SELECT parent, sales_person, allocated_percentage FROM `tabSales Team`
@@ -300,7 +409,7 @@ def refresh_sales_credit(dry_run=False, verbose=True):
     for inv in invoices:
         if inv.is_return and cstr(inv.return_against).strip():
             continue
-        expected[inv.name] = credit_for(team.get(inv.name), inv.cashier, users)
+        expected[inv.name] = credit_for(team.get(inv.name), first_cashier(inv), users)
         top = top_sales_person(team.get(inv.name))
         if top and not users.get(top):
             unlinked[top] += 1
@@ -369,4 +478,164 @@ def refresh_sales_credit(dry_run=False, verbose=True):
             print("Sales Persons on invoices without a POS User (those sales stay with the PIN cashier):")
             for sales_person, count in summary["unlinked_sales_persons"].items():
                 print(f"  {sales_person}: {count}")
+    return summary
+
+
+# --- Fill past POS invoices (re-runnable) ---------------------------------------
+
+
+def _key(rows):
+    return [(cstr(r.get("sales_person")).strip(), flt(r.get("allocated_percentage"))) for r in rows or []
+            if cstr(r.get("sales_person")).strip()]
+
+
+def fill_pos_sales_team(dry_run=False, verbose=True):
+    """Give past submitted POS Sales Invoices the Sales Team the POS now sets.
+
+    Same rules as apply_pos_sales_team: an invoice without a Sales Person
+    gets its PIN cashier's own Sales Person (an Edit Invoice amendment: the
+    first invoice's cashier); a return against an invoice gets the
+    original's Sales Team, replacing a different one (listed). Invoices that
+    already have a Sales Person are left alone. Rows are written directly
+    with ERPNext's allocated amount and incentives, without touching
+    `modified` or making a Version; no accounting entries. Run after linking
+    Sales Persons to users, then run posa-refresh-sales-credit. Safe to run
+    again.
+    """
+    from frappe.model.meta import get_field_precision
+
+    invoices = frappe.db.sql(
+        f"""SELECT name, is_return, return_against, amended_from, `{CASHIER_FIELD}` AS cashier,
+                   amount_eligible_for_commission, base_net_total
+            FROM `tabSales Invoice`
+            WHERE docstatus = 1 AND IFNULL(pos_profile, '') <> ''
+            ORDER BY posting_date, creation""",
+        as_dict=True,
+    )
+    team = defaultdict(list)
+    for row in frappe.db.sql(
+        """SELECT parent, sales_person, allocated_percentage FROM `tabSales Team`
+           WHERE parenttype = 'Sales Invoice' AND parentfield = 'sales_team' ORDER BY parent, idx""",
+        as_dict=True,
+    ):
+        team[row.parent].append(row)
+    chain = {
+        row.name: row
+        for row in frappe.db.sql(
+            f"""SELECT name, amended_from, `{CASHIER_FIELD}` AS cashier FROM `tabSales Invoice`
+                WHERE IFNULL(amended_from, '') <> '' OR name IN (
+                    SELECT amended_from FROM `tabSales Invoice` WHERE IFNULL(amended_from, '') <> '')""",
+            as_dict=True,
+        )
+    }
+    linked = {}
+    if frappe.get_meta("Sales Person").has_field(SALES_PERSON_USER_FIELD):
+        for row in frappe.get_all(
+            "Sales Person",
+            filters={SALES_PERSON_USER_FIELD: ["is", "set"], "enabled": 1, "is_group": 0},
+            fields=["name", SALES_PERSON_USER_FIELD, "commission_rate"],
+            ignore_permissions=True,
+        ):
+            linked[cstr(row.get(SALES_PERSON_USER_FIELD)).strip()] = row.name
+    rates = dict(frappe.get_all("Sales Person", fields=["name", "commission_rate"], as_list=True, ignore_permissions=True))
+
+    def first_cashier(inv):
+        cashier, current, seen = inv.cashier, cstr(inv.amended_from).strip(), set()
+        while current and current not in seen and current in chain:
+            seen.add(current)
+            cashier = cstr(chain[current].cashier).strip() or cashier
+            current = cstr(chain[current].amended_from).strip()
+        return cstr(cashier).strip()
+
+    expected = {}
+    counts = Counter()
+    unlinked = Counter()
+    overwritten = []
+    ordered = [i for i in invoices if not (i.is_return and cstr(i.return_against).strip())] + [
+        i for i in invoices if i.is_return and cstr(i.return_against).strip()
+    ]
+    for inv in ordered:
+        current = _key(team.get(inv.name))
+        if inv.is_return and cstr(inv.return_against).strip():
+            original = expected.get(inv.return_against)
+            if original is None:
+                original = _key(team.get(inv.return_against))
+            expected[inv.name] = original
+            if current != original:
+                counts["return_copied"] += 1
+                if current:
+                    overwritten.append((inv.name, inv.return_against, current, original))
+            continue
+        if current:
+            expected[inv.name] = current
+            counts["had_sales_person"] += 1
+            continue
+        cashier = first_cashier(inv) if cstr(inv.amended_from).strip() else cstr(inv.cashier).strip()
+        own = linked.get(cashier)
+        if own:
+            expected[inv.name] = [(own, 100.0)]
+            counts["amendment_filled" if cstr(inv.amended_from).strip() else "filled"] += 1
+        else:
+            expected[inv.name] = []
+            unlinked[cashier or _("(no cashier)")] += 1
+
+    changes = [(inv, expected[inv.name]) for inv in invoices if _key(team.get(inv.name)) != expected[inv.name]]
+    if not dry_run and changes:
+        df = frappe.get_meta("Sales Team").get_field("allocated_amount")
+        precision = cint(get_field_precision(df, currency=frappe.db.get_default("currency"))) or 3
+        for inv, rows in changes:
+            frappe.db.delete("Sales Team", {"parent": inv.name, "parenttype": "Sales Invoice", "parentfield": "sales_team"})
+            base = flt(inv.amount_eligible_for_commission) if inv.amount_eligible_for_commission is not None else flt(inv.base_net_total)
+            for idx, (sales_person, pct) in enumerate(rows, 1):
+                amount = flt(base * pct / 100.0, precision)
+                rate = flt(rates.get(sales_person))
+                row = frappe.get_doc(
+                    {
+                        "doctype": "Sales Team",
+                        "parent": inv.name,
+                        "parenttype": "Sales Invoice",
+                        "parentfield": "sales_team",
+                        "idx": idx,
+                        "sales_person": sales_person,
+                        "allocated_percentage": pct,
+                        "allocated_amount": amount,
+                        "commission_rate": rate,
+                        "incentives": flt(amount * rate / 100.0, precision) if rate else 0,
+                    }
+                )
+                row.db_insert()
+        frappe.db.commit()
+
+    summary = {
+        "checked": len(invoices),
+        "changed": len(changes),
+        "filled_from_cashier": counts["filled"],
+        "amendments_filled_from_first_cashier": counts["amendment_filled"],
+        "returns_given_original": counts["return_copied"],
+        "returns_overwritten": [
+            {"return": r, "original": o, "was": [sp for sp, _p in was], "now": [sp for sp, _p in now]}
+            for r, o, was, now in overwritten
+        ],
+        "already_had_sales_person": counts["had_sales_person"],
+        "left_empty_cashier_not_linked": dict(sorted(unlinked.items())),
+        "dry_run": bool(dry_run),
+    }
+    if verbose:
+        verb = "would change" if dry_run else "changed"
+        prefix = "POS Sales Person fill (dry run, nothing written)" if dry_run else "POS Sales Person fill"
+        print(f"{prefix}: {summary['checked']} submitted POS invoices checked, {summary['changed']} {verb}.")
+        print(f"  Filled with the PIN cashier's own Sales Person: {summary['filled_from_cashier']}")
+        print(f"  Edit Invoice amendments filled from the first invoice's cashier: {summary['amendments_filled_from_first_cashier']}")
+        print(f"  Returns given their original's Sales Team: {summary['returns_given_original']}")
+        if overwritten:
+            print(f"  Of those, returns that had a different Sales Person ({len(overwritten)}):")
+            for item in summary["returns_overwritten"]:
+                print(f"    {item['return']} (original {item['original']}): {', '.join(item['was'])} -> {', '.join(item['now']) or '(none)'}")
+        print(f"  Already had a Sales Person (left as is): {summary['already_had_sales_person']}")
+        if unlinked:
+            print("  Left empty -- PIN cashier has no linked Sales Person:")
+            for cashier, count in summary["left_empty_cashier_not_linked"].items():
+                print(f"    {cashier}: {count}")
+        if not dry_run:
+            print("Now run posa-refresh-sales-credit.")
     return summary
