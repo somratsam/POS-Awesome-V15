@@ -233,13 +233,28 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 					const data = Array.isArray(message) ? message : message?.credit || [];
 					const expired = Array.isArray(message?.expired) ? message.expired : [];
 					if (message?.generic_customer) {
-						resetCustomerCreditState();
-						showCreditProblem(
-							__(
-								"{0} is a shared customer account: store credit on it can't be used. Select the customer the credit belongs to, or scan their credit note voucher.",
-								[customer],
-							),
-						);
+						// Shared account (e.g. Anonymous): only bearer vouchers
+						// scanned for this sale -- never the account's other credit,
+						// never by the same-shift rule or a supervisor.
+						const bearer = (data || []).flatMap((row: any) => {
+							const voucher =
+								row?.type === "Invoice" ? credit_vouchers.value[row.credit_origin] : undefined;
+							return voucher?.bearer && voucher.customer === customer
+								? [{ ...row, voucher_code: voucher.code }]
+								: [];
+						});
+						if (!bearer.length) {
+							resetCustomerCreditState();
+							showCreditProblem(
+								__(
+									"{0} is a shared customer account: its credit can only be used with the voucher from the return. Scan or type the voucher below Use Customer Balance.",
+									[customer],
+								),
+							);
+							return;
+						}
+						options.onCreditMessage?.("");
+						applyCreditRows(bearer);
 						return;
 					}
 					// One message, so neither replaces the other on screen; nothing

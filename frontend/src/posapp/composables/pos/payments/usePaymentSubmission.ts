@@ -1414,9 +1414,17 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 			// new sale for the same customer, with their credit switched on
 			// when Payments opens. Waits a tick so the cart clear above has
 			// finished resetting the customer first.
+			// A return of a sale to a shared customer (e.g. Anonymous): its
+			// credit is a bearer voucher, usable only with that voucher -- the
+			// server sends the one it has just issued, used on the new sale.
+			const bearerVoucher = exchangeCustomer ? r.message?.posa_bearer_voucher : null;
 			if (exchangeCustomer && stores?.customersStore?.armExchangeCredit) {
 				void nextTick(() => {
 					stores.customersStore.setSelectedCustomer(exchangeCustomer);
+					if (bearerVoucher?.credit_origin && stores.customersStore.addCreditVoucher) {
+						stores.customersStore.markSharedCustomer?.(exchangeCustomer);
+						stores.customersStore.addCreditVoucher(bearerVoucher);
+					}
 					stores.customersStore.armExchangeCredit(exchangeCustomer);
 				});
 			}

@@ -222,6 +222,13 @@ def _install_dependency_stubs():
     sales_credit_module.apply_pos_sales_team = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.sales_credit"] = sales_credit_module
 
+    # Voucher authorization and bearer vouchers have their own tests
+    # (test_credit_voucher); submit_invoice only asks for the bearer voucher.
+    credit_voucher_module = types.ModuleType("posawesome.posawesome.api.credit_voucher")
+    credit_voucher_module.bearer_voucher_for = lambda *_args, **_kwargs: None
+    credit_voucher_module.authorize_customer_credit = lambda *_args, **_kwargs: None
+    sys.modules["posawesome.posawesome.api.credit_voucher"] = credit_voucher_module
+
     discount_reasons_module = types.ModuleType("posawesome.posawesome.api.discount_reasons")
     discount_reasons_module.sanitize_discount_reason_payload = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.discount_reasons"] = discount_reasons_module

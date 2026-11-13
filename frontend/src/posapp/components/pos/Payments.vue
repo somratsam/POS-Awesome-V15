@@ -769,6 +769,9 @@ const redeemCreditVoucher = async (code) => {
 		return;
 	}
 	if (!voucher?.credit_origin) return;
+	// A bearer voucher (from a return of a sale to a shared customer such as
+	// Anonymous): the sale goes to that customer and stays with it.
+	if (voucher.bearer) customersStore.markSharedCustomer(voucher.customer);
 
 	const current = invoice_doc.value?.customer || "";
 	if (current !== voucher.customer) {
@@ -855,6 +858,9 @@ const setRedeemCustomerCredit = (value) => {
 	redeem_customer_credit.value = Boolean(value);
 	if (!invoice_doc.value?.is_return) {
 		customersStore.setCreditOn(invoice_doc.value?.customer || null, Boolean(value));
+		// Switched off: a bearer voucher is dropped too, which frees the
+		// customer box (locked while one is on the sale).
+		if (!value) customersStore.dropBearerVouchers();
 	}
 };
 const creditRemainderDialog = ref(false);

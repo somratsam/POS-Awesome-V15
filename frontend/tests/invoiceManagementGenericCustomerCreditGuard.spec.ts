@@ -27,7 +27,7 @@ vi.mock("../src/posapp/services/qzTray", () => ({
 
 import InvoiceManagement from "../src/posapp/components/pos/flows/InvoiceManagement.vue";
 
-describe("InvoiceManagement.vue createReturn: generic-customer stored-credit guard", () => {
+describe("InvoiceManagement.vue createReturn: return of a sale to a shared (generic) customer", () => {
 	beforeEach(() => {
 		(globalThis as any).__ = (text: string, args?: any[]) => {
 			if (!args) return text;
@@ -42,6 +42,7 @@ describe("InvoiceManagement.vue createReturn: generic-customer stored-credit gua
 		toastStore: { show: vi.fn() },
 		eventBus: { emit: vi.fn() },
 		uiStore: { closeInvoiceManagement: vi.fn() },
+		customersStore: { dropBearerVouchers: vi.fn(), markSharedCustomer: vi.fn() },
 	});
 
 	const returnableItem = {
@@ -59,7 +60,7 @@ describe("InvoiceManagement.vue createReturn: generic-customer stored-credit gua
 		net_amount: 100,
 	};
 
-	it("blocks and toasts when the original invoice's customer is generic, without loading the return", async () => {
+	it("loads the return of a sale to a generic customer, keeping that customer, and marks it shared (bearer voucher)", async () => {
 		const callMock = (globalThis as any).frappe.call as ReturnType<typeof vi.fn>;
 		callMock.mockResolvedValue({
 			message: {
@@ -77,15 +78,19 @@ describe("InvoiceManagement.vue createReturn: generic-customer stored-credit gua
 		const context = baseContext();
 		await (InvoiceManagement as any).methods.createReturn.call(context, { name: "SINV-0001", doctype: "Sales Invoice" });
 
-		expect(context.eventBus.emit).not.toHaveBeenCalled();
-		expect(context.uiStore.closeInvoiceManagement).not.toHaveBeenCalled();
-		expect(context.toastStore.show).toHaveBeenCalledWith(
+		expect(context.eventBus.emit).toHaveBeenCalledWith(
+			"load_return_invoice",
 			expect.objectContaining({
-				color: "error",
-				title: expect.stringContaining("Anonymous"),
+				invoice_doc: expect.objectContaining({
+					customer: "Anonymous",
+					is_return: 1,
+					return_against: "SINV-0001",
+				}),
 			}),
 		);
-		expect(context.toastStore.show.mock.calls[0][0].title).toContain("Return without Invoice");
+		expect(context.customersStore.markSharedCustomer).toHaveBeenCalledWith("Anonymous");
+		expect(context.customersStore.dropBearerVouchers).toHaveBeenCalled();
+		expect(context.toastStore.show).not.toHaveBeenCalled();
 	});
 
 	it("does not block a return whose original invoice's customer is a real customer", async () => {
@@ -114,5 +119,6 @@ describe("InvoiceManagement.vue createReturn: generic-customer stored-credit gua
 		);
 		expect(context.uiStore.closeInvoiceManagement).toHaveBeenCalled();
 		expect(context.toastStore.show).not.toHaveBeenCalled();
+		expect(context.customersStore.markSharedCustomer).not.toHaveBeenCalled();
 	});
 });

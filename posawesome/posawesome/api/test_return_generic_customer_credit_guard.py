@@ -39,14 +39,21 @@ class TestGenericCustomerStoredCreditGuard(unittest.TestCase):
             _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=False)
             mocked.assert_not_called()
 
-    def test_noop_when_not_linked_to_an_original_invoice(self):
-        # "Return without Invoice" -- no return_against, so there's no
-        # party-mismatch trap and no way to have picked a generic customer
-        # via this path in the first place.
+    def test_blocks_return_without_invoice_leaving_credit_on_a_generic_customer(self):
+        # "Return without Invoice" to Anonymous: nothing ties it to a sale, so
+        # its credit must go to a real customer -- no bearer voucher.
         doc = _return_invoice_doc(return_against=None, paid_amount=0)
-        with patch("frappe.db.get_value") as mocked:
+        with patch("frappe.db.get_value", return_value=1):
+            with self.assertRaises(Exception) as ctx:
+                _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=True)
+        message = str(ctx.exception)
+        self.assertIn("without an invoice", message)
+        self.assertIn("Anonymous", message)
+
+    def test_return_without_invoice_to_a_real_customer_is_unaffected(self):
+        doc = _return_invoice_doc(return_against=None, customer="Real Customer", paid_amount=0)
+        with patch("frappe.db.get_value", return_value=0):
             _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=True)
-            mocked.assert_not_called()
 
     def test_noop_when_fully_refunded_in_cash(self):
         # No credit left behind, so who the customer is doesn't matter here.
@@ -61,20 +68,18 @@ class TestGenericCustomerStoredCreditGuard(unittest.TestCase):
             _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=True)
         mocked.assert_called_once_with("Customer", "Real Customer", "posa_is_generic_customer")
 
-    def test_blocks_zero_refund_credit_return_against_a_generic_customer(self):
+    def test_linked_return_with_no_refund_is_allowed_as_a_bearer_voucher(self):
         doc = _return_invoice_doc(customer="Anonymous", paid_amount=0)
+        with patch("frappe.db.get_value", return_value=1):
+            _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=True)
+
+    def test_blocks_partial_refund_that_still_leaves_credit_on_a_generic_customer(self):
+        # Part refund + part credit: no voucher would print for the credit.
+        doc = _return_invoice_doc(customer="Anonymous", paid_amount=-40, grand_total=-100, rounded_total=-100)
         with patch("frappe.db.get_value", return_value=1):
             with self.assertRaises(Exception) as ctx:
                 _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=True)
-        message = str(ctx.exception)
-        self.assertIn("Anonymous", message)
-        self.assertIn("Return without Invoice", message)
-
-    def test_blocks_partial_refund_that_still_leaves_credit_on_a_generic_customer(self):
-        doc = _return_invoice_doc(customer="Anonymous", paid_amount=-40, grand_total=-100, rounded_total=-100)
-        with patch("frappe.db.get_value", return_value=1):
-            with self.assertRaises(Exception):
-                _guard_generic_customer_stored_credit(doc, enforce_credit_only_policy=True)
+        self.assertIn("in full or not at all", str(ctx.exception))
 
     def test_boundary_refund_within_tolerance_of_full_amount_is_not_blocked(self):
         # 99.999 vs 100 rounded_total, within a 2-decimal tolerance of "fully paid".

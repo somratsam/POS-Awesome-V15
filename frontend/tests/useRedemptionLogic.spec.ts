@@ -342,3 +342,65 @@ describe("useRedemptionLogic expired store credit", () => {
 		expect(customer_credit_dict.value.map((row: any) => row.credit_origin)).toEqual(["CN-1"]);
 	});
 });
+
+describe("useRedemptionLogic shared customer (bearer vouchers)", () => {
+	beforeEach(() => {
+		(globalThis as any).__ = (str: string, args?: any[]) =>
+			String(str).replace(/\{(\d+)\}/g, (_m, i) => String(args?.[Number(i)] ?? ""));
+	});
+
+	// Three returns of sales to Anonymous, all in this shift.
+	const rows = () => [
+		{ type: "Invoice", credit_origin: "RET-1", total_credit: 30, pos_opening_shift: "SHIFT-1" },
+		{ type: "Invoice", credit_origin: "RET-2", total_credit: 20, pos_opening_shift: "SHIFT-1" },
+		{ type: "Invoice", credit_origin: "RET-3", total_credit: 40, pos_opening_shift: "SHIFT-1" },
+	];
+
+	const setup = (vouchers: Record<string, any>) => {
+		(globalThis as any).frappe = {
+			call: vi.fn(async () => ({ message: { credit: rows(), expired: [], generic_customer: true } })),
+		};
+		const messages: string[] = [];
+		const logic = useRedemptionLogic({
+			// Same shift and a supervisor on the till: neither counts for a shared customer.
+			getAuthorizationContext: () => ({ shift: "SHIFT-1", supervisor: true }),
+			invoiceDoc: ref<any>({ customer: "Anonymous", rounded_total: 100, grand_total: 100 }),
+			posProfile: ref({ company: "Test Co", currency: "OMR" }),
+			customerInfo: ref({}),
+			currencyPrecision: ref(3),
+			formatFloat: (value: any) => Number(value || 0),
+			creditVouchers: ref(vouchers),
+			onCreditMessage: (message: string) => messages.push(message),
+		});
+		return { ...logic, messages };
+	};
+
+	it("choosing Anonymous alone gives nothing", async () => {
+		const { get_available_credit, customer_credit_dict, redeemed_customer_credit, messages } = setup({});
+		get_available_credit(true);
+		await flush();
+		expect(customer_credit_dict.value).toEqual([]);
+		expect(redeemed_customer_credit.value).toBe(0);
+		expect(messages.join(" ")).toContain("Anonymous is a shared customer account");
+	});
+
+	it("each voucher gives only its own credit note, with its code", async () => {
+		const { get_available_credit, customer_credit_dict, redeemed_customer_credit } = setup({
+			"RET-2": { credit_origin: "RET-2", code: "C26RET2XXXX", customer: "Anonymous", bearer: 1 },
+		});
+		get_available_credit(true);
+		await flush();
+		expect(customer_credit_dict.value.map((r: any) => r.credit_origin)).toEqual(["RET-2"]);
+		expect(customer_credit_dict.value[0].voucher_code).toBe("C26RET2XXXX");
+		expect(redeemed_customer_credit.value).toBe(20);
+	});
+
+	it("a named customer's voucher can't unlock Anonymous credit", async () => {
+		const { get_available_credit, customer_credit_dict } = setup({
+			"RET-1": { credit_origin: "RET-1", code: "C26RET1XXXX", customer: "CUST-B", bearer: 0 },
+		});
+		get_available_credit(true);
+		await flush();
+		expect(customer_credit_dict.value).toEqual([]);
+	});
+});

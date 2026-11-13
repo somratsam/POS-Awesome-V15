@@ -1955,3 +1955,12 @@ Staff and store,الموظف والمتجر
 Sales counted,المبيعات المحتسبة
 None chosen = all your stores,بدون اختيار = كل متاجرك
 A return keeps the original sale's Sales Person.,يحتفظ المرتجع بمندوب مبيعات البيع الأصلي.
+This sale was to {0} — the credit is given as a voucher.,كان هذا البيع إلى {0} — يُعطى الرصيد كقسيمة.
+Paid with a voucher from a sale to {0} — the customer stays {0}.,مدفوع بقسيمة من بيع إلى {0} — يبقى العميل {0}.
+{0} is a shared customer account: its credit can only be used with the voucher from the return. Scan or type the voucher below Use Customer Balance.,{0} حساب عميل مشترك: لا يمكن استخدام رصيده إلا بالقسيمة الصادرة عن المرتجع. امسح القسيمة أو اكتب رقمها أسفل استخدام رصيد العميل.
+"This credit is from a sale to {0}: its voucher works like cash, so a lost voucher can't be replaced, not even by a supervisor.",هذا الرصيد من بيع إلى {0}: قسيمته تعمل مثل النقد، لذلك لا يمكن استبدال القسيمة المفقودة، ولا حتى بموافقة المشرف.
+"Credit on ""{0}"", a shared customer account, can only be used with its own voucher: scan the voucher in Payments. Not usable here: {1}.","لا يمكن استخدام الرصيد على ""{0}""، وهو حساب عميل مشترك، إلا بقسيمته: امسح القسيمة في شاشة الدفع. غير قابل للاستخدام هنا: {1}."
+"This return of a sale to ""{0}"", a shared customer account, must be refunded in full or not at all. With no refund, its whole value is given as a voucher that works like cash.","يجب أن يُسترد مرتجع البيع إلى ""{0}""، وهو حساب عميل مشترك، بالكامل أو لا يُسترد إطلاقاً. بدون استرداد، تُعطى قيمته كاملة كقسيمة تعمل مثل النقد."
+"A return without an invoice can't leave store credit on ""{0}"", a shared customer account: select or create the real customer. (A return of a sale to ""{0}"" made from its receipt gives the credit as a voucher instead.)","لا يمكن لمرتجع بدون فاتورة أن يترك رصيداً على ""{0}""، وهو حساب عميل مشترك: اختر العميل الفعلي أو أنشئه. (أما مرتجع البيع إلى ""{0}"" من إيصاله فيُعطى رصيده كقسيمة.)"
+"This voucher is on ""{0}"", a shared customer account, and its credit wasn't given from the receipt of a sale, so it can't be used.","هذه القسيمة على ""{0}""، وهو حساب عميل مشترك، ولم يُعطَ رصيدها من إيصال بيع، لذا لا يمكن استخدامها."
+Anonymous customer,عميل مجهول

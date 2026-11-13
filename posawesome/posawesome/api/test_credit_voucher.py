@@ -417,15 +417,57 @@ class TestAuthorizeCustomerCredit(unittest.TestCase):
             ],
         )
 
-    def test_shared_customer_cannot_spend_credit_even_with_voucher_or_supervisor(self):
-        name = "ACC-SINV-2026-00269"
-        with self.assertRaisesRegex(frappe.ValidationError, "shared customer account"):
-            self._run(
-                _sale(customer="Anonymous"),
-                [{"type": "Invoice", "credit_origin": name, "voucher_code": credit_voucher.credit_voucher_code(name)}],
-                generic=True,
-                supervisor="sara@x.test",
+    def _bearer(self, rows, bearer_names=("ACC-SINV-2026-00269",), supervisor="sara@x.test", shifts=None):
+        """A sale to Anonymous; bearer_names are the returns linked to a sale
+        to Anonymous (is_bearer_credit_note)."""
+        with patch.object(credit_voucher, "is_bearer_credit_note", side_effect=lambda name: name in bearer_names):
+            return self._run(
+                _sale(customer="Anonymous"), rows, generic=True, supervisor=supervisor, shifts=shifts
             )
+
+    def test_shared_customer_spends_a_bearer_voucher_with_its_own_code(self):
+        name = "ACC-SINV-2026-00269"
+        code = credit_voucher.credit_voucher_code(name)
+        lines = self._bearer([{"type": "Invoice", "credit_origin": name, "voucher_code": code}])
+        self.assertEqual(lines, f"{name}: voucher {credit_voucher.credit_voucher_label(code)}")
+
+    def test_shared_customer_without_a_voucher_gets_nothing_even_same_shift_or_supervisor(self):
+        # "Choosing Anonymous alone gives nothing."
+        with self.assertRaisesRegex(frappe.ValidationError, "only be used with its own voucher"):
+            self._bearer(
+                [{"type": "Invoice", "credit_origin": "ACC-SINV-2026-00269"}],
+                shifts={"ACC-SINV-2026-00269": "SHIFT-NOW"},
+            )
+
+    def test_shared_customer_cannot_use_another_bearer_vouchers_code(self):
+        other = credit_voucher.credit_voucher_code("ACC-SINV-2026-00270")
+        with self.assertRaises(frappe.ValidationError):
+            self._bearer(
+                [{"type": "Invoice", "credit_origin": "ACC-SINV-2026-00269", "voucher_code": other}],
+                bearer_names=("ACC-SINV-2026-00269", "ACC-SINV-2026-00270"),
+            )
+
+    def test_shared_credit_not_from_a_linked_return_cannot_be_spent_even_with_its_code(self):
+        # e.g. a return without an invoice to Anonymous from before this rule.
+        name = "ACC-SINV-2026-00292"
+        with self.assertRaises(frappe.ValidationError):
+            self._bearer(
+                [{"type": "Invoice", "credit_origin": name, "voucher_code": credit_voucher.credit_voucher_code(name)}],
+                bearer_names=(),
+            )
+
+    def test_shared_customer_cannot_spend_advances(self):
+        with self.assertRaises(frappe.ValidationError):
+            self._bearer([{"type": "Advance", "credit_origin": "ACC-PAY-1"}])
+
+    def test_each_bearer_voucher_only_with_its_own_code(self):
+        a, b = "ACC-SINV-2026-00269", "ACC-SINV-2026-00270"
+        rows = [
+            {"type": "Invoice", "credit_origin": a, "voucher_code": credit_voucher.credit_voucher_code(a)},
+            {"type": "Invoice", "credit_origin": b},
+        ]
+        with self.assertRaisesRegex(frappe.ValidationError, b):
+            self._bearer(rows, bearer_names=(a, b))
 
 
 class TestLookupCreditVoucher(unittest.TestCase):
@@ -436,7 +478,7 @@ class TestLookupCreditVoucher(unittest.TestCase):
         self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key())
         self.code = credit_voucher.credit_voucher_code(self.NAME)
 
-    def _lookup(self, code, company="Swan", customer="CUST-1", credit=None, expired=None, generic=False, candidates=None):
+    def _lookup(self, code, company="Swan", customer="CUST-1", credit=None, expired=None, generic=False, candidates=None, linked=True):
         credit = [{"type": "Invoice", "credit_origin": self.NAME, "total_credit": 139.3, "expires_on": getdate("2027-02-05")}] if credit is None else credit
 
         real_get_value = frappe.db.get_value
@@ -451,7 +493,15 @@ class TestLookupCreditVoucher(unittest.TestCase):
             name = args[0] if args else kwargs.get("filters")
             fields = args[1] if len(args) > 1 else kwargs.get("fieldname")
             if doctype == "Sales Invoice":
-                return frappe._dict(name=name, customer=customer, customer_name="Sanju", company=company)
+                return frappe._dict(
+                    name=name,
+                    customer=customer,
+                    customer_name="Sanju",
+                    company=company,
+                    is_return=1,
+                    docstatus=1,
+                    return_against="ACC-SINV-2026-00260" if linked else "",
+                )
             if doctype == "Customer" and fields == "posa_is_generic_customer":
                 return 1 if generic else 0
             if doctype == "Customer" and fields == "mobile_no":
@@ -508,9 +558,18 @@ class TestLookupCreditVoucher(unittest.TestCase):
         with self.assertRaisesRegex(frappe.ValidationError, "expired on"):
             self._lookup(self.code, credit=[], expired=expired)
 
-    def test_shared_customer_voucher_is_refused(self):
+    def test_valid_voucher_is_not_a_bearer_voucher(self):
+        self.assertEqual(self._lookup(self.code)["bearer"], 0)
+
+    def test_bearer_voucher_of_a_linked_return_to_a_shared_customer_is_accepted(self):
+        result = self._lookup(self.code, customer="Anonymous", generic=True)
+        self.assertEqual(result["customer"], "Anonymous")
+        self.assertEqual(result["bearer"], 1)
+        self.assertEqual(result["code"], self.code)
+
+    def test_shared_customer_voucher_without_an_original_sale_is_refused(self):
         with self.assertRaisesRegex(frappe.ValidationError, "shared customer account"):
-            self._lookup(self.code, generic=True)
+            self._lookup(self.code, customer="Anonymous", generic=True, linked=False)
 
     def test_parse(self):
         self.assertEqual(credit_voucher.parse_voucher_code("c26-00269-env2"), ("26", "00269", "C2600269ENV2"))
@@ -528,16 +587,26 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
         frappe.cache.delete_value(credit_voucher._failure_key())
         self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key())
 
-    def _lookup(self, text, supervisor):
+    def _lookup(self, text, supervisor, generic=False):
         real_get_value = frappe.db.get_value
         real_get_all = frappe.get_all
 
         def get_value(doctype, *args, **kwargs):
             fields = args[1] if len(args) > 1 else kwargs.get("fieldname")
             if doctype == "Sales Invoice":
-                return frappe._dict(name=self.NAME, customer="CUST-1", customer_name="Sanju", company="Swan")
+                return frappe._dict(
+                    name=self.NAME,
+                    customer="Anonymous" if generic else "CUST-1",
+                    customer_name="Anonymous" if generic else "Sanju",
+                    company="Swan",
+                    is_return=1,
+                    docstatus=1,
+                    return_against="ACC-SINV-2026-00250",
+                )
             if doctype == "Customer":
-                return 0 if fields == "posa_is_generic_customer" else ""
+                if fields == "posa_is_generic_customer":
+                    return 1 if generic else 0
+                return ""
             return real_get_value(doctype, *args, **kwargs)
 
         def get_all(doctype, *args, **kwargs):
@@ -565,6 +634,10 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
         self.assertEqual(result["code"], "")
         self.assertEqual(result["voucher"], self.NAME)
 
+    def test_a_lost_bearer_voucher_cannot_be_replaced_even_by_a_supervisor(self):
+        with self.assertRaisesRegex(frappe.ValidationError, "works like cash"):
+            self._lookup("2026-00257", supervisor="sara@x.test", generic=True)
+
     def test_a_cashier_cannot(self):
         with self.assertRaisesRegex(frappe.ValidationError, "not a valid credit note voucher"):
             self._lookup("2026-00257", supervisor=None)
@@ -572,3 +645,58 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
     def test_text_that_is_not_a_number_finds_nothing(self):
         self.assertIsNone(credit_voucher.find_return_by_number("hello"))
         self.assertIsNone(credit_voucher.find_return_by_number(""))
+
+
+class TestBearerVoucherHelpers(unittest.TestCase):
+    """is_bearer_credit_note / bearer_voucher_for: a return linked to its sale,
+    to a shared customer, refunding nothing."""
+
+    def _generic(self, *names):
+        return patch.object(credit_voucher, "is_generic_customer", side_effect=lambda c: c in names)
+
+    def test_is_bearer_credit_note(self):
+        with self._generic("Anonymous"):
+            self.assertTrue(credit_voucher.is_bearer_credit_note(_credit_return(customer="Anonymous")))
+            self.assertFalse(credit_voucher.is_bearer_credit_note(_credit_return()))
+            self.assertFalse(credit_voucher.is_bearer_credit_note(_credit_return(customer="Anonymous", return_against=None)))
+            self.assertFalse(credit_voucher.is_bearer_credit_note(_credit_return(customer="Anonymous", docstatus=0)))
+            self.assertFalse(credit_voucher.is_bearer_credit_note(None))
+
+    def test_bearer_voucher_for_a_no_refund_return_to_a_shared_customer(self):
+        doc = _credit_return(customer="Anonymous", customer_name="Anonymous", docstatus=0)
+        with self._generic("Anonymous"):
+            voucher = credit_voucher.bearer_voucher_for(doc)
+        code = credit_voucher.credit_voucher_code(doc.name)
+        self.assertEqual(voucher["credit_origin"], doc.name)
+        self.assertEqual(voucher["code"], code)
+        self.assertEqual(voucher["voucher"], credit_voucher.credit_voucher_label(code))
+        self.assertEqual(voucher["customer"], "Anonymous")
+        self.assertEqual(voucher["bearer"], 1)
+        self.assertAlmostEqual(voucher["amount"], 139.3)
+
+    def test_no_bearer_voucher_otherwise(self):
+        with self._generic("Anonymous"):
+            self.assertIsNone(credit_voucher.bearer_voucher_for(_credit_return()))  # named customer
+            self.assertIsNone(
+                credit_voucher.bearer_voucher_for(_credit_return(customer="Anonymous", return_against=None))
+            )
+            refunded = _credit_return(
+                customer="Anonymous", payments=[{"mode_of_payment": "Cash", "amount": -139.3}]
+            )
+            self.assertIsNone(credit_voucher.bearer_voucher_for(refunded))
+            self.assertIsNone(credit_voucher.bearer_voucher_for(_credit_return(customer="Anonymous", is_return=0)))
+
+    def test_bearer_voucher_print_says_it_works_like_cash(self):
+        with patch("frappe.handler.is_valid_http_method", return_value=None), self._generic("Anonymous"):
+            bearer = _text(
+                frappe.render_template(
+                    TEMPLATE, {"doc": _credit_return(customer="Anonymous", customer_name="Anonymous"), "print_settings": frappe._dict()}
+                )
+            )
+            named = _text(frappe.render_template(TEMPLATE, {"doc": _credit_return(), "print_settings": frappe._dict()}))
+        self.assertIn("works like cash", bearer)
+        self.assertIn("A lost voucher can't be replaced.", bearer)
+        self.assertNotIn("supervisor", bearer)
+        self.assertIn("A lost voucher can only be replaced by a supervisor.", named)
+        self.assertNotIn("works like cash", named)
+        self.assertIn("[BARCODE]", bearer)

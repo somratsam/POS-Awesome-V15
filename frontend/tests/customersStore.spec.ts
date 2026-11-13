@@ -348,3 +348,41 @@ describe("customersStore credit note vouchers", () => {
 		expect(store.creditVouchers).toEqual({});
 	});
 });
+
+describe("customersStore bearer vouchers and shared customers", () => {
+	beforeEach(() => {
+		setActivePinia(createPinia());
+	});
+
+	const voucher = (origin: string, customer: string, bearer = 0) => ({
+		credit_origin: origin,
+		customer,
+		code: `C26${origin}ABCD`,
+		voucher: origin,
+		amount: 10,
+		bearer,
+	});
+
+	it("drops only bearer vouchers; a named customer's vouchers stay", () => {
+		const store = useCustomersStore();
+		store.addCreditVoucher(voucher("CN-1", "Anonymous", 1));
+		store.addCreditVoucher(voucher("CN-2", "CUST-B", 0));
+		expect(store.hasBearerVoucherFor("Anonymous")).toBe(true);
+		expect(store.hasBearerVoucherFor("CUST-B")).toBe(false);
+		store.dropBearerVouchers();
+		expect(Object.keys(store.creditVouchers)).toEqual(["CN-2"]);
+		expect(store.hasBearerVoucherFor("Anonymous")).toBe(false);
+	});
+
+	it("knows shared customers from customer info and from being marked", () => {
+		const store = useCustomersStore();
+		expect(store.isSharedCustomer("Anonymous")).toBe(false);
+		store.setCustomerInfo({ name: "Anonymous", customer_name: "Anonymous", posa_is_generic_customer: 1 } as any);
+		expect(store.isSharedCustomer("Anonymous")).toBe(true);
+		store.setCustomerInfo({ name: "CUST-B", customer_name: "B", posa_is_generic_customer: 0 } as any);
+		expect(store.isSharedCustomer("CUST-B")).toBe(false);
+		store.markSharedCustomer("anno");
+		expect(store.isSharedCustomer("anno")).toBe(true);
+		expect(store.isSharedCustomer(null)).toBe(false);
+	});
+});

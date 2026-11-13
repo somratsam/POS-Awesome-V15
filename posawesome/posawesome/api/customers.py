@@ -365,6 +365,9 @@ def get_customer_info(customer=None, company=None):
     res["gender"] = customer.gender
     res["tax_id"] = customer.tax_id
     res["posa_discount"] = customer.posa_discount
+    # Shared account (e.g. Anonymous): the till locks the customer on a return
+    # of its sale and on a sale paid with its bearer voucher.
+    res["posa_is_generic_customer"] = cint(customer.get("posa_is_generic_customer"))
     res["name"] = customer.name
     res["customer_name"] = customer.customer_name
     res["customer_group_price_list"] = frappe.get_value(

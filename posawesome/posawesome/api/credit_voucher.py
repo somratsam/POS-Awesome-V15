@@ -23,7 +23,13 @@ on a sale must be authorized one of three ways, checked at submit
   - the customer's voucher, scanned or typed (lookup_credit_voucher);
   - a POS supervisor (lost voucher): signed in, or switched onto the till
     with their PIN -- the same rule as Edit Invoice and a below-cost sale.
-Credit held by a shared (generic) customer can't be spent at all.
+Bearer voucher: a return linked to its original sale to a shared (generic)
+customer such as Anonymous leaves its credit on that shared account, and its
+voucher works like cash. That credit can be spent only with its own voucher,
+on a sale to the same shared customer -- never by the same-shift rule, never
+by a supervisor (a lost bearer voucher can't be replaced), never just by
+choosing the shared customer. Other credit on a shared customer (a return
+without an invoice, from before this rule) can't be spent at all.
 
 A credit note can be used in part: credit worth more than the sale covers
 the sale and the rest stays on the same credit note -- same code, same
@@ -271,10 +277,54 @@ def is_generic_customer(customer):
     )
 
 
+def is_bearer_credit_note(doc):
+    """A submitted return linked to its original sale, to a shared (generic)
+    customer: its credit is a bearer voucher. doc = a return or its name.
+    Jinja method (the voucher prints "works like cash")."""
+    if isinstance(doc, str):
+        doc = frappe.db.get_value(
+            "Sales Invoice", doc, ["is_return", "return_against", "customer", "docstatus"], as_dict=True
+        )
+    if not doc or not cint(doc.get("is_return")) or cint(doc.get("docstatus")) != 1:
+        return False
+    return bool(cstr(doc.get("return_against")).strip()) and is_generic_customer(doc.get("customer"))
+
+
+def bearer_voucher_for(doc):
+    """The bearer voucher of a return just made by this till, for the exchange
+    that follows it (the till uses it on the new sale). None unless doc is a
+    return linked to its original sale, to a shared customer, refunding no
+    money -- the voucher the receipt printer prints for it. Only for a doc the
+    current request has just created or submitted."""
+    if not doc or not cint(doc.get("is_return")) or not cstr(doc.get("return_against")).strip():
+        return None
+    name = cstr(doc.get("name")).strip()
+    if not name or not is_generic_customer(doc.get("customer")):
+        return None
+    if flt(doc.get("grand_total")) >= 0 or any(
+        abs(flt(row.get("amount"))) > 0 for row in (doc.get("payments") or [])
+    ):
+        return None
+    code = credit_voucher_code(name)
+    if not code:
+        return None
+    return {
+        "credit_origin": name,
+        "code": code,
+        "voucher": credit_voucher_label(code),
+        "customer": doc.get("customer"),
+        "customer_name": doc.get("customer_name") or doc.get("customer"),
+        "amount": abs(flt(doc.get("rounded_total") or doc.get("grand_total"))),
+        "bearer": 1,
+    }
+
+
 def generic_customer_credit_message(customer):
+    """A voucher on a shared customer that isn't a bearer voucher: credit from a
+    return without an invoice (or from before bearer vouchers) -- never usable."""
     return _(
-        '"{0}" is a shared customer account: store credit on it can\'t be used. '
-        "Select the customer the credit belongs to, or scan their credit note voucher."
+        'This voucher is on "{0}", a shared customer account, and its credit wasn\'t '
+        "given from the receipt of a sale, so it can't be used."
     ).format(customer)
 
 
@@ -307,8 +357,14 @@ def lookup_credit_voucher(code=None, pos_profile=None):
     label = credit_voucher_label(credit_voucher_code(name))
     if voucher.company != profile.get("company"):
         frappe.throw(_("Voucher {0} belongs to another company.").format(label))
-    if is_generic_customer(voucher.customer):
-        frappe.throw(generic_customer_credit_message(voucher.customer))
+    bearer = is_generic_customer(voucher.customer)
+    if bearer:
+        # Works like cash: only the voucher itself, never a supervisor's
+        # approval by return number; and only a return linked to its sale.
+        if approved_by:
+            frappe.throw(lost_bearer_voucher_message(voucher.customer_name or voucher.customer))
+        if not is_bearer_credit_note(name):
+            frappe.throw(generic_customer_credit_message(voucher.customer))
 
     rows = get_available_credit(voucher.customer, voucher.company, include_expired=1)
     credit = next((r for r in rows["credit"] if r["type"] == "Invoice" and r["credit_origin"] == name), None)
@@ -335,6 +391,7 @@ def lookup_credit_voucher(code=None, pos_profile=None):
         "mobile_no": frappe.db.get_value("Customer", voucher.customer, "mobile_no") or "",
         "amount": flt(credit["total_credit"]),
         "expires_on": str(credit["expires_on"]),
+        "bearer": 1 if bearer else 0,
     }
 
 
@@ -352,7 +409,8 @@ def authorize_customer_credit(invoice_doc, requested_rows):
         return
     customer = invoice_doc.get("customer")
     if is_generic_customer(customer):
-        frappe.throw(generic_customer_credit_message(customer))
+        _authorize_bearer_credit(invoice_doc, requested_rows)
+        return
 
     shift = cstr(invoice_doc.get("posa_pos_opening_shift")).strip()
     invoice_origins = [r.get("credit_origin") for r in requested_rows if r.get("type") == "Invoice"]
@@ -394,6 +452,40 @@ def authorize_customer_credit(invoice_doc, requested_rows):
         for origin in unauthorized:
             lines.append(_("{0}: supervisor {1} ({2})").format(origin, full_name, approver))
 
+    meta = frappe.get_meta(invoice_doc.doctype)
+    if meta.has_field("posa_credit_authorized_by"):
+        invoice_doc.set("posa_credit_authorized_by", "\n".join(lines))
+
+
+def lost_bearer_voucher_message(customer):
+    return _(
+        "This credit is from a sale to {0}: its voucher works like cash, so a lost "
+        "voucher can't be replaced, not even by a supervisor."
+    ).format(customer)
+
+
+def _authorize_bearer_credit(invoice_doc, requested_rows):
+    """A sale to a shared customer spends only bearer credit notes whose own
+    voucher was scanned or typed (see the module docstring)."""
+    lines, refused = [], []
+    for row in requested_rows:
+        origin = cstr(row.get("credit_origin"))
+        if (
+            row.get("type") == "Invoice"
+            and is_bearer_credit_note(origin)
+            and verify_credit_voucher_code(origin, row.get("voucher_code"))
+        ):
+            lines.append(_("{0}: voucher {1}").format(origin, credit_voucher_label(credit_voucher_code(origin))))
+        else:
+            refused.append(origin or cstr(row.get("type")))
+    if refused:
+        frappe.throw(
+            _(
+                'Credit on "{0}", a shared customer account, can only be used with its own '
+                "voucher: scan the voucher in Payments. Not usable here: {1}."
+            ).format(invoice_doc.get("customer"), ", ".join(refused)),
+            frappe.ValidationError,
+        )
     meta = frappe.get_meta(invoice_doc.doctype)
     if meta.has_field("posa_credit_authorized_by"):
         invoice_doc.set("posa_credit_authorized_by", "\n".join(lines))

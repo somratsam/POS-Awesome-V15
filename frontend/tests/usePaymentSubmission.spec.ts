@@ -2213,17 +2213,24 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 		vi.stubGlobal("frappe", { utils: { play_sound: vi.fn() } });
 	});
 
-	const submitDoc = async (doc: any, returnIntent: "exchange" | "credit_note" | null = null) => {
+	const submitDoc = async (
+		doc: any,
+		returnIntent: "exchange" | "credit_note" | null = null,
+		response: Record<string, any> = {},
+	) => {
 		const invoiceService = (await import("../src/posapp/services/invoiceService")).default;
 		(invoiceService.submitInvoice as any).mockResolvedValue({
 			name: doc.name,
 			doctype: "Sales Invoice",
 			docstatus: 1,
+			...response,
 		});
 		const invoiceDoc = ref<any>(doc);
 		const customersStore = {
 			setSelectedCustomer: vi.fn(),
 			armExchangeCredit: vi.fn(),
+			addCreditVoucher: vi.fn(),
+			markSharedCustomer: vi.fn(),
 		};
 		const { submitInvoice } = usePaymentSubmission({
 			invoiceDoc,
@@ -2289,6 +2296,37 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 	it("Exchange: continue to new sale keeps the customer and arms their credit", async () => {
 		const { customersStore } = await submitDoc(creditReturn("ACC-SINV-RET-2"), "exchange");
 		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith("CUST-R");
+		expect(customersStore.armExchangeCredit).toHaveBeenCalledWith("CUST-R");
+	});
+
+	const bearerVoucher = {
+		credit_origin: "ACC-SINV-RET-9",
+		code: "C2600009ABCD",
+		voucher: "C26-00009-ABCD",
+		customer: "Anonymous",
+		amount: 50,
+		bearer: 1,
+	};
+
+	it("Exchange after a return of a sale to Anonymous uses the bearer voucher just issued", async () => {
+		const doc = { ...creditReturn("ACC-SINV-RET-9"), customer: "Anonymous", return_against: "ACC-SINV-9" };
+		const { customersStore } = await submitDoc(doc, "exchange", { posa_bearer_voucher: bearerVoucher });
+		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith("Anonymous");
+		expect(customersStore.markSharedCustomer).toHaveBeenCalledWith("Anonymous");
+		expect(customersStore.addCreditVoucher).toHaveBeenCalledWith(bearerVoucher);
+		expect(customersStore.armExchangeCredit).toHaveBeenCalledWith("Anonymous");
+	});
+
+	it("Credit note issue after a return to Anonymous doesn't put the voucher on a sale", async () => {
+		const doc = { ...creditReturn("ACC-SINV-RET-9"), customer: "Anonymous", return_against: "ACC-SINV-9" };
+		const { customersStore } = await submitDoc(doc, "credit_note", { posa_bearer_voucher: bearerVoucher });
+		expect(customersStore.addCreditVoucher).not.toHaveBeenCalled();
+		expect(customersStore.armExchangeCredit).not.toHaveBeenCalled();
+	});
+
+	it("a named customer's exchange adds no voucher", async () => {
+		const { customersStore } = await submitDoc(creditReturn("ACC-SINV-RET-8"), "exchange");
+		expect(customersStore.addCreditVoucher).not.toHaveBeenCalled();
 		expect(customersStore.armExchangeCredit).toHaveBeenCalledWith("CUST-R");
 	});
 
