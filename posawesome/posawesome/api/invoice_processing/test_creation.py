@@ -216,6 +216,12 @@ def _install_dependency_stubs():
     sale_controls_module.validate_invoice_item_sale_controls = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.item_sale_controls"] = sale_controls_module
 
+    # The POS Sales Person rules have their own tests (test_sales_credit).
+    sales_credit_module = types.ModuleType("posawesome.posawesome.api.sales_credit")
+    sales_credit_module.check_pos_sales_team = lambda *_args, **_kwargs: None
+    sales_credit_module.apply_pos_sales_team = lambda *_args, **_kwargs: None
+    sys.modules["posawesome.posawesome.api.sales_credit"] = sales_credit_module
+
     discount_reasons_module = types.ModuleType("posawesome.posawesome.api.discount_reasons")
     discount_reasons_module.sanitize_discount_reason_payload = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.discount_reasons"] = discount_reasons_module

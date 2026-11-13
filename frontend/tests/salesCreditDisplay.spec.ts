@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
-import { ref } from "vue";
+import { h, ref } from "vue";
 
 vi.mock("../src/offline/index", () => ({
 	getSalesPersonsStorage: vi.fn(() => []),
@@ -13,6 +13,7 @@ vi.mock("../src/offline/index", () => ({
 }));
 
 import SalesByCashierDetail from "../src/posapp/components/pos/reports/SalesByCashierDetail.vue";
+import PaymentSelectionFields from "../src/posapp/components/pos/payments/PaymentSelectionFields.vue";
 import { useInvoiceDetails } from "../src/posapp/composables/pos/invoice/useInvoiceDetails";
 
 const translate = (text: string, args?: any[]) =>
@@ -104,4 +105,35 @@ describe("POS Sales Person dropdown", () => {
 		details.get_sales_person_names();
 		expect(details.sales_persons.value.map((row: any) => row.value)).toEqual(["Omar"]);
 	});
+});
+
+describe("POS Sales Person on a return", () => {
+	const stubs = {
+		VRow: { render(this: any) { return h("div", this.$slots.default?.()); } },
+		VCol: { render(this: any) { return h("div", this.$slots.default?.()); } },
+		VSelect: {
+			props: ["disabled"],
+			render(this: any) { return h("select", { "data-testid": "sp-select", disabled: this.disabled }); },
+		},
+	};
+	const mountFields = (props: Record<string, any>) =>
+		mount(PaymentSelectionFields, {
+			props: { salesPersons: [{ title: "Omar", value: "Omar" }], salesPerson: "", showPrintFormat: false, ...props },
+			global: { components: stubs, provide: { frappe: { _: (t: string) => t }, __: (t: string) => t } },
+		});
+
+	it("is locked with a note when the return follows the original sale", () => {
+		const wrapper = mountFields({ followsOriginal: true });
+		expect(wrapper.get('[data-testid="sp-select"]').attributes("disabled")).toBeDefined();
+		expect(wrapper.get('[data-testid="sales-person-follows-original"]').text()).toBe(
+			"A return keeps the original sale's Sales Person.",
+		);
+	});
+
+	it("is a normal choice on a sale", () => {
+		const wrapper = mountFields({});
+		expect(wrapper.get('[data-testid="sp-select"]').attributes("disabled")).toBeUndefined();
+		expect(wrapper.find('[data-testid="sales-person-follows-original"]').exists()).toBe(false);
+	});
+
 });

@@ -30,7 +30,7 @@ from posawesome.posawesome.api.invoice_processing.stock import (
     _collect_stock_errors,
 )
 from posawesome.posawesome.api.discount_reasons import sanitize_discount_reason_payload
-from posawesome.posawesome.api.sales_credit import check_pos_sales_team
+from posawesome.posawesome.api.sales_credit import apply_pos_sales_team, check_pos_sales_team
 from posawesome.posawesome.api.tax_contracts import apply_pos_tax_inclusion_contract
 from posawesome.posawesome.api.payment_processing.utils import get_bank_cash_account as get_bank_account
 from posawesome.posawesome.api.utilities import ensure_child_doctype, set_batch_nos_for_bundels
@@ -2542,7 +2542,8 @@ def submit_invoice(invoice, data, submit_in_background=False):
 
     set_invoice_client_request_id(invoice_doc, client_request_id)
     _set_authoritative_cashier(invoice_doc, authoritative_cashier)
-    check_pos_sales_team(invoice_doc, profile_doc)
+    # Chosen Sales Person checked; else the cashier's own; returns take the original's.
+    apply_pos_sales_team(invoice_doc, profile_doc)
 
     # Re-checked here, not only in update_invoice(): an existing draft is
     # updated from the payload below without going through it, and the

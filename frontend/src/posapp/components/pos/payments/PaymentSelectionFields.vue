@@ -20,9 +20,16 @@
 					class="sleek-field pos-themed-input"
 					:no-data-text="$__('Sales Person not found')"
 					hide-details
-					:disabled="readonly"
+					:disabled="readonly || followsOriginal"
 					@update:model-value="$emit('update:sales-person', $event)"
 				></v-select>
+				<p
+					v-if="followsOriginal"
+					class="mt-1 mb-0 text-caption text-medium-emphasis"
+					data-testid="sales-person-follows-original"
+				>
+					{{ $__("A return keeps the original sale's Sales Person.") }}
+				</p>
 			</v-col>
 		</v-row>
 		<!-- Print Format Selection -->
@@ -59,6 +66,11 @@ defineProps({
 		default: "",
 	},
 	readonly: {
+		type: Boolean,
+		default: false,
+	},
+	// A return against a sale: the server gives it the original's Sales Team.
+	followsOriginal: {
 		type: Boolean,
 		default: false,
 	},
