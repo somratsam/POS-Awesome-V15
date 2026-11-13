@@ -9506,3 +9506,156 @@ after section 96's deploy).
 Rollback: `git checkout 798693f3`, `bench build --app posawesome`,
 clear-cache, restart. Sales Team rows written by the fill stay (they are
 ordinary rows; the old code keeps them).
+
+## 98. Bearer voucher for returns of Anonymous sales (2026-11-14, `36d8ac03` on `develop-swan`, `3bc57258` on `stable`)
+
+**Request.** Returns of anonymous (generic-customer) sales went through Return
+Without Invoice, which checks nothing against the sale: wrong price, wrong
+quantity, the same item twice or an item never bought were all possible
+(the 1-month Swan Galleria expo had 31 returns, all without an invoice).
+Decisions: return against the original sale and give the credit as a bearer
+voucher (our credit note voucher), only for returns linked to a sale to a
+generic customer; spending by that voucher only; a lost one can't be
+replaced, not even by a supervisor; Return Without Invoice stays and must
+not give a voucher (credit must go to a real customer); Exchange uses the
+voucher just printed; the till locks the customer with a note; walk-in
+button renamed "Anonymous customer". Named-customer flows unchanged.
+Spending a bearer voucher on a named customer's sale: later, before the
+next expo. Combined exchange receipt: later, separately.
+
+**Found first.**
+- ERPNext requires a linked return's customer to be the original's
+  (`validate_return_against`, "Party Mismatch") and checks items, quantity
+  left and price only for linked returns (`validate_returned_items`). So
+  the credit stays on Anonymous; store credit is the return invoice's own
+  negative outstanding (`payments.get_available_credit`), which is what the
+  voucher, expiry and exchange read.
+- Our credit note voucher already identifies one return (HMAC check
+  characters), supports part use and a balance voucher. Gift cards (0 used,
+  off in both stores, issued from cash by a supervisor) and a one-receipt
+  mixed invoice (no ERPNext return checks, VAT netted without a credit
+  note, Z Report and Sales Person wrong) were compared and rejected.
+- Receipts already carry the invoice barcode (section on scan-to-return);
+  production's "Swan Sales Invoice" has it.
+- Return Without Invoice to Anonymous was never refused at the return:
+  staging ACC-SINV-2026-00292 (-139.300, 5 Nov) left credit on Anonymous
+  that just couldn't be spent. Production: no such rows (checked by user).
+- The customer box's read-only listener (`set_customer_readonly`) is
+  commented out in Customer.vue; nothing locked the customer on a return.
+
+**Built.**
+- `credit_voucher.py`: `is_bearer_credit_note` (submitted return, linked,
+  generic customer; also a Jinja method), `bearer_voucher_for` (the voucher
+  of a no-refund linked return to a generic customer), `lookup_credit_voucher`
+  accepts bearer vouchers (`bearer: 1`), refuses a supervisor's approval by
+  return number for them (`lost_bearer_voucher_message`) and refuses other
+  shared-customer credit; `authorize_customer_credit` for a generic customer
+  -> `_authorize_bearer_credit`: every row must be a bearer credit note with
+  its own verified code; same-shift, supervisor and advances refused.
+- `invoice_processing/creation.py`: `_guard_generic_customer_stored_credit`
+  now allows a linked return to a generic customer only as full voucher or
+  full refund, and refuses a return without an invoice to a generic customer
+  that leaves credit (enforced on every final submit path incl. background
+  and offline sync). `submit_invoice` returns `posa_bearer_voucher` for the
+  return it has just submitted (not on replay or queued-payload paths).
+- `customers.get_customer_info` returns `posa_is_generic_customer`.
+- Voucher print (`templates/print/credit_note_voucher.html`): for a bearer
+  voucher, "This voucher works like cash: whoever presents it can use it. A
+  lost voucher can't be replaced." (+ Arabic) instead of the supervisor line.
+- Till: `customersStore` keeps shared customers and bearer vouchers
+  (`dropBearerVouchers` on cancel, park, a new return, and "Use Customer
+  Balance" off); Customer.vue locks the box with "This sale was to {0} —
+  the credit is given as a voucher." on a linked return to a shared customer
+  and "Paid with a voucher from a sale to {0} — the customer stays {0}." on
+  a voucher sale; Returns and Invoice Management load such returns instead
+  of refusing; Exchange adds the voucher just issued; Payments applies only
+  scanned bearer vouchers for a shared customer. Button "Walk-in / No
+  Loyalty" -> "Anonymous customer". 9 Arabic rows (ar.csv: `عميل مجهول`).
+- `test_creation.py` stubs `credit_voucher` (its fake frappe can't load it).
+
+**Verified on staging** (headless Chromium, throwaway cashier + supervisor,
+Test Pos): Anonymous sale 00368 -> receipt scan on Returns -> locked customer
+with note, change refused -> return 00369 -> voucher C26-00369-BB9R prints
+"works like cash" -> Exchange sale 00370 used it automatically ("voucher"
+in Credit Authorized By), 54.600 left, balance voucher prints; 3 returns
+00372/73/74: Anonymous alone gives nothing (same shift too), one voucher
+gives only its own 86.100; same voucher again "already been used"; supervisor
++ return number refused; voucher of a sale/return dated the day before
+(created on the server) used today; bearer voucher on a named sale ->
+"Switch customer?" -> Anonymous, locked; Return Without Invoice to Anonymous
+refused; old 00292 voucher refused; named "test disc" return/exchange
+unchanged (same-shift), named voucher and supervisor approval unchanged;
+offline Anonymous sale synced. Z/X figures for those invoices matched by
+hand (credit issued 502.950, redeemed 417.900); return GL reverses VAT
+against the linked original; credit follows the original seller; loyalty
+unchanged for the named customer.
+
+**Regression check.** Frontend 289/289 files, 1832/1832 (mutations: credit
+without voucher, exchange without voucher, no lock -- each caught). Backend
+in isolation: `test_credit_voucher` 63, `test_return_generic_customer_credit_guard`
+9 (mutations: spend without voucher, supervisor replaces lost bearer voucher,
+unlinked credit allowed, part refund allowed -- each caught), `test_sales_credit`
+51, `test_sales_by_cashier` 24, `test_staff_sales_performance` 16,
+`test_customer` 12, `test_customers` 4, `test_payments` 12, `test_stored_value`
+2, `test_customer_credit_invoice_fields` 2, `test_offline_sync_invoices` 4,
+`test_invoice_reporting_fields` 35, `test_print_barcode` 4, `test_api_imports`
+4, `test_pos_access` 12, `test_submitted_invoice_edit_customer` 9,
+`invoice_processing.test_payment` 4 and `.test_utils` 12, closing
+`test_same_shift_exchange` 5, `test_sales_breakdown` 6, `test_z_report` 3,
+`test_z_report_layout` 6, `test_overview_loyalty` 4, `test_z_report_vat` 8;
+`test_creation` the same 8 errors as before; `test_credit_exchange` and
+`test_submitted_invoice_edits_credit_badge` can't start on staging (duplicate
+"Standard Buying" price list in ERPNext test records), same with the change
+stashed. `bench build` exit 0. No migrate. System Settings restored 3/3,
+Asia/Muscat.
+
+**Notes.** "Exchanges Today" counts a voucher sale as an exchange whenever
+that customer had any return in the shift (existing per-customer rule), so
+an Anonymous sale paid with an older voucher can be listed there; totals
+are right. The supervisor line in Credit Authorized By names the signed-in
+user (existing). Spending on a named customer's sale is possible without
+core edits: ERPNext checks each Journal Entry row's party against its own
+referenced invoice, so one entry can debit Anonymous (the return) and credit
+the named customer (the sale).
+
+**Production deploy, part A: `aea4114c` -> `674d936a`** (sections 95-97) --
+section 96's steps 1-10 and section 97's steps 3 and 6-9, but move only to
+674d936a instead of the tip of stable:
+```
+cd ~/frappe-bench/apps/posawesome
+git rev-parse --short HEAD          # aea4114c
+git fetch upstream
+git merge --ff-only 674d936a
+git rev-parse --short HEAD          # 674d936a
+```
+(`git pull` would also bring 3bc57258.) After linking Sales Persons:
+`posa-fill-sales-person` dry run and real run, then `posa-refresh-sales-credit`
+dry run and real run (section 97 step 10).
+
+**Production deploy, part B: `674d936a` -> `3bc57258`** (this section, 1-2
+days later; site `site1.local`):
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `674d936a`.
+2. `bench --site site1.local backup`
+3. Checks: the receipt format includes the voucher template, and nothing
+   else already uses the new Jinja name -- 1 and nothing:
+   `bench --site site1.local mariadb -e "SELECT html LIKE '%credit_note_voucher.html%' FROM \`tabPrint Format\` WHERE name='Swan Sales Invoice';"`
+   `grep -rn "is_bearer_credit_note" ~/frappe-bench/apps/*/*/hooks.py`
+4. `git fetch upstream && git merge --ff-only 3bc57258` -> `git rev-parse --short HEAD` = `3bc57258`.
+5. No migrate (no doctype, field, fixture or print format record changed).
+6. `cd ~/frappe-bench && bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`
+   (the new Jinja method needs the restart).
+8. `echo 'print("posawesome.posawesome.api.credit_voucher.is_bearer_credit_note" in frappe.get_hooks("jinja")["methods"]); from posawesome.posawesome.api.credit_voucher import bearer_voucher_for; print("ok")' | bench --site site1.local console`
+   -> `True` and `ok`.
+9. Checks at one store: the button under the customer box reads
+   "Anonymous customer". Anonymous sale -> Sales Return -> scan the receipt
+   -> customer locked with the note -> Exchange: the voucher prints ("works
+   like cash") and the new sale uses it; or Credit Note Issue, then on a new
+   sale "Use Customer Balance" with Anonymous alone gives nothing and
+   scanning the voucher gives its amount. Return Without Invoice with
+   Anonymous is refused. A named customer's return and exchange work as
+   before.
+Rollback: `git checkout 674d936a`, `bench build --app posawesome`,
+clear-cache, restart. Bearer credit issued meanwhile stays on Anonymous;
+the old code can't spend it (generic-customer credit refused) until this
+change is back.
