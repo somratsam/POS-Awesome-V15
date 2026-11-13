@@ -18,13 +18,13 @@ describe("pos_profile prop actually reaches Customer.vue (regression: it previou
 	});
 });
 
-describe("Walk-in / No Loyalty button", () => {
+describe("Anonymous customer (walk-in) button", () => {
 	it("is gated on the POS Profile's posa_walkin_customer field, not shown unconditionally", () => {
 		expect(customerSource).toContain('v-if="pos_profile?.posa_walkin_customer"');
 	});
 
 	it("carries the exact agreed label", () => {
-		expect(customerSource).toContain('{{ __("Walk-in / No Loyalty") }}');
+		expect(customerSource).toContain('{{ __("Anonymous customer") }}');
 	});
 
 	it("is visually muted (text variant, small size), not equal weight to the search field", () => {
@@ -32,8 +32,10 @@ describe("Walk-in / No Loyalty button", () => {
 		expect(customerSource).toMatch(/<v-btn[^>]*class="walkin-customer-btn"[^>]*size="small"/s);
 	});
 
-	it("respects the same readonly/search-lock disabled state as the rest of the field", () => {
-		expect(customerSource).toContain(':disabled="effectiveReadonly || isCustomerSearchLocked"');
+	it("respects the same readonly/search-lock/shared-customer-lock disabled state as the rest of the field", () => {
+		const lock = ':disabled="effectiveReadonly || isCustomerSearchLocked || Boolean(sharedCustomerLockNote)"';
+		// The search field and the button share it.
+		expect(customerSource.split(lock).length - 1).toBe(2);
 	});
 
 	it("selects the configured walk-in customer via the same setSelectedCustomer path as the rest of the component, not a separate mechanism", () => {
@@ -45,7 +47,7 @@ describe("Walk-in / No Loyalty button", () => {
 
 	it("does nothing when the POS Profile field is unset, instead of erroring or selecting a blank customer", () => {
 		expect(customerSource).toMatch(
-			/const select_walkin_customer = \(\) => \{\s*const walkinCustomer = props\.pos_profile\?\.posa_walkin_customer;\s*if \(!walkinCustomer\) \{\s*return;\s*\}/,
+			/const select_walkin_customer = \(\) => \{\s*if \(sharedCustomerLockNote\.value\) return;\s*const walkinCustomer = props\.pos_profile\?\.posa_walkin_customer;\s*if \(!walkinCustomer\) \{\s*return;\s*\}/,
 		);
 	});
 

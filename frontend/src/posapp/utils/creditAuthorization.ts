@@ -19,6 +19,8 @@ export interface CreditVoucher {
 	customer: string;
 	customer_name?: string;
 	amount: number;
+	/** 1 for a bearer voucher: a return of a sale to a shared customer (e.g. Anonymous). */
+	bearer?: number | boolean;
 }
 
 export interface CreditAuthorizationContext {

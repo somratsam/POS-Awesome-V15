@@ -180,6 +180,8 @@ export async function cancel_invoice(context: any) {
 
 	// Use the clear_invoice logic
 	clearInvoice(context);
+	// A cancelled sale drops its bearer voucher (customersStore).
+	context.customersStore?.dropBearerVouchers?.();
 
 	context.customer = context.pos_profile?.customer || "";
 	if (context.customersStore?.setSelectedCustomer) {
@@ -230,6 +232,8 @@ export async function save_and_clear_invoice(context: any) {
 			});
 		} else {
 			clearInvoice(context);
+			// A parked sale doesn't keep a bearer voucher (customersStore).
+			context.customersStore?.dropBearerVouchers?.();
 			if (context.eventBus) {
 				context.eventBus.emit("focus_item_search");
 			}

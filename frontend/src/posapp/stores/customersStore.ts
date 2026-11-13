@@ -277,6 +277,37 @@ export const useCustomersStore = defineStore("customers", () => {
 		creditVouchers.value = { ...creditVouchers.value, [voucher.credit_origin]: voucher };
 	}
 
+	// Bearer vouchers (bearer: 1) are from a return of a sale to a shared
+	// customer such as Anonymous: dropped when the sale is cancelled or
+	// parked, a return starts, or "Use Customer Balance" is switched off --
+	// the sale's customer is locked while one is on it.
+	function dropBearerVouchers() {
+		const kept = Object.entries(creditVouchers.value).filter(([, voucher]) => !voucher?.bearer);
+		if (kept.length !== Object.keys(creditVouchers.value).length) {
+			creditVouchers.value = Object.fromEntries(kept);
+		}
+	}
+
+	function hasBearerVoucherFor(customer: string | null | undefined) {
+		return (
+			Boolean(customer) &&
+			Object.values(creditVouchers.value).some((voucher) => voucher?.bearer && voucher?.customer === customer)
+		);
+	}
+
+	// Shared customer accounts (posa_is_generic_customer) the till has seen:
+	// from the selected customer's info, a returned sale or a bearer voucher.
+	const sharedCustomers = ref<Record<string, boolean>>({});
+
+	function markSharedCustomer(name: string | null | undefined, shared = true) {
+		if (!name || Boolean(sharedCustomers.value[name]) === Boolean(shared)) return;
+		sharedCustomers.value = { ...sharedCustomers.value, [name]: Boolean(shared) };
+	}
+
+	function isSharedCustomer(name: string | null | undefined) {
+		return Boolean(name) && Boolean(sharedCustomers.value[name as string]);
+	}
+
 	function keepCreditVouchersFor(customer: string | null) {
 		const kept = Object.entries(creditVouchers.value).filter(
 			([, voucher]) => Boolean(customer) && voucher?.customer === customer,
@@ -367,6 +398,8 @@ export const useCustomersStore = defineStore("customers", () => {
 			]);
 			customerInfoFetchedFor.value = customerName;
 			customerInfoFetchedAt.value = Date.now();
+			const shared = (customerInfo.value as Record<string, unknown>).posa_is_generic_customer;
+			if (shared !== undefined) markSharedCustomer(customerName, Boolean(Number(shared)));
 		}
 		if (
 			customerName &&
@@ -1158,6 +1191,11 @@ export const useCustomersStore = defineStore("customers", () => {
 		creditVouchers,
 		addCreditVoucher,
 		keepCreditVouchersFor,
+		dropBearerVouchers,
+		hasBearerVoucherFor,
+		sharedCustomers,
+		markSharedCustomer,
+		isSharedCustomer,
 		setCustomerInfo,
 		isCustomerInfoFresh,
 		searchCustomers,

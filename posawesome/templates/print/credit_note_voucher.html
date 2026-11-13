@@ -162,6 +162,11 @@
 <div class="stamp"><span>Stamp and signature</span><span>الختم والتوقيع</span></div>
 <div class="stamp-line"></div>
 
+{% if is_bearer_credit_note(doc) %}
+<div class="note">This voucher works like cash: whoever presents it can use it.<br>A lost voucher can't be replaced.</div>
+<div class="note-ar">تعمل هذه القسيمة مثل النقد: يمكن لمن يقدمها استخدامها.<br>لا يمكن استبدال القسيمة المفقودة.</div>
+{% else %}
 <div class="note">Keep this voucher. Present it to use your credit.<br>A lost voucher can only be replaced by a supervisor.</div>
 <div class="note-ar">يرجى الاحتفاظ بهذه القسيمة وتقديمها عند الاستخدام.<br>لا يمكن استبدال القسيمة المفقودة إلا بموافقة المشرف.</div>
+{% endif %}
 <div class="rcpt-feed"><br><br><br></div>

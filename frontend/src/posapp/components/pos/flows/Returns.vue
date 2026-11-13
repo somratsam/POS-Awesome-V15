@@ -330,6 +330,7 @@ import format, { formatUtils } from "../../../format";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
 import { useUIStore } from "../../../stores/uiStore.js";
 import { useToastStore } from "../../../stores/toastStore";
+import { useCustomersStore } from "../../../stores/customersStore";
 import { computed } from "vue";
 import { useResponsive } from "../../../composables/core/useResponsive";
 import { useTheme } from "../../../composables/core/useTheme";
@@ -340,6 +341,7 @@ export default {
 		const invoiceStore = useInvoiceStore();
 		const uiStore = useUIStore();
 		const toastStore = useToastStore();
+		const customersStore = useCustomersStore();
 		const responsive = useResponsive();
 		const theme = useTheme();
 		const isCompactReturns = computed(() => responsive.windowWidth.value < 1100);
@@ -353,6 +355,7 @@ export default {
 			invoiceStore,
 			uiStore,
 			toastStore,
+			customersStore,
 			isCompactReturns,
 			returnsDialogWidth,
 			returnsDialogMaxWidth,
@@ -770,25 +773,13 @@ export default {
 					return;
 				}
 
-				// This original invoice was billed to a shared/anonymous customer
-				// account -- store credit issued on a linked return would pool onto
-				// it, redeemable by any future customer selected as the same
-				// generic account, not just whoever actually returns this item.
-				// return_against locks the return's customer to match this one
-				// exactly (ERPNext's own core return validation), so there is no
-				// way to swap in the real customer while keeping the link -- stop
-				// here rather than let staff fill out the whole return first. The
-				// server enforces the authoritative version of this at submission
-				// (see _guard_generic_customer_stored_credit).
+				// A sale to a shared customer (e.g. Anonymous): the return keeps
+				// that customer (ERPNext requires the original's customer) and its
+				// credit is a bearer voucher, usable only with that voucher -- see
+				// _guard_generic_customer_stored_credit. The customer box is locked.
+				this.customersStore.dropBearerVouchers();
 				if (return_doc.posa_customer_is_generic) {
-					this.toastStore.show({
-						title: __(
-							'"{0}" is a shared/anonymous customer account -- store credit can\'t be issued to it. Use "Return without Invoice" instead and select or create the real customer.',
-							[return_doc.customer_name || return_doc.customer],
-						),
-						color: "error",
-					});
-					return;
+					this.customersStore.markSharedCustomer(return_doc.customer);
 				}
 
 				const invoice_doc = {};

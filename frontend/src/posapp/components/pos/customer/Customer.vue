@@ -19,7 +19,7 @@
 				:no-data-text="customerNoDataText"
 				hide-details
 				:customFilter="() => true"
-				:disabled="effectiveReadonly || isCustomerSearchLocked"
+				:disabled="effectiveReadonly || isCustomerSearchLocked || Boolean(sharedCustomerLockNote)"
 				:menu-props="{ closeOnContentClick: false }"
 				@update:menu="onCustomerMenuToggle"
 				@update:modelValue="onCustomerChange"
@@ -68,7 +68,7 @@
 
 				<!-- Add icon (right) -->
 				<template #append-inner>
-					<v-tooltip :text="__('Add new customer')" content-class="posa-theme-tooltip">
+					<v-tooltip v-if="!sharedCustomerLockNote" :text="__('Add new customer')" content-class="posa-theme-tooltip">
 						<template #activator="{ props }">
 							<v-icon
 								v-bind="props"
@@ -128,11 +128,18 @@
 				class="walkin-customer-btn"
 				variant="text"
 				size="small"
-				:disabled="effectiveReadonly || isCustomerSearchLocked"
+				:disabled="effectiveReadonly || isCustomerSearchLocked || Boolean(sharedCustomerLockNote)"
 				@click="select_walkin_customer"
 			>
-				{{ __("Walk-in / No Loyalty") }}
+				{{ __("Anonymous customer") }}
 			</v-btn>
+			<p
+				v-if="sharedCustomerLockNote"
+				class="shared-customer-lock-note"
+				data-testid="shared-customer-lock-note"
+			>
+				{{ sharedCustomerLockNote }}
+			</p>
 		</div>
 		<!-- Update customer modal -->
 		<div class="mt-4">
@@ -239,6 +246,13 @@
 /* Deliberately muted/secondary -- this is a distinct, considered action
    (staff asked about loyalty, customer declined), not a fast default, so
    it must never carry the same visual weight as the search field above it. */
+.shared-customer-lock-note {
+	margin: 4px 2px 0;
+	font-size: 0.8rem;
+	line-height: 1.3;
+	color: rgb(var(--v-theme-warning, 230, 126, 34));
+}
+
 .walkin-customer-btn {
 	align-self: flex-start;
 	margin-top: 4px;
@@ -280,6 +294,7 @@ import { customerMatchesSearchTerm } from "../../../stores/customers/customerSea
 import { useOnlineStatus } from "../../../composables/core/useOnlineStatus";
 import { useToastStore } from "../../../stores/toastStore.js";
 import { useUIStore } from "../../../stores/uiStore.js";
+import { useInvoiceStore } from "../../../stores/invoiceStore.js";
 import { ensureCustomersReady } from "../../../modules/customers/customerLoadingCoordinator";
 
 export default {
@@ -295,6 +310,7 @@ export default {
 		const customersStore = useCustomersStore();
 		const toastStore = useToastStore();
 		const uiStore = useUIStore();
+		const invoiceStore = useInvoiceStore();
 		const {
 			customers,
 			filteredCustomers,
@@ -320,6 +336,21 @@ export default {
 		const { isOnline: networkOnline } = useOnlineStatus();
 
 		const effectiveReadonly = computed(() => readonlyState.value && networkOnline.value);
+		// A return of a sale to a shared customer (e.g. Anonymous) keeps that
+		// customer: its credit is a bearer voucher. So does a sale paid with
+		// such a voucher (its credit can only go to a sale to that customer).
+		const sharedCustomerLockNote = computed(() => {
+			const doc = invoiceStore.invoiceDoc || {};
+			const customer = doc.customer || selectedCustomer.value;
+			if (!customer || !customersStore.isSharedCustomer(customer)) return "";
+			if (doc.is_return && doc.return_against) {
+				return __("This sale was to {0} — the credit is given as a voucher.", [customer]);
+			}
+			if (!doc.is_return && customersStore.hasBearerVoucherFor(customer)) {
+				return __("Paid with a voucher from a sale to {0} — the customer stays {0}.", [customer]);
+			}
+			return "";
+		});
 		const showCustomerLoadProgress = computed(
 			() => loadingCustomers.value || isCustomerBackgroundLoading.value,
 		);
@@ -485,6 +516,10 @@ export default {
 		};
 
 		const onCustomerChange = (val) => {
+			if (sharedCustomerLockNote.value) {
+				internalCustomer.value = selectedCustomer.value;
+				return;
+			}
 			if (val && val === selectedCustomer.value) {
 				internalCustomer.value = selectedCustomer.value;
 				toastStore.show({
@@ -571,6 +606,7 @@ export default {
 		};
 
 		const select_walkin_customer = () => {
+			if (sharedCustomerLockNote.value) return;
 			const walkinCustomer = props.pos_profile?.posa_walkin_customer;
 			if (!walkinCustomer) {
 				return;
@@ -676,6 +712,7 @@ export default {
 			customerNoDataText,
 			internalCustomer,
 			effectiveReadonly,
+			sharedCustomerLockNote,
 			onCustomerMenuToggle,
 			onCustomerChange,
 			onCustomerSearch,

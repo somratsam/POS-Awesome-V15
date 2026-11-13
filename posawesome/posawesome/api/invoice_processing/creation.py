@@ -1927,39 +1927,28 @@ def _guard_return_cash_refund(invoice_doc, pos_profile_doc=None, enforce_credit_
 
 
 def _guard_generic_customer_stored_credit(invoice_doc, enforce_credit_only_policy=False):
-    """Block a credit-issuing return linked to a shared/anonymous customer.
+    """Store credit on a shared/anonymous customer (posa_is_generic_customer,
+    e.g. a walk-in "Anonymous" reused across unrelated sales) must belong to
+    one specific person -- the account itself is shared.
 
-    Customer records flagged posa_is_generic_customer (e.g. a walk-in
-    "Anonymous" customer reused across many unrelated sales) are shared
-    buckets, not individually tracked people. posa_is_generic_customer's
-    only existing effect elsewhere (customer.py's ensure_loyalty_portal_code)
-    is clearing loyalty_program/posa_loyalty_portal_code -- a cosmetic
-    loyalty-points gap. Store credit is real money: if a return against an
-    invoice originally billed to a generic customer is recorded as credit
-    (via posa_returns_credit_only, or the cashier just leaving every payment
-    at 0 / toggling "Store as Credit?"), that credit pools onto the shared
-    account and becomes redeemable by whichever unrelated person is next
-    selected as that same customer -- not the person who actually returned
-    the item.
+    - A return linked to its original sale (return_against: ERPNext then
+      requires the same customer and checks every item, quantity and price
+      against that sale) is a bearer voucher: its credit stays on the shared
+      account and can be spent only with that return's own voucher
+      (credit_voucher.is_bearer_credit_note / _authorize_bearer_credit). It
+      must refund all of its value or none: a part refund would leave credit
+      with no voucher printed for it.
+    - A return without an invoice to a shared customer can't leave credit at
+      all: nothing ties it to a sale, so the credit must go to a real customer.
 
-    Only checked when linked to an original invoice (return_against set).
-    ERPNext's own core return validation (validate_return_against in
-    erpnext/controllers/sales_and_purchase_return.py, run on every save of
-    a return via AccountsController.validate) requires the return's
-    customer to exactly match return_against's customer -- there is no way
-    to keep the link and swap in a different (real) customer instead, so
-    staff must use "Return without Invoice" (posa_allow_return_without_invoice),
-    which never sets return_against and so is unaffected by this check.
-
-    Same timing as _guard_return_cash_refund: only enforced when
-    enforce_credit_only_policy is True (genuine final submission), never
-    during update_invoice's draft-save/cart-building calls, where payment
-    amounts may still be in an intermediate, not-yet-decided state.
+    Fully refunded returns aren't affected. Same timing as
+    _guard_return_cash_refund: only on genuine final submission
+    (enforce_credit_only_policy), never during update_invoice's draft saves.
     """
     if not invoice_doc.get("is_return") or not enforce_credit_only_policy:
         return
 
-    if not invoice_doc.get("return_against") or not invoice_doc.get("customer"):
+    if not invoice_doc.get("customer"):
         return
 
     refund = abs(flt(invoice_doc.paid_amount))
@@ -1973,13 +1962,22 @@ def _guard_generic_customer_stored_credit(invoice_doc, enforce_credit_only_polic
     if not cint(frappe.db.get_value("Customer", invoice_doc.customer, "posa_is_generic_customer")):
         return
 
+    if invoice_doc.get("return_against"):
+        if refund <= tolerance:
+            return  # bearer voucher for the whole value
+        frappe.throw(
+            _(
+                'This return of a sale to "{0}", a shared customer account, must be refunded '
+                "in full or not at all. With no refund, its whole value is given as a "
+                "voucher that works like cash."
+            ).format(invoice_doc.customer)
+        )
+
     frappe.throw(
         _(
-            'This return is linked to an original invoice recorded under "{0}", a '
-            "shared/anonymous customer account. Store credit can't be issued to it "
-            '-- it would be redeemable by any future customer selected as "{0}", '
-            'not just the person returning this item. Use "Return without Invoice" '
-            "instead and select or create the real customer."
+            "A return without an invoice can't leave store credit on \"{0}\", a shared "
+            "customer account: select or create the real customer. (A return of a sale to "
+            '"{0}" made from its receipt gives the credit as a voucher instead.)'
         ).format(invoice_doc.customer)
     )
 
@@ -2759,7 +2757,7 @@ def submit_invoice(invoice, data, submit_in_background=False):
             ledger_doc.name if ledger_doc else None,
         )
 
-    return {
+    response = {
         "name": invoice_doc.name,
         "status": invoice_doc.docstatus,
         "docstatus": invoice_doc.docstatus,
@@ -2769,6 +2767,15 @@ def submit_invoice(invoice, data, submit_in_background=False):
         "idempotent": bool(client_request_id),
         AUTHORITATIVE_CASHIER_FIELD: authoritative_cashier,
     }
+    # A return to a shared customer gives a bearer voucher (printed with it);
+    # the till uses it on the exchange's new sale. Only here, for the return
+    # this request has just validated and submitted (or queued).
+    from posawesome.posawesome.api.credit_voucher import bearer_voucher_for
+
+    bearer_voucher = bearer_voucher_for(invoice_doc)
+    if bearer_voucher:
+        response["posa_bearer_voucher"] = bearer_voucher
+    return response
 
 
 def submit_in_background_job(kwargs):
