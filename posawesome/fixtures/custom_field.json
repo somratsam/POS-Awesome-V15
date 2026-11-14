@@ -113,6 +113,17 @@
 		"name": "POS Profile-posa_brand_logo"
 	},
 	{
+		"description": "Invoice number series for this store, e.g. MCO-.YYYY.- (MCO-2026-00001). Returns and credit notes use the same prefix with -CN (MCO-CN-2026-00001). Add both to Sales Invoice in Document Naming Settings first. Leave blank to use ACC-SINV.",
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"fieldname": "posa_invoice_naming_series",
+		"fieldtype": "Select",
+		"insert_after": "posa_walkin_customer",
+		"label": "Invoice Naming Series",
+		"modified": "2026-11-14 00:00:00.000000",
+		"name": "POS Profile-posa_invoice_naming_series"
+	},
+	{
 		"allow_in_quick_entry": 0,
 		"allow_on_submit": 0,
 		"bold": 0,

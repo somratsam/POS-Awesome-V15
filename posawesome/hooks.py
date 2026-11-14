@@ -166,6 +166,8 @@ doc_events = {
         "on_trash": "posawesome.posawesome.api.item_processing.alternates.clear_alternate_item_caches",
     },
     "Sales Invoice": {
+        # Invoice number per store, from the POS Profile (invoice_naming.py).
+        "before_naming": "posawesome.posawesome.api.invoice_naming.set_invoice_naming_series",
         "validate": [
             "posawesome.posawesome.api.invoice.validate",
             "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
@@ -179,6 +181,9 @@ doc_events = {
     },
     "Sales Person": {
         "validate": "posawesome.posawesome.api.sales_credit.validate_sales_person",
+    },
+    "POS Profile": {
+        "validate": "posawesome.posawesome.api.invoice_naming.validate_pos_profile",
     },
     "POS Invoice": {
         "validate": [

@@ -6,10 +6,13 @@ voucher (posawesome/templates/print/credit_note_voucher.html, included by the
 store's receipt format for such a return).
 
 Voucher code = "C" + 2-digit year + invoice number + 4-character check:
-ACC-SINV-2026-00247 -> "C2600247K7Q4", printed "C26-00247-K7Q4". The check is
-an HMAC of the full invoice name with this site's encryption key, so it can't
-be worked out from the invoice number alone; it needs no field and is the
-same on every print and reprint.
+ACC-SINV-2026-00247 -> "C2600247K7Q4", printed "C26-00247-K7Q4". A credit
+note in a store's own series (invoice_naming.py) carries the store prefix
+too: MCO-CN-2026-00001 -> "C26MCO00001K7Q4", printed "C26-MCO-00001-K7Q4";
+credit notes in the default series keep the old form, so old vouchers keep
+their codes. The check is an HMAC of the full invoice name with this site's
+encryption key, so it can't be worked out from the invoice number alone; it
+needs no field and is the same on every print and reprint.
 
 Anyone who can print the return can still print its code (a reprint is
 allowed for any cashier), so every POS reprint of a voucher is recorded as a
@@ -40,6 +43,7 @@ logs it with balance_for.
 
 import hashlib
 import hmac
+import re
 
 import frappe
 from frappe import _
@@ -48,6 +52,9 @@ from frappe.utils import cint, cstr, escape_html, flt, formatdate
 CHECK_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # no 0/O, 1/I/L
 CHECK_LENGTH = 4
 VOUCHER_PREFIX = "C"
+# A store's credit note series is <PREFIX>-CN-.YYYY.- (invoice_naming.py).
+STORE_RETURN_SEGMENT = "CN"
+_STORE_BODY = re.compile(r"^([A-Z]*)(\d+)$")
 REPRINT_DOCTYPES = ("Sales Invoice", "POS Invoice")
 # Wrong voucher numbers allowed per user before lookups pause, so guessing
 # the 4-character check (31^4 = 923,521 values) is impractical.
@@ -62,14 +69,21 @@ def _secret():
 
 
 def _name_parts(name):
-    """(yy, number) from "ACC-SINV-2026-00247" -> ("26", "00247"): the first
-    4-digit group is the year, the next all-digit group the number. None
-    when the name has no such groups."""
+    """(yy, store, number): "ACC-SINV-2026-00247" -> ("26", "", "00247"),
+    "MCO-CN-2026-00001" -> ("26", "MCO", "00001"). The first 4-digit group
+    is the year, the next all-digit group the number; store is the letters
+    before "-CN" when the year follows "CN" (a store's credit note series),
+    else "". None when the name has no year and number groups."""
     groups = cstr(name).strip().split("-")
     for index, group in enumerate(groups[:-1]):
         nxt = groups[index + 1]
         if len(group) == 4 and group.isdigit() and nxt.isdigit():
-            return group[2:], nxt
+            store = ""
+            if index >= 2 and groups[index - 1].upper() == STORE_RETURN_SEGMENT:
+                store = "".join(groups[: index - 1]).upper()
+                if not store.isalpha():
+                    store = ""
+            return group[2:], store, nxt
     return None
 
 
@@ -84,16 +98,21 @@ def credit_voucher_code(name):
     parts = _name_parts(name)
     if not parts:
         return ""
-    yy, number = parts
-    return f"{VOUCHER_PREFIX}{yy}{number}{_check(name)}"
+    yy, store, number = parts
+    return f"{VOUCHER_PREFIX}{yy}{store}{number}{_check(name)}"
 
 
 def credit_voucher_label(code):
-    """Printed form, "C2600247K7Q4" -> "C26-00247-K7Q4". Jinja method."""
+    """Printed form, "C2600247K7Q4" -> "C26-00247-K7Q4",
+    "C26MCO00001K7Q4" -> "C26-MCO-00001-K7Q4". Jinja method."""
     code = cstr(code)
     if len(code) <= 3 + CHECK_LENGTH:
         return code
-    return f"{code[:3]}-{code[3:-CHECK_LENGTH]}-{code[-CHECK_LENGTH:]}"
+    body = code[3:-CHECK_LENGTH]
+    match = _STORE_BODY.match(body)
+    if match and match.group(1):
+        body = f"{match.group(1)}-{match.group(2)}"
+    return f"{code[:3]}-{body}-{code[-CHECK_LENGTH:]}"
 
 
 def normalize_voucher_code(text):
@@ -206,14 +225,18 @@ def record_credit_note_reprint(doctype=None, name=None, pos_profile=None, balanc
 
 
 def parse_voucher_code(text):
-    """(yy, number, code) from a typed or scanned voucher number, or None
-    when it isn't shaped like one."""
+    """(yy, store, number, code) from a typed or scanned voucher number --
+    store is "" on a voucher in the default series -- or None when it isn't
+    shaped like one."""
     code = normalize_voucher_code(text)
     body = code[len(VOUCHER_PREFIX) : -CHECK_LENGTH] if code.startswith(VOUCHER_PREFIX) else ""
     check = code[-CHECK_LENGTH:]
-    if len(body) < 3 or not body.isdigit() or any(ch not in CHECK_ALPHABET for ch in check):
+    if len(body) < 3 or not body[:2].isdigit() or any(ch not in CHECK_ALPHABET for ch in check):
         return None
-    return body[:2], body[2:], code
+    match = _STORE_BODY.match(body[2:])
+    if not match:
+        return None
+    return body[:2], match.group(1), match.group(2), code
 
 
 def find_voucher_invoice(text):
@@ -221,10 +244,13 @@ def find_voucher_invoice(text):
     parsed = parse_voucher_code(text)
     if not parsed:
         return None
-    yy, number, code = parsed
+    yy, store, number, code = parsed
+    # Narrowed by year and number (and "-CN-" for a store's voucher); the
+    # code, which includes the store prefix, picks the one return.
+    tail = f"%-{STORE_RETURN_SEGMENT}-20{yy}-{number}" if store else f"%-20{yy}-{number}"
     candidates = frappe.get_all(
         "Sales Invoice",
-        filters={"name": ["like", f"%-20{yy}-{number}"], "docstatus": 1, "is_return": 1},
+        filters={"name": ["like", tail], "docstatus": 1, "is_return": 1},
         pluck="name",
     )
     for name in candidates:
@@ -233,20 +259,24 @@ def find_voucher_invoice(text):
     return None
 
 
-def find_return_by_number(text):
+def find_return_by_number(text, pos_profile=None):
     """A submitted return named by its number as staff read it off a receipt
     or Invoice Management: the full name, or its number part ("2026-00257").
-    For a supervisor replacing a lost voucher."""
+    For a supervisor replacing a lost voucher. With pos_profile, only that
+    store's returns: the same number exists in every store's series."""
     text = cstr(text).strip().upper()
     if not text:
         return None
-    if frappe.db.exists("Sales Invoice", {"name": text, "docstatus": 1, "is_return": 1}):
+    base = {"docstatus": 1, "is_return": 1}
+    if pos_profile:
+        base["pos_profile"] = pos_profile
+    if frappe.db.exists("Sales Invoice", {**base, "name": text}):
         return text
     if not all(group.isdigit() for group in text.split("-")) or "-" not in text:
         return None
     matches = frappe.get_all(
         "Sales Invoice",
-        filters={"name": ["like", f"%-{text}"], "docstatus": 1, "is_return": 1},
+        filters={**base, "name": ["like", f"%-{text}"]},
         pluck="name",
         limit=2,
     )
@@ -346,7 +376,7 @@ def lookup_credit_voucher(code=None, pos_profile=None):
         # Lost voucher: a POS supervisor on the till may give the return's
         # number instead; spending it is recorded under their name at submit.
         approved_by = _credit_supervisor(profile.get("name"))
-        name = find_return_by_number(code) if approved_by else None
+        name = find_return_by_number(code, profile.get("name")) if approved_by else None
     if not name:
         _record_lookup_failure()
         frappe.throw(_("This is not a valid credit note voucher number. Check it and try again."))
