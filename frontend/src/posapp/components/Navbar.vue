@@ -89,7 +89,6 @@
 					@clear-cache="clearCache"
 					@show-about="showAboutDialog = true"
 					@toggle-theme="toggleTheme"
-					@go-desk="goDesk"
 					@logout="logOut"
 				/>
 			</template>
@@ -887,7 +886,7 @@ export default {
 		closeSettingsPanel() {
 			this.settingsPanelOpen = false;
 		},
-		// Back to Desk (Menu) and the title click. With items in the cart,
+		// Back to Desk (top bar arrow) and the title click. With items in the cart,
 		// ask first and save the sale as a draft (Invoice.vue's Save & Clear)
 		// before leaving; leave only once it is saved.
 		goDesk() {

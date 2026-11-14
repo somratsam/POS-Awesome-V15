@@ -311,7 +311,6 @@ import { useUpdateStore } from "../../stores/updateStore";
 import { useEmployeeStore } from "../../stores/employeeStore";
 import { storeToRefs } from "pinia";
 import QzTrayDialog from "./QzTrayDialog.vue";
-import { canUseDesk } from "../../utils/deskAccess";
 
 export default {
 	name: "NavbarMenu",
@@ -467,16 +466,6 @@ export default {
 							icon: "mdi-chart-bar",
 							tone: "secondary",
 							handler: "openSalesByCashierAction",
-						}
-					: null,
-				canUseDesk()
-					? {
-							id: "back-to-desk",
-							label: __("Back to Desk"),
-							subtitle: __("Leave the POS for the Desk home"),
-							icon: "mdi-exit-to-app",
-							tone: "secondary",
-							handler: "goDeskAction",
 						}
 					: null,
 			];
@@ -689,10 +678,6 @@ export default {
 				case "openSalesByCashierAction":
 					this.closeMenu();
 					this.$emit("open-sales-by-cashier");
-					break;
-				case "goDeskAction":
-					this.closeMenu();
-					this.$emit("go-desk");
 					break;
 				case "openLanguageDialog":
 					this.closeMenu();
@@ -920,7 +905,6 @@ export default {
 		"refresh-cache-usage",
 		"open-z-report-history",
 		"open-sales-by-cashier",
-		"go-desk",
 	],
 };
 </script>

@@ -13,6 +13,24 @@
 	>
 		<!-- Brand Section (left in LTR, right in RTL) -->
 		<div :class="['pos-navbar-brand-section', isRtl ? 'rtl-brand-section' : 'ltr-brand-section']">
+			<!-- Back to Desk: first in the bar, for users with Desk access.
+			     Navbar.goDesk asks and saves a draft when the cart has items. -->
+			<v-tooltip v-if="showBackToDesk" :text="__('Back to Desk')" location="bottom">
+				<template #activator="{ props: tooltipProps }">
+					<v-btn
+						v-bind="tooltipProps"
+						icon
+						variant="text"
+						:size="isMobile ? 'default' : 'large'"
+						class="pos-text-primary nav-icon back-to-desk-btn"
+						:aria-label="__('Back to Desk')"
+						data-test="navbar-back-to-desk"
+						@click="$emit('go-desk')"
+					>
+						<v-icon>{{ isRtl ? "mdi-arrow-right" : "mdi-arrow-left" }}</v-icon>
+					</v-btn>
+				</template>
+			</v-tooltip>
 			<v-app-bar-nav-icon
 				ref="navIcon"
 				@click="$emit('nav-click')"
@@ -235,6 +253,7 @@ import { useRtl } from "../../composables/core/useRtl";
 import { resolvePosBranding } from "../../config/branding";
 import { isCounterGridTemplate } from "../../utils/posUiTemplate";
 import { canShowSystemStatus } from "../../utils/systemStatusPermission";
+import { canUseDesk } from "../../utils/deskAccess";
 import posLogo from "../pos/pos.png";
 import NavbarInfoGadgets from "./NavbarInfoGadgets.vue";
 
@@ -315,6 +334,9 @@ export default {
 		},
 	},
 	computed: {
+		showBackToDesk() {
+			return canUseDesk();
+		},
 		branding() {
 			return resolvePosBranding(this.posProfile);
 		},
@@ -758,6 +780,11 @@ export default {
 .ltr-nav-icon {
 	order: 0;
 	/* Normal order for LTR */
+}
+
+/* Back to Desk: the outer corner of the bar (left in LTR, right in RTL). */
+.back-to-desk-btn {
+	order: -1;
 }
 
 /* Gadget Wrapper Styling for Consistency */
