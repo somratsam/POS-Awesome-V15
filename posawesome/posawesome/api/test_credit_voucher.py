@@ -572,7 +572,11 @@ class TestLookupCreditVoucher(unittest.TestCase):
             self._lookup(self.code, customer="Anonymous", generic=True, linked=False)
 
     def test_parse(self):
-        self.assertEqual(credit_voucher.parse_voucher_code("c26-00269-env2"), ("26", "00269", "C2600269ENV2"))
+        self.assertEqual(credit_voucher.parse_voucher_code("c26-00269-env2"), ("26", "", "00269", "C2600269ENV2"))
+        self.assertEqual(
+            credit_voucher.parse_voucher_code("c26-mco-00001-env2"), ("26", "MCO", "00001", "C26MCO00001ENV2")
+        )
+        self.assertIsNone(credit_voucher.parse_voucher_code("C26-M2O-00001-ENV2"))  # letters inside the number
         self.assertIsNone(credit_voucher.parse_voucher_code("C26-00269-EN01"))  # 0 and 1 are never in a check
         self.assertIsNone(credit_voucher.parse_voucher_code("X2600269ENV2"))
 

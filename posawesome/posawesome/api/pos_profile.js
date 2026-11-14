@@ -114,5 +114,24 @@ frappe.ui.form.on("POS Profile", {
 	},
 	refresh: function (frm) {
 		set_pos_profile_queries(frm);
+		load_invoice_series_choices(frm);
 	},
 });
+
+// Invoice Naming Series: the store series listed for Sales Invoice in
+// Document Naming Settings (each with its -CN credit note series), see
+// invoice_naming.py. Blank keeps ACC-SINV.
+function load_invoice_series_choices(frm) {
+	const field = frm.fields_dict["posa_invoice_naming_series"];
+	if (!field) return;
+	frappe.call({
+		method: "posawesome.posawesome.api.invoice_naming.get_store_series_choices",
+		callback: function (r) {
+			if (r.exc) return;
+			const current = frm.doc.posa_invoice_naming_series;
+			const choices = ["", ...(r.message || [])];
+			if (current && !choices.includes(current)) choices.push(current);
+			frm.set_df_property("posa_invoice_naming_series", "options", choices.join("\n"));
+		},
+	});
+}

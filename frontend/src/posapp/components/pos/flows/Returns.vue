@@ -570,7 +570,8 @@ export default {
 			this.searched_once = false;
 		},
 		// Enter in the Invoice ID box searches. A receipt barcode scan types
-		// the number part of the invoice name ("2026-00210" for
+		// the invoice name (a store series, "MCO-2026-00210") or, for the
+		// default series, its number part ("2026-00210" for
 		// ACC-SINV-2026-00210, see print_barcode.invoice_scan_code) plus
 		// Enter, so a single matching invoice is loaded straight away.
 		search_invoices_by_enter() {

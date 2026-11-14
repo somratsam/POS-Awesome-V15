@@ -1,5 +1,7 @@
-import frappe
+import re
 import time
+
+import frappe
 from collections import defaultdict
 from frappe import _
 from frappe.utils import (
@@ -26,6 +28,25 @@ def _apply_return_window_fields(invoice, enforce_return_validity, return_validit
     invoice["posa_return_expired_message"] = (
         return_window_expired_message(return_validity_days) if expired else None
     )
+
+
+_NUMBER_PART = re.compile(r"^\d{4}-\d+(?:-\d+)?$")
+
+
+def _default_series_scan_match(doctype, invoice_name, company):
+    """The default-series sale for a scanned number part ("2026-00210" ->
+    ACC-SINV-2026-00210), or None. Receipts in the default series encode only
+    the number part (print_barcode.invoice_scan_code), and once stores have
+    their own series (MCO-2026-00210, invoice_naming.py) the same number
+    exists in each of them; the scan must still open that one receipt."""
+    from posawesome.posawesome.api.invoice_naming import DEFAULT_SERIES
+
+    text = str(invoice_name or "").strip().upper()
+    if doctype != "Sales Invoice" or not _NUMBER_PART.match(text):
+        return None
+    name = f"{DEFAULT_SERIES.split('.')[0]}{text}"
+    filters = {"name": name, "company": company, "docstatus": 1, "is_return": 0}
+    return name if frappe.db.exists("Sales Invoice", filters) else None
 
 
 @frappe.whitelist()
@@ -89,7 +110,8 @@ def search_invoices_for_return(
 
     # Add invoice name filter if provided
     if invoice_name:
-        filters["name"] = ["like", f"%{invoice_name}%"]
+        legacy = _default_series_scan_match(doctype, invoice_name, company)
+        filters["name"] = ["=", legacy] if legacy else ["like", f"%{invoice_name}%"]
 
     # Add date range filters if provided
     if from_date:

@@ -7,11 +7,20 @@ PDF (wkhtmltopdf) and QZ Tray, with no JavaScript and no extra package.
 
     {{ code128_svg(invoice_scan_code(doc.name)) }}
 
-Only the number part of the name is encoded ("2026-00210" for
-ACC-SINV-2026-00210): 165 modules instead of 264, which an Epson TM-T88V
-(180 dpi, receipts scaled to 72 mm) still prints wide enough to scan. The
-Returns screen finds the invoice from it (name LIKE %value%).
+A store's own series (e.g. MCO-2026-00210, invoice_naming.py) is encoded
+whole: with a prefix of at most 4 characters it is 15 characters (16-17 for
+an amendment), and 16 characters (231 modules) still decoded at 171, 180 and
+203 dpi on the 64 mm barcode. The default series keeps the number part only
+("2026-00210" for ACC-SINV-2026-00210): 165 modules instead of 264, which an
+Epson TM-T88V (180 dpi, receipts scaled to 72 mm) did not print wide enough
+to scan. The Returns screen finds the invoice from it: the exact name, or
+for a number part the default-series sale with that number
+(invoice_processing/returns.py).
 """
+
+from posawesome.posawesome.api.invoice_naming import DEFAULT_SERIES
+
+DEFAULT_PREFIX = DEFAULT_SERIES.split(".")[0]  # "ACC-SINV-"
 
 # Bar/space widths (in modules) for Code 128 values 0-106; 106 is STOP.
 _PATTERNS = (
@@ -36,14 +45,17 @@ _QUIET_MODULES = 10
 
 
 def invoice_scan_code(name):
-    """Invoice name from its first all-digit group on ("ACC-SINV-2026-00210"
-    -> "2026-00210", amended "...-00210-1" -> "2026-00210-1"); the whole
-    name when no group is numeric."""
-    groups = str(name or "").split("-")
+    """For the default series, the name from its first all-digit group on
+    ("ACC-SINV-2026-00210" -> "2026-00210", amended "...-00210-1" ->
+    "2026-00210-1"); any other name whole ("MCO-2026-00210")."""
+    text = str(name or "")
+    if not text.upper().startswith(DEFAULT_PREFIX):
+        return text
+    groups = text.split("-")
     for index, group in enumerate(groups):
         if group.isdigit():
             return "-".join(groups[index:])
-    return str(name or "")
+    return text
 
 
 def code128_values(value):
