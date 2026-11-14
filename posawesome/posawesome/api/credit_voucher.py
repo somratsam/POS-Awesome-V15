@@ -146,6 +146,65 @@ def credit_voucher_valid_until(doc):
     return get_customer_credit_expiry(doc.get("posting_date"))
 
 
+def exchange_credit_sources(sale):
+    """What paid for a sale with store credit, for the receipt (Jinja method).
+
+    Reads the credit redemption Journal Entries that moved credit from a
+    credit note to this sale -- the same link credit_voucher_balance_use
+    reads -- so the receipt names the exact returns, never "any return of
+    this customer in the shift" (which, for a shared customer such as
+    Anonymous, matched other people's returns).
+
+    Returns {"returns": [credit note docs made in the sale's own shift, i.e.
+    an exchange], "used": credit taken from those returns, "returned": their
+    full value, "other_credit": the rest of posa_redeemed_customer_credit
+    (older vouchers, or credit whose entries aren't posted yet)}."""
+    result = frappe._dict(returns=[], used=0.0, returned=0.0, other_credit=0.0)
+    if not sale or int(sale.get("is_return") or 0) or not sale.get("name"):
+        return result
+    redeemed = flt(sale.get("posa_redeemed_customer_credit"))
+    if redeemed <= 0:
+        return result
+
+    rows = frappe.db.sql(
+        """
+        select debit_row.reference_name as credit_note,
+            sum(debit_row.debit_in_account_currency) as used
+        from `tabJournal Entry Account` debit_row
+        inner join `tabJournal Entry` je on je.name = debit_row.parent
+        where je.docstatus = 1
+            and debit_row.reference_type = 'Sales Invoice'
+            and debit_row.reference_name != %(sale)s
+            and debit_row.debit_in_account_currency > 0
+            and exists (
+                select 1 from `tabJournal Entry Account` credit_row
+                where credit_row.parent = debit_row.parent
+                    and credit_row.reference_type = 'Sales Invoice'
+                    and credit_row.reference_name = %(sale)s
+                    and credit_row.credit_in_account_currency > 0
+            )
+        group by debit_row.reference_name
+        order by debit_row.reference_name
+        """,
+        {"sale": cstr(sale.get("name"))},
+        as_dict=True,
+    )
+    shift = sale.get("posa_pos_opening_shift")
+    for row in rows:
+        credit_note = frappe.get_doc("Sales Invoice", row.credit_note)
+        if (
+            shift
+            and int(credit_note.is_return or 0)
+            and credit_note.docstatus == 1
+            and credit_note.get("posa_pos_opening_shift") == shift
+        ):
+            result.returns.append(credit_note)
+            result.used += flt(row.used)
+            result.returned += abs(flt(credit_note.grand_total))
+    result.other_credit = max(redeemed - result.used, 0.0)
+    return result
+
+
 def credit_voucher_balance_use(credit_note, sale):
     """Store credit of credit_note spent on sale (0 when none): the credit
     redemption Journal Entries that move credit from the credit note to that

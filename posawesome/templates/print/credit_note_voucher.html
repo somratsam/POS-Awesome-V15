@@ -9,6 +9,11 @@
     Kept in the app (git), not in a Print Format record, so migrate never
     replaces it. Code and checks: posawesome/posawesome/api/credit_voucher.py.
 
+    Header: the store, then the company's legal name and its VAT number
+    (Company Tax ID) and "Tax Credit Note"; rows Return No., Original
+    invoice (number and date) and Voucher code; a VAT line from the return's
+    tax rows. Text sits 2.5 mm in from both edges inside the 76 mm page.
+
     States: valid (barcode + code), DUPLICATE on a reprint (print_settings
     is_reprint, sent by the POS reprint routes), USED once the credit has been
     spent (outstanding back to 0), EXPIRED after the last valid day. Used and
@@ -33,27 +38,33 @@
     about 6 mm per item line (long names take two). Till printing ignores it. -#}
 {%- set _ns = namespace(lines=0) -%}
 {%- for _it in returned_items -%}{%- set _ns.lines = _ns.lines + 1 + (1 if (_it.item_name or "")|length > 22 else 0) -%}{%- endfor -%}
-{%- set _pdf_h = (300 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0) + (24 if is_balance else 0))|round(0)|int -%}
+{%- set _pdf_h = (362 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0) + (24 if is_balance else 0))|round(0)|int -%}
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body, .print-format { width: 76mm; font-family: 'Arial', sans-serif; font-size: 14px; color: #000; background: #fff; line-height: 1.5; }
-  .divider { border-top: 1px dashed #000; margin: 12px 0; }
-  .address { font-size: 13px; text-align: center; line-height: 1.8; }
-  .title { font-size: 22px; font-weight: bold; text-align: center; margin: 4px 0 0 0; }
-  .title-ar { font-size: 19px; font-weight: bold; text-align: center; direction: rtl; margin-bottom: 4px; }
+  body, .print-format { width: 76mm; padding-left: 2.5mm; padding-right: 2.5mm; font-family: 'Arial', sans-serif; font-size: 13px; color: #000; background: #fff; line-height: 1.45; }
+  .divider { border-top: 1px dashed #000; margin: 9px 0; }
+  .address { font-size: 12px; text-align: center; line-height: 1.6; }
+  .title { font-size: 20px; font-weight: bold; text-align: center; margin: 4px 0 0 0; }
+  .title-ar { font-size: 17px; font-weight: bold; text-align: center; direction: rtl; margin-bottom: 4px; }
   .banner { font-size: 16px; font-weight: bold; text-align: center; margin: 6px 0; letter-spacing: 2px; }
   .banner-box { border: 2px solid #000; padding: 4px; margin: 8px 0; }
-  .meta { width: 100%; border-collapse: collapse; font-size: 14px; margin: 4px 0; }
+  .meta { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0; }
   .meta td { padding: 2px 0; vertical-align: top; }
   .meta td.l { white-space: nowrap; padding-right: 6px; }
   .meta td.v { font-weight: bold; word-break: break-word; }
   .meta td.ar { direction: rtl; text-align: right; white-space: nowrap; padding-left: 6px; }
-  .worth { font-size: 14px; margin-top: 8px; }
-  .worth-ar { font-size: 14px; direction: rtl; text-align: right; }
-  .amount { font-size: 19px; font-weight: bold; text-align: center; margin: 8px 0; white-space: nowrap; }
+  .info td { vertical-align: middle; padding: 2px 0; }
+  .info td.l { font-size: 12px; line-height: 1.25; white-space: nowrap; padding-right: 8px; }
+  .info td.l .lar { display: block; direction: rtl; text-align: left; font-size: 11.5px; }
+  .info td.v { text-align: right; }
+  .info td.v.nw { white-space: nowrap; }
+  .info td.v .d { font-weight: normal; }
+  .worth { font-size: 13px; margin-top: 6px; }
+  .worth-ar { font-size: 13px; direction: rtl; text-align: right; }
+  .amount { font-size: 19px; font-weight: bold; text-align: center; margin: 6px 0; white-space: nowrap; }
   .original { font-size: 12px; text-align: center; margin-top: -4px; }
-  .use { font-size: 13px; line-height: 1.6; }
-  .use-ar { font-size: 13px; direction: rtl; text-align: right; line-height: 1.7; margin-top: 2px; }
+  .use { font-size: 12px; line-height: 1.5; }
+  .use-ar { font-size: 12px; direction: rtl; text-align: right; line-height: 1.6; margin-top: 2px; }
   .barcode-img { display: block; margin: 6px auto 2px auto; width: 64mm; height: 14mm; }
   .code { font-size: 16px; font-weight: bold; text-align: center; letter-spacing: 2px; }
   .ref { font-size: 11px; text-align: center; margin-top: 4px; }
@@ -65,10 +76,13 @@
   .items td { padding: 2px 0; vertical-align: top; }
   .items .n { text-align: right; white-space: nowrap; padding-left: 6px; }
   .items .total td { border-top: 1px solid #000; font-weight: bold; }
-  .stamp { margin-top: 20px; display: table; width: 100%; font-size: 13px; }
+  .stamp { margin-top: 14px; display: table; width: 100%; font-size: 13px; }
   .stamp > span { display: table-cell; }
   .stamp > span:last-child { text-align: right; direction: rtl; }
   .stamp-line { border-bottom: 1px solid #000; height: 22mm; margin: 4px 0 8px 0; }
+  .legal { font-size: 12px; text-align: center; line-height: 1.5; margin-top: 6px; }
+  .doc-title { font-size: 13px; font-weight: bold; text-align: center; line-height: 1.4; margin-bottom: 6px; }
+  .nowrap { white-space: nowrap; }
   .balance { font-size: 13px; text-align: center; margin: 2px 0; }
   .balance-ar { font-size: 13px; text-align: center; direction: rtl; margin: 2px 0 6px 0; }
   .note { font-size: 11px; text-align: center; line-height: 1.5; }
@@ -89,11 +103,17 @@
   {{ (store_contact.posa_receipt_address_ar or "")|e|replace("\n", "<br>")|safe }}<br>
   TEL: {{ (store_contact.posa_receipt_phone or "")|e }} : رقم التلفون
 </div>
+{% set _company_tax_id = frappe.db.get_value("Company", doc.company, "tax_id") %}
+<div class="legal">
+  SWAN INTERNATIONAL S.P.C<br>البجعة الدولية ش ش و
+  {% if _company_tax_id %}<br>VAT No: {{ _company_tax_id|e }} : الرقم الضريبي{% endif %}
+</div>
 
 <div class="divider"></div>
 
 <div class="title">Credit note voucher</div>
 <div class="title-ar">قسيمة إشعار دائن</div>
+<div class="doc-title">Tax Credit Note · إشعار دائن ضريبي</div>
 
 {% if is_used %}
 <div class="banner banner-box">USED — NOT VALID<br>مستخدمة — غير صالحة</div>
@@ -103,16 +123,21 @@
 {% if is_balance %}
 <div class="banner">*** BALANCE · رصيد ***</div>
 <div class="balance">Used {{ "%.3f"|format(balance_used) }} on sale {{ balance_sale|e }}. Remaining {{ "%.3f"|format(remaining) }}.</div>
-<div class="balance-ar">تم استخدام <span dir="ltr">{{ "%.3f"|format(balance_used) }}</span> في الفاتورة <span dir="ltr">{{ balance_sale|e }}</span>. المتبقي <span dir="ltr">{{ "%.3f"|format(remaining) }}</span>.</div>
+<div class="balance-ar">تم استخدام <bdi class="nowrap" dir="ltr">{{ "%.3f"|format(balance_used) }}</bdi> في الفاتورة<br><bdi class="nowrap" dir="ltr">{{ balance_sale|e }}</bdi><br>المتبقي <bdi class="nowrap" dir="ltr">{{ "%.3f"|format(remaining) }}</bdi></div>
 {% elif print_settings.get("is_reprint") %}
 <div class="banner">*** DUPLICATE ***</div>
 {% endif %}
 
-<table class="meta">
-  <tr><td class="l">Register:</td><td class="v">{{ (doc.pos_profile or "")|e }}</td><td class="ar">:نقطة البيع</td></tr>
-  <tr><td class="l">Date:</td><td class="v">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }} {{ (doc.posting_time or "")|string|truncate(5, True, '') }}</td><td class="ar">:التاريخ</td></tr>
-  <tr><td class="l">Number:</td><td class="v">{{ voucher_label }}</td><td class="ar">:الرقم</td></tr>
-  <tr><td class="l">Customer:</td><td class="v">{{ (doc.customer_name or doc.customer)|e }}</td><td class="ar">:العميل</td></tr>
+<table class="meta info">
+  <tr><td class="l">Register<span class="lar">نقطة البيع</span></td><td class="v">{{ (doc.pos_profile or "")|e }}</td></tr>
+  <tr><td class="l">Date<span class="lar">التاريخ</span></td><td class="v nw">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }} {% set _t = (doc.posting_time|string).split(':') %}{{ ("%02d:%s"|format(_t[0]|int, _t[1])) if doc.posting_time else "" }}</td></tr>
+  <tr><td class="l">Return No.<span class="lar">رقم المرتجع</span></td><td class="v nw">{{ doc.name|e }}</td></tr>
+  {%- if doc.return_against %}
+  {%- set _orig_date = frappe.db.get_value("Sales Invoice", doc.return_against, "posting_date") %}
+  <tr><td class="l">Original invoice<span class="lar">الفاتورة الأصلية</span></td><td class="v nw">{{ doc.return_against|e }}{% if _orig_date %}<br><span class="d">{{ frappe.utils.getdate(_orig_date).strftime('%d-%m-%Y') }}</span>{% endif %}</td></tr>
+  {%- endif %}
+  <tr><td class="l">Voucher code<span class="lar">رمز القسيمة</span></td><td class="v nw">{{ voucher_label }}</td></tr>
+  <tr><td class="l">Customer<span class="lar">العميل</span></td><td class="v">{{ (doc.customer_name or doc.customer)|e }}</td></tr>
 </table>
 
 <div class="worth">This credit note voucher is worth</div>
@@ -138,7 +163,6 @@
 {{ code128_svg(voucher_code) }}
 <div class="code">{{ voucher_label }}</div>
 {% endif %}
-<div class="ref">Return {{ doc.name|e }}{% if doc.return_against %} · of invoice {{ doc.return_against|e }}{% endif %}</div>
 
 <div class="divider"></div>
 
@@ -156,6 +180,9 @@
   {%- if _disc %}
   <tr><td>Discount · خصم</td><td class="n"></td><td class="n">-{{ "%.3f"|format(_disc) }}</td></tr>
   {%- endif %}
+  {%- for _tax in (doc.taxes or []) %}
+  <tr><td colspan="2">VAT {{ "%g"|format(_tax.rate or 0) }}% · ضريبة القيمة المضافة</td><td class="n">{{ "%.3f"|format((_tax.tax_amount or 0)|abs) }}</td></tr>
+  {%- endfor %}
   <tr class="total"><td>Total · الإجمالي</td><td class="n"></td><td class="n">{{ "%.3f"|format(original_value) }}</td></tr>
 </table>
 
