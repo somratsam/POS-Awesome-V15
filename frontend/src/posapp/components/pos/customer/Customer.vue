@@ -131,7 +131,7 @@
 				:disabled="effectiveReadonly || isCustomerSearchLocked || Boolean(sharedCustomerLockNote)"
 				@click="select_walkin_customer"
 			>
-				{{ __("Anonymous customer") }}
+				{{ __("Walk-in (no customer)") }}
 			</v-btn>
 			<p
 				v-if="sharedCustomerLockNote"
@@ -263,13 +263,18 @@
 	font-weight: 600;
 	letter-spacing: 0.01em;
 	text-transform: none;
-	color: var(--pos-text-secondary);
-	opacity: 0.75;
+	/* Subtle highlight in the app's primary colour: a light tint and a thin
+	   outline, from Vuetify's theme so it follows light and dark mode. */
+	color: rgb(var(--v-theme-primary));
+	background-color: rgba(var(--v-theme-primary), 0.08);
+	border: 1px solid rgba(var(--v-theme-primary), 0.35);
+	border-radius: 6px;
 }
 
 .walkin-customer-btn:hover,
 .walkin-customer-btn:focus-visible {
-	opacity: 1;
+	background-color: rgba(var(--v-theme-primary), 0.16);
+	border-color: rgba(var(--v-theme-primary), 0.6);
 }
 
 @media (max-width: 768px) {

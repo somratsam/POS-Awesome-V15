@@ -89,6 +89,7 @@
 					@clear-cache="clearCache"
 					@show-about="showAboutDialog = true"
 					@toggle-theme="toggleTheme"
+					@go-desk="goDesk"
 					@logout="logOut"
 				/>
 			</template>
@@ -117,6 +118,31 @@
 		<!-- Use the modular AboutDialog component -->
 		<AboutDialog v-model="showAboutDialog" />
 		<EmployeeSwitchDialog @retry-load="fetchTerminalEmployees" />
+
+		<!-- Back to Desk with items in the cart: keep the sale as a draft first. -->
+		<v-dialog v-model="leavePosDialog" :persistent="leavingPos" max-width="380">
+			<v-card class="pos-themed-card" data-test="leave-pos-dialog">
+				<v-card-title class="text-h6 pos-text-primary">{{ __("Leave the POS?") }}</v-card-title>
+				<v-card-text class="pos-text-secondary">
+					{{ __("The current sale will be kept as a draft.") }}
+				</v-card-text>
+				<v-card-actions>
+					<v-spacer />
+					<v-btn variant="text" :disabled="leavingPos" @click="leavePosDialog = false">
+						{{ __("Stay") }}
+					</v-btn>
+					<v-btn
+						color="primary"
+						variant="flat"
+						:loading="leavingPos"
+						data-test="leave-pos-confirm"
+						@click="confirmLeavePos"
+					>
+						{{ __("Save draft and leave") }}
+					</v-btn>
+				</v-card-actions>
+			</v-card>
+		</v-dialog>
 
 		<!-- Keep existing dialogs -->
 		<v-dialog v-model="isFrozen" persistent max-width="290">
@@ -191,6 +217,7 @@ import { useToastStore } from "../stores/toastStore";
 import { useUIStore } from "../stores/uiStore";
 import { useEmployeeStore } from "../stores/employeeStore";
 import { useOfflineSyncStore } from "../stores/offlineSyncStore";
+import { useInvoiceStore } from "../stores/invoiceStore";
 import { storeToRefs } from "pinia";
 
 export default {
@@ -324,6 +351,8 @@ export default {
 			company: POS_BRAND_NAME,
 			companyImg: posLogo,
 			showAboutDialog: false,
+			leavePosDialog: false,
+			leavingPos: false,
 			showOfflineInvoices: false,
 			settingsPanelOpen: false,
 			lastSyncTotalsSnapshot: { pending: 0, synced: 0, drafted: 0 },
@@ -858,8 +887,40 @@ export default {
 		closeSettingsPanel() {
 			this.settingsPanelOpen = false;
 		},
+		// Back to Desk (Menu) and the title click. With items in the cart,
+		// ask first and save the sale as a draft (Invoice.vue's Save & Clear)
+		// before leaving; leave only once it is saved.
 		goDesk() {
+			// Looked up here, not in setup(): the cart store is the POS screen's.
+			if (Number(useInvoiceStore().itemsCount || 0) > 0) {
+				this.leavePosDialog = true;
+				return;
+			}
+			this.leaveToDesk();
+		},
+		leaveToDesk() {
 			window.location.href = "/app";
+		},
+		confirmLeavePos() {
+			if (this.leavingPos) return;
+			this.leavingPos = true;
+			const request = {
+				handled: false,
+				done: (saved) => {
+					this.leavingPos = false;
+					if (!saved) return; // Save & Clear already said why; the sale stays in the cart.
+					this.leavePosDialog = false;
+					this.leaveToDesk();
+				},
+			};
+			this.eventBus?.emit("save_draft_before_leaving", request);
+			if (!request.handled) {
+				this.leavingPos = false;
+				this.toastStore.show({
+					title: this.__("The current sale couldn't be saved. It is still in the cart."),
+					color: "error",
+				});
+			}
 		},
 
 		openCloseShift() {
