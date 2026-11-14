@@ -258,6 +258,10 @@ export const useCustomersStore = defineStore("customers", () => {
 	}
 
 	function setSelectedCustomer(name: string | null) {
+		// Moving to another customer leaves an exchange's credit unused.
+		if (pendingExchange.value && (name || null) !== pendingExchange.value.customer) {
+			abandonPendingExchange();
+		}
 		selectedCustomer.value = name || null;
 		if (exchangeCreditCustomer.value && exchangeCreditCustomer.value !== selectedCustomer.value) {
 			exchangeCreditCustomer.value = null;
@@ -325,6 +329,47 @@ export const useCustomersStore = defineStore("customers", () => {
 	// when the cashier switches it off, a different customer is selected, or
 	// the sale is submitted.
 	const exchangeCreditCustomer = ref<string | null>(null);
+
+	// Safety net for an exchange that never happens: the return is already
+	// submitted (its credit sits on the customer), but the new sale is
+	// abandoned -- another customer chosen, the sale cancelled, the POS left
+	// for the Desk, or a sale submitted without using the credit. Then
+	// exchangePrompt opens ExchangeCreditPrompt: "Print the credit note
+	// voucher?" so the customer still gets a voucher for the credit. Kept in
+	// memory only (a page reload forgets it).
+	type PendingExchange = {
+		returnName: string;
+		doctype: string;
+		customer: string;
+		customerName: string;
+		credit: number;
+	};
+	const pendingExchange = ref<PendingExchange | null>(null);
+	const exchangePrompt = ref<(PendingExchange & { onDone?: (() => void) | null }) | null>(null);
+
+	function setPendingExchange(info: PendingExchange | null) {
+		pendingExchange.value = info && info.returnName && info.customer ? { ...info } : null;
+	}
+
+	function clearPendingExchange() {
+		pendingExchange.value = null;
+	}
+
+	/** The exchange's sale won't happen: ask to print the voucher. Returns
+	 * true when the prompt opened (onDone runs when it closes). */
+	function abandonPendingExchange(onDone: (() => void) | null = null) {
+		const pending = pendingExchange.value;
+		if (!pending) return false;
+		pendingExchange.value = null;
+		exchangePrompt.value = { ...pending, onDone };
+		return true;
+	}
+
+	function closeExchangePrompt() {
+		const prompt = exchangePrompt.value;
+		exchangePrompt.value = null;
+		prompt?.onDone?.();
+	}
 
 	function armExchangeCredit(name: string | null) {
 		exchangeCreditCustomer.value = name || null;
@@ -1152,6 +1197,8 @@ export const useCustomersStore = defineStore("customers", () => {
 		resetPagination();
 		selectedCustomer.value = null;
 		exchangeCreditCustomer.value = null;
+		pendingExchange.value = null;
+		exchangePrompt.value = null;
 		customerInfo.value = {};
 		loadProgress.value = 0;
 		totalCustomerCount.value = 0;
@@ -1187,6 +1234,12 @@ export const useCustomersStore = defineStore("customers", () => {
 		exchangeCreditCustomer,
 		armExchangeCredit,
 		isCreditOn,
+		pendingExchange,
+		exchangePrompt,
+		setPendingExchange,
+		clearPendingExchange,
+		abandonPendingExchange,
+		closeExchangePrompt,
 		setCreditOn,
 		creditVouchers,
 		addCreditVoucher,

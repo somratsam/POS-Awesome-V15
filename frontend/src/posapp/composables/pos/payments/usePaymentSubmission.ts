@@ -1402,6 +1402,21 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 					? doc.customer
 					: null;
 
+			// The sale an exchange was waiting for: settled when it used the
+			// credit; submitted without it, the credit is left unused, so ask to
+			// print the voucher (ExchangeCreditPrompt). Before the customer reset
+			// below, which would otherwise count as leaving the exchange.
+			const pendingExchange = stores?.customersStore?.pendingExchange;
+			if (!doc?.is_return && pendingExchange && pendingExchange.customer === doc?.customer) {
+				const usedCredit =
+					Number(submittedDocument?.posa_redeemed_customer_credit ?? doc?.posa_redeemed_customer_credit) || 0;
+				if (usedCredit > 0) {
+					stores.customersStore.clearPendingExchange?.();
+				} else {
+					stores.customersStore.abandonPendingExchange?.();
+				}
+			}
+
 			if (onFinishNavigation) onFinishNavigation(true);
 
 			if (stores?.customersStore?.setSelectedCustomer) {
@@ -1426,6 +1441,15 @@ export function usePaymentSubmission(options: PaymentSubmissionOptions) {
 						stores.customersStore.addCreditVoucher(bearerVoucher);
 					}
 					stores.customersStore.armExchangeCredit(exchangeCustomer);
+					// Safety net: if this exchange's sale never uses the credit,
+					// ExchangeCreditPrompt offers the voucher.
+					stores.customersStore.setPendingExchange?.({
+						returnName: responseInvoiceName,
+						doctype: submittedDoctype,
+						customer: exchangeCustomer,
+						customerName: String(doc?.customer_name || exchangeCustomer),
+						credit: Math.abs(Number(submittedDocument?.grand_total ?? doc?.grand_total) || 0),
+					});
 				});
 			}
 

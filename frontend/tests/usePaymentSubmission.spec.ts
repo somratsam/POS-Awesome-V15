@@ -2217,6 +2217,7 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 		doc: any,
 		returnIntent: "exchange" | "credit_note" | null = null,
 		response: Record<string, any> = {},
+		pendingExchange: Record<string, any> | null = null,
 	) => {
 		const invoiceService = (await import("../src/posapp/services/invoiceService")).default;
 		(invoiceService.submitInvoice as any).mockResolvedValue({
@@ -2226,11 +2227,17 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 			...response,
 		});
 		const invoiceDoc = ref<any>(doc);
+		const calls: string[] = [];
 		const customersStore = {
-			setSelectedCustomer: vi.fn(),
+			setSelectedCustomer: vi.fn((name: any) => calls.push(`select:${name}`)),
 			armExchangeCredit: vi.fn(),
 			addCreditVoucher: vi.fn(),
 			markSharedCustomer: vi.fn(),
+			pendingExchange,
+			setPendingExchange: vi.fn(),
+			clearPendingExchange: vi.fn(() => calls.push("clear")),
+			abandonPendingExchange: vi.fn(() => calls.push("abandon")),
+			calls,
 		};
 		const { submitInvoice } = usePaymentSubmission({
 			invoiceDoc,
@@ -2351,5 +2358,64 @@ describe("usePaymentSubmission exchange after a store-credit return", () => {
 
 		expect(customersStore.armExchangeCredit).not.toHaveBeenCalled();
 		expect(customersStore.setSelectedCustomer).toHaveBeenLastCalledWith(null);
+	});
+
+	describe("safety net: the exchange's sale never uses the credit", () => {
+		const pending = { returnName: "ACC-SINV-RET-2", doctype: "Sales Invoice", customer: "CUST-R", credit: 50 };
+		const sale = (overrides: Record<string, any> = {}) => ({
+			name: "ACC-SINV-SALE-2",
+			doctype: "Sales Invoice",
+			is_return: 0,
+			customer: "CUST-R",
+			items: [],
+			payments: [{ mode_of_payment: "Cash", amount: 30, type: "Cash" }],
+			rounded_total: 30,
+			grand_total: 30,
+			...overrides,
+		});
+
+		it("an exchange records the return, its customer and its credit", async () => {
+			const { customersStore } = await submitDoc(
+				{ ...creditReturn("ACC-SINV-RET-2"), customer_name: "Sanju" },
+				"exchange",
+			);
+			expect(customersStore.setPendingExchange).toHaveBeenCalledWith({
+				returnName: "ACC-SINV-RET-2",
+				doctype: "Sales Invoice",
+				customer: "CUST-R",
+				customerName: "Sanju",
+				credit: 50,
+			});
+		});
+
+		it("a credit note records nothing (its voucher prints anyway)", async () => {
+			const { customersStore } = await submitDoc(creditReturn("ACC-SINV-RET-3"), "credit_note");
+			expect(customersStore.setPendingExchange).not.toHaveBeenCalled();
+		});
+
+		it("the exchange's sale that used the credit settles it, before the customer is reset", async () => {
+			const { customersStore } = await submitDoc(
+				sale(),
+				null,
+				{ posa_redeemed_customer_credit: 50 },
+				pending,
+			);
+			expect(customersStore.clearPendingExchange).toHaveBeenCalledTimes(1);
+			expect(customersStore.abandonPendingExchange).not.toHaveBeenCalled();
+			expect(customersStore.calls.indexOf("clear")).toBeLessThan(customersStore.calls.indexOf("select:null"));
+		});
+
+		it("a sale for that customer without the credit asks to print the voucher, before the reset", async () => {
+			const { customersStore } = await submitDoc(sale(), null, {}, pending);
+			expect(customersStore.abandonPendingExchange).toHaveBeenCalledTimes(1);
+			expect(customersStore.clearPendingExchange).not.toHaveBeenCalled();
+			expect(customersStore.calls.indexOf("abandon")).toBeLessThan(customersStore.calls.indexOf("select:null"));
+		});
+
+		it("another customer's sale doesn't touch it here (the customer change does)", async () => {
+			const { customersStore } = await submitDoc(sale({ customer: "CUST-OTHER" }), null, {}, pending);
+			expect(customersStore.abandonPendingExchange).not.toHaveBeenCalled();
+			expect(customersStore.clearPendingExchange).not.toHaveBeenCalled();
+		});
 	});
 });

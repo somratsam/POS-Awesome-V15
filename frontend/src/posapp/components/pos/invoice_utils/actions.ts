@@ -178,6 +178,9 @@ export async function cancel_invoice(context: any) {
 		});
 	}
 
+	// The exchange this sale was for won't happen: ask to print the
+	// voucher for its unused credit (ExchangeCreditPrompt).
+	context.customersStore?.abandonPendingExchange?.();
 	// Use the clear_invoice logic
 	clearInvoice(context);
 	// A cancelled sale drops its bearer voucher (customersStore).
