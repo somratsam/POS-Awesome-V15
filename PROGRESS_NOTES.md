@@ -9848,3 +9848,104 @@ Rollback: before store numbering `git checkout 7519cb16` (the field stays,
 harmless while blank; after 1 January blank every profile first -- vouchers
 already issued with a store prefix would no longer be found); further back as
 section 99. Each time `bench build --app posawesome`, clear-cache, restart.
+
+## 101. Receipt: tax titles, legal name and VAT No., exact exchange receipt; receipt moved into git (2026-11-14, `b1eeb622` on `develop-swan`, `07e088f4` on `stable`)
+
+**Request.** Keep today's "Swan Sales Invoice" design; add the legal name and
+VAT number, tax titles, a clear exchange receipt, a few fixes, slightly
+smaller type and side margins. Mock-ups went through three versions (two
+redesigns rejected: "keep today's receipt"); version 3 approved, then the
+additions below. Tested by the user on staging (Epson and Bixolon).
+
+**Where the receipt lives now.** `templates/print/swan_receipt.html` (git),
+next to `credit_note_voucher.html`. The "Swan Sales Invoice" record keeps its
+name (POS Profiles unchanged), stays non-standard (migrate never touches it)
+and holds only the switch voucher/receipt (`receipt_record.SWITCH_HTML`).
+`receipt_record.switch_swan_receipt(expected_md5)` refuses unless the
+record's HTML has the expected MD5 (same value as MySQL `MD5(html)`), backs
+the record up to `sites/<site>/private/backups/` first, and is a no-op when
+already switched; `restore_swan_receipt(backup_path)` puts it back. Old HTML
+kept in `templates/print/archive/` (staging `ad71c927…`, production
+`f8075c1d…`).
+
+**Production differed from staging** (CRLF line endings stored in the DB,
+plus four edits made there by hand): no store-name line, no "Return/Exchange
+valid until" under the barcode, "Credit Valid Until" (posting + 3 months) on a
+return with unused credit, two PDF-height tweaks. All folded in (the date via
+`credit_voucher_valid_until`, same rule); store name left out by decision;
+the exchange date put back on one line, "Exchange until dd-mm-yyyy ·
+الاستبدال حتى" (11 px bold; v3's wording needed 351 px of 268).
+
+**Receipt changes.**
+- Below the store details (12 px): SWAN INTERNATIONAL S.P.C / البجعة الدولية
+  ش ش و (as on the VAT certificate) and "VAT No: <Company Tax ID>" (hidden
+  when empty). CR number stays typed.
+- Title: "Simplified Tax Invoice / فاتورة ضريبية مبسطة" on sales, "Tax Credit
+  Note / إشعار دائن ضريبي" on returns (voucher: small line under its title).
+- Tax table first column always "VAT" (was the tax row description).
+- Time with two-digit hours ("3:41:" before 10:00 -> "03:41").
+- Card refund: section "Refund", "Refunded · Visa X"; "Store Credit Issued"
+  and the 3-month text only for the part kept as credit; the original invoice
+  number and date under the top table.
+- "Remaining Credit" removed: it printed
+  `posa_remaining_customer_credit_balance`, for Anonymous the pooled credit of
+  every anonymous return (staging 409.150). Leftover credit only on the
+  BALANCE voucher.
+- Exchange, found exactly: Jinja method
+  `credit_voucher.exchange_credit_sources(sale)` reads the credit redemption
+  Journal Entries (return -> sale, parameterized SQL) and keeps returns posted
+  in the sale's own shift; the rest of the redeemed credit is "Credit Applied".
+  Replaces "any return of this customer in the shift"
+  (`get_customers_with_same_shift_return`, still used by the Z Report and
+  Overview, unchanged). Layout: EXCHANGE heading, RETURNED ITEMS (return no.,
+  original receipt, minus amounts at the price paid), NEW ITEMS, big total =
+  difference paid, tax table with a "VAT returned" row, Summary (Returned
+  total, New items total, Difference paid, payment method), BALANCE pointer
+  without amount.
+- Type about 1 px smaller, divider gaps 18 -> 12 px; 2.5 mm side padding
+  inside the 76 mm page (QZ printable-width fit unchanged; the 64 x 14 mm
+  barcode measured 6 mm from each edge, as before). Logo call tolerates a
+  missing POS Profile.
+
+**Voucher changes** (`credit_note_voucher.html`, also the BALANCE voucher):
+legal name, VAT No., "Tax Credit Note", rows Return No. · رقم المرتجع,
+Original invoice · الفاتورة الأصلية (number and date), Voucher code · رمز
+القسيمة (label left with Arabic under it, value right -- the old 3-column
+rows broke long numbers letter by letter), VAT line from the return's tax
+rows, Arabic "used … on sale …" in three isolated lines (`<bdi>`), time fix,
+same small type/gap step and margins. The Desk PDF of a voucher has a blank
+second page -- also before this change (checked on the old template).
+
+**Lengths (Epson, Chromium measurement).** Sale 2 items 360 -> 312 mm,
+4 items 397 -> 343, card refund 374 -> ~300, voucher 300 -> ~324, exchange
+367 -> ~407 (now lists the returned items).
+
+**Checks.** vitest 292/292 files, 1858/1858 (Node 24). Backend in isolation:
+`test_swan_receipt` 15 (new; mutation-checked: putting back the old tax label
+and refund wording fails 5), `test_credit_voucher` 67, `test_print_barcode`
+4, `test_print_assets` 4, `test_invoice_naming` 26; `test_credit_exchange`
+crashes in ERPNext's test bootstrap (duplicate "Standard Buying") identically
+with the change stashed. `bench build`: N/A (no frontend file). Migrate exit
+0; record still the switch afterwards. Real print path
+(`get_html_and_style`) and Desk PDF checked for every type. System Settings
+restored to 3/3, Asia/Muscat. Offline receipts use their own template
+(`offline_print_template`) and are unchanged.
+
+**Production deploy** (site `site1.local`; `stable` `8afc7177` -> `07e088f4`).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `8afc7177`.
+2. `bench --site site1.local backup`
+3. Checksum (expect `f8075c1d7b77a7f33d9948940f1ec6c1`; anything else: stop,
+   someone edited the record -- compare with the archived copy first):
+   `bench --site site1.local mariadb -N -e "SELECT MD5(html) FROM \`tabPrint Format\` WHERE name='Swan Sales Invoice'"`
+   and `SELECT tax_id FROM tabCompany` shows `OM1100066692` for the company.
+4. `git fetch upstream && git merge --ff-only 07e088f4` -> `git rev-parse --short HEAD` = `07e088f4`.
+5. `bench --site site1.local clear-cache` (new Jinja method), then
+   `sudo supervisorctl restart all`. No migrate or build needed.
+6. Switch:
+   `bench --site site1.local execute posawesome.posawesome.api.receipt_record.switch_swan_receipt --kwargs "{'expected_md5': 'f8075c1d7b77a7f33d9948940f1ec6c1'}"`
+   -> "Switched. Backup: <path>" (keep the path).
+7. Test prints as on staging: sale (scan its barcode on Returns), card refund,
+   voucher (scan at Payments), exchange, BALANCE voucher; Epson and Bixolon.
+Rollback: `... receipt_record.restore_swan_receipt --kwargs "{'backup_path': '<path from step 6>'}"`
+(the old HTML works with the new code too); code: `git checkout 8afc7177`,
+clear-cache, restart.
