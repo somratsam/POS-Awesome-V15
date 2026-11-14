@@ -1964,3 +1964,15 @@ Paid with a voucher from a sale to {0} — the customer stays {0}.,مدفوع ب
 "A return without an invoice can't leave store credit on ""{0}"", a shared customer account: select or create the real customer. (A return of a sale to ""{0}"" made from its receipt gives the credit as a voucher instead.)","لا يمكن لمرتجع بدون فاتورة أن يترك رصيداً على ""{0}""، وهو حساب عميل مشترك: اختر العميل الفعلي أو أنشئه. (أما مرتجع البيع إلى ""{0}"" من إيصاله فيُعطى رصيده كقسيمة.)"
 "This voucher is on ""{0}"", a shared customer account, and its credit wasn't given from the receipt of a sale, so it can't be used.","هذه القسيمة على ""{0}""، وهو حساب عميل مشترك، ولم يُعطَ رصيدها من إيصال بيع، لذا لا يمكن استخدامها."
 Anonymous customer,عميل مجهول
+Choose items to return,اختر الأصناف المرتجعة
+Select all,تحديد الكل
+Tick the items the customer is returning.,حدّد الأصناف التي يرجعها العميل.
+Return {0},إرجاع {0}
+Returnable: {0},قابل للإرجاع: {0}
+Less,أقل
+More,أكثر
+Quantity to return,الكمية المرتجعة
+Return selected,إرجاع المحدد
+Nothing selected,لم يتم تحديد شيء
+{0} of {1} lines · {2},{0} من {1} أسطر · {2}
+Select at least one item to return,حدّد صنفاً واحداً على الأقل للإرجاع

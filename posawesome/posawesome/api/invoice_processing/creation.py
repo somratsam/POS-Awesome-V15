@@ -1926,6 +1926,28 @@ def _guard_return_cash_refund(invoice_doc, pos_profile_doc=None, enforce_credit_
         )
 
 
+def _drop_unpicked_return_lines(invoice_doc):
+    """Tick-to-return (the POS return picker): a return line left at
+    quantity 0 wasn't picked -- it is dropped. A return whose lines are all
+    at 0 is refused. Only on final submission (submit_invoice, which offline sync
+    and background submit also go through)."""
+    if not cint(invoice_doc.get("is_return")):
+        return
+    items = list(invoice_doc.get("items") or [])
+    if not items:
+        return  # no lines at all: ERPNext's own return validation refuses it
+    kept = [row for row in items if flt(row.get("qty"))]
+    if not kept:
+        frappe.throw(_("Select at least one item to return"))
+    if len(kept) != len(items):
+        if hasattr(invoice_doc, "set"):
+            invoice_doc.set("items", kept)
+        else:
+            invoice_doc["items"] = kept
+        for idx, row in enumerate(kept, start=1):
+            row.idx = idx
+
+
 def _guard_generic_customer_stored_credit(invoice_doc, enforce_credit_only_policy=False):
     """Store credit on a shared/anonymous customer (posa_is_generic_customer,
     e.g. a walk-in "Anonymous" reused across unrelated sales) must belong to
@@ -2540,6 +2562,8 @@ def submit_invoice(invoice, data, submit_in_background=False):
 
     set_invoice_client_request_id(invoice_doc, client_request_id)
     _set_authoritative_cashier(invoice_doc, authoritative_cashier)
+    # Tick-to-return: lines left at 0 weren't picked.
+    _drop_unpicked_return_lines(invoice_doc)
     # Chosen Sales Person checked; else the cashier's own; returns take the original's.
     apply_pos_sales_team(invoice_doc, profile_doc)
 
