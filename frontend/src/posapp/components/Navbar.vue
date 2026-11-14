@@ -217,6 +217,7 @@ import { useUIStore } from "../stores/uiStore";
 import { useEmployeeStore } from "../stores/employeeStore";
 import { useOfflineSyncStore } from "../stores/offlineSyncStore";
 import { useInvoiceStore } from "../stores/invoiceStore";
+import { useCustomersStore } from "../stores/customersStore";
 import { storeToRefs } from "pinia";
 
 export default {
@@ -890,6 +891,11 @@ export default {
 		// ask first and save the sale as a draft (Invoice.vue's Save & Clear)
 		// before leaving; leave only once it is saved.
 		goDesk() {
+			// An exchange still waiting for its sale: offer the credit note
+			// voucher first (ExchangeCreditPrompt), then carry on leaving.
+			if (useCustomersStore().abandonPendingExchange(() => this.goDesk())) {
+				return;
+			}
 			// Looked up here, not in setup(): the cart store is the POS screen's.
 			if (Number(useInvoiceStore().itemsCount || 0) > 0) {
 				this.leavePosDialog = true;

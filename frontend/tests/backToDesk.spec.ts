@@ -50,7 +50,21 @@ describe("Back to Desk: no sale lost silently", () => {
 	const methodsSource = navbarSource.slice(navbarSource.indexOf("goDesk() {"), navbarSource.indexOf("openCloseShift() {"));
 	// eslint-disable-next-line no-new-func
 	let cartCount = 0;
-	const methods = new Function("useInvoiceStore", `return { ${methodsSource} };`)(() => ({ itemsCount: cartCount }));
+	// An exchange still waiting for its sale (customersStore.pendingExchange).
+	let exchangePending = false;
+	let promptDone: (() => void) | null = null;
+	const customersStore = {
+		abandonPendingExchange: vi.fn((onDone: () => void) => {
+			if (!exchangePending) return false;
+			exchangePending = false;
+			promptDone = onDone;
+			return true;
+		}),
+	};
+	const methods = new Function("useInvoiceStore", "useCustomersStore", `return { ${methodsSource} };`)(
+		() => ({ itemsCount: cartCount }),
+		() => customersStore,
+	);
 
 	const makeVm = (itemsCount: number, saved?: boolean | "no-listener") => {
 		cartCount = itemsCount;
@@ -72,6 +86,16 @@ describe("Back to Desk: no sale lost silently", () => {
 		vm.confirmLeavePos = methods.confirmLeavePos.bind(vm);
 		return vm;
 	};
+
+	it("an exchange still waiting for its sale offers the voucher first, then leaves", () => {
+		exchangePending = true;
+		const vm = makeVm(0);
+		vm.goDesk();
+		expect(vm.leaveToDesk).not.toHaveBeenCalled();
+		expect(customersStore.abandonPendingExchange).toHaveBeenCalledOnce();
+		promptDone?.(); // the cashier printed the voucher or chose Not now
+		expect(vm.leaveToDesk).toHaveBeenCalledOnce();
+	});
 
 	it("leaves straight away with an empty cart", () => {
 		const vm = makeVm(0);

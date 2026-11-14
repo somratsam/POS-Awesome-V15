@@ -2,7 +2,8 @@
 	<v-card flat :class="['cards mb-0 mt-3 pa-0', { compact }]">
 		<v-row align="start" no-gutters>
 			<!-- A return that refunds no money: the cashier says whether it is an
-			     exchange (no slip) or a credit note (printed). See utils/returnIntent. -->
+			     exchange (no slip) or a credit note (printed). The labels say the
+			     return is submitted; a confirmation follows (utils/returnIntent). -->
 			<template v-if="returnChoice">
 				<v-col cols="12" sm="6">
 					<v-btn
@@ -19,7 +20,7 @@
 						:disabled="loading || validatePayment"
 						:class="{ 'submit-highlight': highlightSubmit }"
 					>
-						<span>{{ __("Exchange: continue to new sale") }}</span>
+						<span>{{ __("Submit return → Exchange") }}</span>
 						<kbd v-if="showKeyboardShortcuts" class="payment-footer-btn__shortcut">
 							Ctrl/⌘+Enter
 						</kbd>
@@ -38,7 +39,7 @@
 						:loading="loading"
 						:disabled="loading || validatePayment"
 					>
-						<span>{{ __("Credit note issue") }}</span>
+						<span>{{ __("Submit return → Credit note") }}</span>
 					</v-btn>
 				</v-col>
 			</template>

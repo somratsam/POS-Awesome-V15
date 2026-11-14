@@ -4,10 +4,11 @@ import { defineComponent, h } from "vue";
 import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isNoMoneyReturn, resolveReturnSubmit } from "../src/posapp/utils/returnIntent";
+import { isNoMoneyReturn, resolveReturnSubmit, returnConfirmFigures } from "../src/posapp/utils/returnIntent";
 import PaymentActionButtons from "../src/posapp/components/pos/payments/PaymentActionButtons.vue";
 import ReturnIntentDialog from "../src/posapp/components/pos/payments/ReturnIntentDialog.vue";
 import paymentsSource from "../src/posapp/components/pos/Payments.vue?raw";
+import dialogSource from "../src/posapp/components/pos/payments/ReturnIntentDialog.vue?raw";
 
 describe("isNoMoneyReturn", () => {
 	it("is a return with every payment at 0", () => {
@@ -37,29 +38,41 @@ describe("resolveReturnSubmit", () => {
 		});
 	});
 
-	it("Exchange never prints, Credit note issue always prints", () => {
+	it("always asks first, with the intent the route chose", () => {
 		expect(resolveReturnSubmit({ noMoneyReturn: true, print: true, intent: "exchange" })).toEqual({
-			action: "submit",
-			print: false,
+			action: "ask",
 			intent: "exchange",
 		});
 		expect(resolveReturnSubmit({ noMoneyReturn: true, print: false, intent: "credit_note" })).toEqual({
-			action: "submit",
-			print: true,
+			action: "ask",
 			intent: "credit_note",
 		});
 	});
 
-	it("a plain submit key is the default, Exchange", () => {
+	it("a plain submit key asks with Exchange, the default", () => {
 		expect(resolveReturnSubmit({ noMoneyReturn: true, print: false })).toEqual({
-			action: "submit",
-			print: false,
+			action: "ask",
 			intent: "exchange",
 		});
 	});
 
-	it("a print key asks instead of printing", () => {
-		expect(resolveReturnSubmit({ noMoneyReturn: true, print: true })).toEqual({ action: "ask" });
+	it("a print key asks with the choice left open", () => {
+		expect(resolveReturnSubmit({ noMoneyReturn: true, print: true })).toEqual({ action: "ask", intent: null });
+	});
+});
+
+describe("returnConfirmFigures", () => {
+	it("counts the returned quantity and the credit from the grand total", () => {
+		expect(
+			returnConfirmFigures({
+				customer: "CUST-1",
+				customer_name: "Sanju",
+				grand_total: -77.28,
+				rounded_total: -77.3,
+				items: [{ qty: -1 }, { qty: -2 }],
+			}),
+		).toEqual({ itemCount: 3, credit: 77.28, customer: "Sanju" });
+		expect(returnConfirmFigures(null)).toEqual({ itemCount: 0, credit: 0, customer: "" });
 	});
 });
 
@@ -93,7 +106,7 @@ describe("PaymentActionButtons on a no-money return", () => {
 		(window as any).__ = (text: string) => text;
 	});
 
-	it("shows Exchange and Credit note issue instead of Submit / Submit & Print", async () => {
+	it("shows Submit return → Exchange / → Credit note instead of Submit / Submit & Print", async () => {
 		const onSubmitExchange = vi.fn();
 		const onSubmitCreditNote = vi.fn();
 		const wrapper = mount(PaymentActionButtons, {
@@ -101,8 +114,9 @@ describe("PaymentActionButtons on a no-money return", () => {
 			global: { components },
 		});
 		const text = wrapper.text();
-		expect(text).toContain("Exchange: continue to new sale");
-		expect(text).toContain("Credit note issue");
+		expect(text).toContain("Submit return → Exchange");
+		expect(text).toContain("Submit return → Credit note");
+		expect(text).not.toContain("continue to new sale");
 		expect(text).not.toContain("Submit & Print");
 		expect(wrapper.find('[data-testid="payment-submit"]').exists()).toBe(false);
 
@@ -117,30 +131,73 @@ describe("PaymentActionButtons on a no-money return", () => {
 		const wrapper = mount(PaymentActionButtons, { props: { returnChoice: false }, global: { components } });
 		expect(wrapper.find('[data-testid="payment-submit"]').exists()).toBe(true);
 		expect(wrapper.find('[data-testid="payment-submit-print"]').exists()).toBe(true);
-		expect(wrapper.text()).not.toContain("Credit note issue");
+		expect(wrapper.text()).not.toContain("Submit return");
 		wrapper.unmount();
 	});
 });
 
-describe("ReturnIntentDialog", () => {
+describe("ReturnIntentDialog (confirmation)", () => {
 	beforeEach(() => {
-		(window as any).__ = (text: string) => text;
+		(window as any).__ = (text: string, args: any[] = []) =>
+			text.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)]));
 	});
 
-	it("asks 'Exchange or Credit note issue?' and reports the choice", async () => {
-		const onChoose = vi.fn();
-		const onCancel = vi.fn();
-		const wrapper = mount(ReturnIntentDialog, {
-			props: { modelValue: true, onChoose, onCancel },
+	const mountDialog = (props: Record<string, any>) =>
+		mount(ReturnIntentDialog, {
+			props: {
+				modelValue: true,
+				itemCount: 2,
+				credit: 77.28,
+				customer: "Sanju",
+				formatCurrency: (value: number) => `OMR ${value.toFixed(3)}`,
+				...props,
+			},
 			global: { components },
 		});
-		expect(wrapper.text()).toContain("Exchange or Credit note issue?");
+
+	it("says what submitting does, and Exchange shows only its own submit button", async () => {
+		const onChoose = vi.fn();
+		const onCancel = vi.fn();
+		const wrapper = mountDialog({ intent: "exchange", onChoose, onCancel });
+		const text = wrapper.text();
+		expect(text).toContain("Submit this return?");
+		expect(text).toContain("Items going back to stock: 2");
+		expect(text).toContain("OMR 77.280 becomes store credit for Sanju.");
+		expect(text).toContain("This can't be undone at the till.");
+		expect(text).toContain("Then: start the customer's new sale");
+		expect(wrapper.find('[data-testid="return-intent-credit-note"]').exists()).toBe(false);
 		await wrapper.find('[data-testid="return-intent-exchange"]').trigger("click");
-		await wrapper.find('[data-testid="return-intent-credit-note"]').trigger("click");
 		await wrapper.find('[data-testid="return-intent-cancel"]').trigger("click");
-		expect(onChoose.mock.calls).toEqual([["exchange"], ["credit_note"]]);
+		expect(onChoose.mock.calls).toEqual([["exchange"]]);
 		expect(onCancel).toHaveBeenCalledTimes(1);
 		wrapper.unmount();
+	});
+
+	it("Credit note shows only its submit button and says the voucher prints", () => {
+		const wrapper = mountDialog({ intent: "credit_note" });
+		expect(wrapper.text()).toContain("Then: print the credit note voucher");
+		expect(wrapper.find('[data-testid="return-intent-exchange"]').exists()).toBe(false);
+		expect(wrapper.find('[data-testid="return-intent-credit-note"]').exists()).toBe(true);
+		wrapper.unmount();
+	});
+
+	it("a print key's open choice shows both, plus Back", async () => {
+		const onChoose = vi.fn();
+		const wrapper = mountDialog({ intent: null, onChoose });
+		expect(wrapper.find('[data-testid="return-intent-then"]').exists()).toBe(false);
+		await wrapper.find('[data-testid="return-intent-exchange"]').trigger("click");
+		await wrapper.find('[data-testid="return-intent-credit-note"]').trigger("click");
+		expect(onChoose.mock.calls).toEqual([["exchange"], ["credit_note"]]);
+		expect(wrapper.find('[data-testid="return-intent-cancel"]').text()).toBe("Back");
+		wrapper.unmount();
+	});
+});
+
+describe("ReturnIntentDialog source", () => {
+	it("focuses Back, not a submit button, when it opens", () => {
+		expect(dialogSource).toMatch(/ref="backButton"[\s\S]*?data-testid="return-intent-cancel"/);
+		expect(dialogSource).toContain("backButton.value?.$el || backButton.value");
+		expect(dialogSource).not.toContain("exchangeButton");
 	});
 });
 
@@ -155,6 +212,8 @@ describe("Payments.vue wiring", () => {
 		expect(paymentsSource).toContain("@submit-exchange=\"submitReturnAs('exchange')\"");
 		expect(paymentsSource).toContain("@submit-credit-note=\"submitReturnAs('credit_note')\"");
 		expect(paymentsSource).toMatch(/<ReturnIntentDialog[\s\S]*?@choose="settleReturnIntent"/);
+		expect(paymentsSource).toMatch(/<ReturnIntentDialog[\s\S]*?:intent="returnIntentPreset"[\s\S]*?:credit="returnConfirm\.credit"/);
+		expect(script).toContain("returnIntent = await askReturnIntent(decision.intent);");
 	});
 
 	it("has a single submitInvoice call, inside the wrapper, after the decision", () => {

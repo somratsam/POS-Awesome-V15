@@ -1982,3 +1982,18 @@ The current sale will be kept as a draft.,سيتم حفظ عملية البيع 
 Stay,البقاء
 Save draft and leave,حفظ كمسودة والمغادرة
 The current sale couldn't be saved. It is still in the cart.,تعذّر حفظ عملية البيع الحالية. لا تزال في السلة.
+Submit this return?,هل تريد إتمام هذا المرتجع؟
+Items going back to stock: {0},الأصناف المعادة إلى المخزون: {0}
+{0} becomes store credit for {1}.,يصبح {0} رصيدًا في المتجر لـ {1}.
+the customer,العميل
+This can't be undone at the till.,لا يمكن التراجع عن ذلك من نقطة البيع.
+Then: start the customer's new sale,بعد ذلك: بدء عملية بيع جديدة للعميل
+Then: print the credit note voucher,بعد ذلك: طباعة قسيمة الإشعار الدائن
+Submit return → Exchange,إتمام المرتجع ← استبدال
+Submit return → Credit note,إتمام المرتجع ← إشعار دائن
+Print the credit note voucher?,طباعة قسيمة الإشعار الدائن؟
+Return {0} is submitted. {1} has {2} store credit from it that has not been used.,تم إتمام المرتجع {0}. لدى {1} رصيد {2} منه لم يُستخدم بعد.
+Print it now so the customer can use it later.,اطبعها الآن ليتمكن العميل من استخدامها لاحقًا.
+Not now,ليس الآن
+Print credit note voucher,طباعة قسيمة الإشعار الدائن
+The credit note voucher couldn't be printed. Reprint it from Invoice Management.,تعذّرت طباعة قسيمة الإشعار الدائن. أعد طباعتها من إدارة الفواتير.

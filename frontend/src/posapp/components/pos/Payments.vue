@@ -288,6 +288,11 @@
 		/>
 		<ReturnIntentDialog
 			:model-value="returnIntentDialog"
+			:intent="returnIntentPreset"
+			:item-count="returnConfirm.itemCount"
+			:credit="returnConfirm.credit"
+			:customer="returnConfirm.customer"
+			:format-currency="formatCurrency"
 			@choose="settleReturnIntent"
 			@cancel="settleReturnIntent(null)"
 		/>
@@ -415,7 +420,7 @@ import {
 	voucherInfoToast,
 	creditRemainderMessage,
 } from "../../utils/voucherMessages";
-import { isNoMoneyReturn, resolveReturnSubmit } from "../../utils/returnIntent";
+import { isNoMoneyReturn, resolveReturnSubmit, returnConfirmFigures } from "../../utils/returnIntent";
 import {
 	balanceVoucherSettings,
 	recordBalanceVoucherPrint,
@@ -2207,14 +2212,18 @@ const submit = async (_event, payment_received = false, print = false) => {
 	});
 };
 
-// A return that refunds no money: "Exchange: continue to new sale" (no print)
-// or "Credit note issue" (prints). See utils/returnIntent.
+// A return that refunds no money: "Submit return → Exchange" (no print) or
+// "Submit return → Credit note" (prints), always confirmed first in
+// ReturnIntentDialog. See utils/returnIntent.
 const noMoneyReturn = computed(() => isNoMoneyReturn(invoice_doc.value));
 const returnIntentDialog = ref(false);
+const returnIntentPreset = ref(null);
+const returnConfirm = computed(() => returnConfirmFigures(invoice_doc.value));
 let resolveReturnIntent = null;
-const askReturnIntent = () =>
+const askReturnIntent = (preset = null) =>
 	new Promise((resolve) => {
 		resolveReturnIntent = resolve;
+		returnIntentPreset.value = preset;
 		returnIntentDialog.value = true;
 	});
 const settleReturnIntent = (intent) => {
@@ -2240,7 +2249,7 @@ const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {})
 	});
 	let returnIntent = null;
 	if (decision.action === "ask") {
-		returnIntent = await askReturnIntent();
+		returnIntent = await askReturnIntent(decision.intent);
 		if (!returnIntent || submissionInFlight.value) {
 			return;
 		}
