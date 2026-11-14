@@ -322,6 +322,13 @@
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
+		<ReturnItemsPicker
+			:model-value="pickerOpen"
+			:return-doc="pickerReturnDoc"
+			:format-currency="pickerCurrency"
+			@confirm="load_picked_return"
+			@cancel="cancel_picker"
+		/>
 	</v-row>
 </template>
 
@@ -334,9 +341,12 @@ import { useCustomersStore } from "../../../stores/customersStore";
 import { computed } from "vue";
 import { useResponsive } from "../../../composables/core/useResponsive";
 import { useTheme } from "../../../composables/core/useTheme";
+import ReturnItemsPicker from "./ReturnItemsPicker.vue";
+import { buildPickedReturnTotal, linesWithoutPicking } from "../../../utils/returnItemSelection";
 
 export default {
 	mixins: [format],
+	components: { ReturnItemsPicker },
 	setup() {
 		const invoiceStore = useInvoiceStore();
 		const uiStore = useUIStore();
@@ -364,6 +374,9 @@ export default {
 	},
 	data: () => ({
 		invoicesDialog: false,
+		// Tick-to-return: the loaded invoice waiting for staff to pick its lines.
+		pickerOpen: false,
+		pickerReturnDoc: null,
 		singleSelect: true,
 		selected: [],
 		dialog_data: [],
@@ -782,10 +795,35 @@ export default {
 					this.customersStore.markSharedCustomer(return_doc.customer);
 				}
 
+				// Tick-to-return: staff pick the lines and quantities first
+				// (ReturnItemsPicker); load_picked_return builds the return.
+				this.pickerReturnDoc = return_doc;
+				// One line with 1 left: straight to the cart.
+				const direct = linesWithoutPicking(return_doc.items);
+				if (direct) {
+					this.load_picked_return(direct);
+					return;
+				}
+				this.pickerOpen = true;
+			}
+		},
+		pickerCurrency(value) {
+			return `${this.currencySymbol(this.pickerReturnDoc?.currency)} ${this.formatCurrency(value)}`;
+		},
+		cancel_picker() {
+			this.pickerOpen = false;
+			this.pickerReturnDoc = null;
+		},
+		load_picked_return(lines) {
+			const return_doc = this.pickerReturnDoc;
+			this.pickerOpen = false;
+			this.pickerReturnDoc = null;
+			if (!return_doc || !Array.isArray(lines) || !lines.length) return;
+			{
 				const invoice_doc = {};
 				const items = [];
 
-				return_doc.items.forEach((item) => {
+				lines.forEach((item) => {
 					const new_item = { ...item };
 					// reference original invoice row for backend validation
 					if (return_doc.doctype === "POS Invoice") {
@@ -838,12 +876,8 @@ export default {
 						}))
 					: [];
 
-				// Make sure grand_total is negative for returns
-				if (return_doc.grand_total > 0) {
-					invoice_doc.grand_total = return_doc.grand_total * -1;
-				} else {
-					invoice_doc.grand_total = return_doc.grand_total;
-				}
+				// Only the picked lines' share (the cart recalculates it).
+				invoice_doc.grand_total = -Math.abs(buildPickedReturnTotal(return_doc, lines));
 
 				// Cap on how much of this return may be refunded as cash: only what
 				// the customer actually paid on the original invoice. For an unpaid

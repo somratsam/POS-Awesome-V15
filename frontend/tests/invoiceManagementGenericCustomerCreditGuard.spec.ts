@@ -43,6 +43,11 @@ describe("InvoiceManagement.vue createReturn: return of a sale to a shared (gene
 		eventBus: { emit: vi.fn() },
 		uiStore: { closeInvoiceManagement: vi.fn() },
 		customersStore: { dropBearerVouchers: vi.fn(), markSharedCustomer: vi.fn() },
+		returnPickerOpen: false,
+		returnPickerDoc: null as any,
+		loadPickedReturn(lines: any[]) {
+			return (InvoiceManagement as any).methods.loadPickedReturn.call(this, lines);
+		},
 	});
 
 	const returnableItem = {
@@ -120,5 +125,34 @@ describe("InvoiceManagement.vue createReturn: return of a sale to a shared (gene
 		expect(context.uiStore.closeInvoiceManagement).toHaveBeenCalled();
 		expect(context.toastStore.show).not.toHaveBeenCalled();
 		expect(context.customersStore.markSharedCustomer).not.toHaveBeenCalled();
+	});
+
+	it("tick-to-return: a receipt with several lines opens the picker, and only the picked line is loaded", async () => {
+		const callMock = (globalThis as any).frappe.call as ReturnType<typeof vi.fn>;
+		callMock.mockResolvedValue({
+			message: {
+				doctype: "Sales Invoice",
+				name: "SINV-0003",
+				customer: "CUST-0001",
+				customer_name: "Jane Doe",
+				posa_customer_is_generic: 0,
+				grand_total: 210,
+				total: 200,
+				items: [returnableItem, { ...returnableItem, name: "SINV-0003-ITEM-002", item_code: "ITEM-002", qty: 2 }],
+				payments: [],
+			},
+		});
+
+		const context = baseContext();
+		await (InvoiceManagement as any).methods.createReturn.call(context, { name: "SINV-0003", doctype: "Sales Invoice" });
+		expect(context.returnPickerOpen).toBe(true);
+		expect(context.eventBus.emit).not.toHaveBeenCalled();
+
+		context.loadPickedReturn([{ ...returnableItem, name: "SINV-0003-ITEM-002", item_code: "ITEM-002", qty: 1, amount: 100 }]);
+		const payload = context.eventBus.emit.mock.calls[0][1];
+		expect(payload.invoice_doc.items).toHaveLength(1);
+		expect(payload.invoice_doc.items[0]).toMatchObject({ item_code: "ITEM-002", qty: -1, sales_invoice_item: "SINV-0003-ITEM-002" });
+		expect(payload.invoice_doc.grand_total).toBeCloseTo(-105, 6);
+		expect(context.returnPickerOpen).toBe(false);
 	});
 });

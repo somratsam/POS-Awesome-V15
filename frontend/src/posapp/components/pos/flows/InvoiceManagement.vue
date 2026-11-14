@@ -1915,6 +1915,13 @@
 			</v-card-actions>
 		</v-card>
 	</v-dialog>
+	<ReturnItemsPicker
+		:model-value="returnPickerOpen"
+		:return-doc="returnPickerDoc"
+		:format-currency="returnPickerCurrency"
+		@confirm="loadPickedReturn"
+		@cancel="cancelReturnPicker"
+	/>
 </template>
 
 <script>
@@ -1947,6 +1954,8 @@ import { resolvePaymentPrintFormat } from "../../../utils/paymentPrintFormat";
 import { recordCreditNoteReprint, REPRINT_SETTINGS } from "../../../utils/creditNoteReprint";
 import { voucherErrorToast } from "../../../utils/voucherMessages";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
+import ReturnItemsPicker from "./ReturnItemsPicker.vue";
+import { buildPickedReturnTotal, linesWithoutPicking } from "../../../utils/returnItemSelection";
 import {
 	canDeleteDocumentSourceRecord,
 	commitDocumentFlowAction,
@@ -1967,6 +1976,7 @@ export default {
 	mixins: [format],
 	components: {
 		DocumentSourceSelector,
+		ReturnItemsPicker,
 	},
 	setup() {
 		const uiStore = useUIStore();
@@ -2009,6 +2019,9 @@ export default {
 		};
 	},
 	data: () => ({
+		// Tick-to-return: the invoice whose lines staff are picking to return.
+		returnPickerOpen: false,
+		returnPickerDoc: null,
 		activeTab: "history",
 		viewMode: "list",
 		loading: false,
@@ -3936,8 +3949,36 @@ export default {
 					this.customersStore.markSharedCustomer(returnDoc.customer);
 				}
 
+				// Tick-to-return: staff pick the lines and quantities first
+				// (ReturnItemsPicker); loadPickedReturn builds the return.
+				this.returnPickerDoc = returnDoc;
+				// One line with 1 left: straight to the cart.
+				const direct = linesWithoutPicking(returnDoc.items);
+				if (direct) {
+					this.loadPickedReturn(direct);
+					return;
+				}
+				this.returnPickerOpen = true;
+			} catch (error) {
+				console.error("Error creating return invoice:", error);
+				this.toastStore.show({ title: __("Unable to prepare return invoice"), color: "error" });
+			}
+		},
+		returnPickerCurrency(value) {
+			return `${this.currencySymbol(this.returnPickerDoc?.currency || this.posProfile?.currency)} ${this.formatCurrency(value)}`;
+		},
+		cancelReturnPicker() {
+			this.returnPickerOpen = false;
+			this.returnPickerDoc = null;
+		},
+		loadPickedReturn(lines) {
+			const returnDoc = this.returnPickerDoc;
+			this.returnPickerOpen = false;
+			this.returnPickerDoc = null;
+			if (!returnDoc || !Array.isArray(lines) || !lines.length) return;
+			try {
 				const invoiceDoc = {
-					items: returnDoc.items.map((item) => {
+					items: lines.map((item) => {
 						const row = { ...item };
 						if (returnDoc.doctype === "POS Invoice") row.pos_invoice_item = item.name;
 						else row.sales_invoice_item = item.name;
@@ -3972,8 +4013,8 @@ export default {
 								conversion_rate: payment.conversion_rate,
 							}))
 						: [],
-					grand_total:
-						returnDoc.grand_total > 0 ? returnDoc.grand_total * -1 : returnDoc.grand_total,
+					// Only the picked lines' share (the cart recalculates it).
+					grand_total: -Math.abs(buildPickedReturnTotal(returnDoc, lines)),
 					update_stock: 1,
 					pos_profile: this.posProfile?.name,
 					company: this.posProfile?.company,
