@@ -1,0 +1,352 @@
+{#- Credit note voucher: a return that refunds no money prints the voucher
+    (app template, kept in git) instead of this receipt. -#}
+{%- if is_credit_note_voucher(doc) -%}
+{% include "posawesome/templates/print/credit_note_voucher.html" %}
+{%- else -%}
+{#- Desk Print -> PDF page height. wkhtmltopdf needs a fixed page height, so
+    estimate this receipt's length from its content (line heights measured on
+    staging) plus a safety margin; leftover space is split above/below the
+    receipt by .rcpt-page below. Has no effect on till (QZ Tray) printing. -#}
+{%- set _ns = namespace(lines=0) -%}
+{%- for _it in doc.items -%}
+{%- set _r = ((_it.get("posa_discount_reason") or "")|trim) if (_it.discount_percentage or 0) > 0 else "" -%}
+{%- set _r = "" if _r == "Not recorded" else _r -%}
+{#- A discount reason makes the discount line longer: ~44 characters fit per line at 80mm. -#}
+{%- set _ns.lines = _ns.lines + 2 + (1 if (_it.item_name or "")|length > 18 else 0) + (1 if _it.description else 0) + (1 if (_it.discount_percentage or 0) > 0 else 0) + ((((_r|length) + 40) / 44)|round(0, "ceil")|int - 1 if _r else 0) -%}
+{%- endfor -%}
+{%- set _pays = doc.payments|selectattr("amount")|list|length -%}
+{%- set _extra = (doc.payments|selectattr("reference_no")|list|length)
+      + (1 if (doc.change_amount or 0) > 0 else 0)
+      + ([(doc.taxes|length) - 1, 0]|max)
+      + (2 if print_settings.get("is_reprint") else 0) -%}
+{%- set _pdf_h = (286 + 5.6 * (_ns.lines + _pays + _extra) + 2.4 * (doc.items|length)
+      + (58 if doc.is_return else 0)
+      + (13 if (doc.posa_redeemed_customer_credit or 0) > 0 else 0)
+      + 8)|round(0)|int -%}
+<style>
+ * { margin: 0; padding: 0; box-sizing: border-box; }
+  body, .print-format {
+    width: 76mm;
+    font-family: 'Arial', sans-serif;
+    font-size: 14px;
+    color: #000;
+    background: #fff;
+    line-height: 1.6;
+  }
+  .divider { border-top: 1px dashed #000; margin: 18px 0; }
+  .company-name { font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 4px; }
+  .store-name { font-size: 16px; font-weight: bold; text-align: center; margin-bottom: 4px; }
+  .address { font-size: 13px; text-align: center; line-height: 2.0; }
+  .duplicate { font-size: 16px; font-weight: bold; text-align: center; margin: 8px 0; letter-spacing: 2px; }
+  .header-table { width: 100%; font-size: 12px; border-collapse: collapse; margin: 6px 0; }
+  .header-table td { padding: 3px 2px; vertical-align: top; }
+  .col-header {
+    display: flex; justify-content: space-between;
+    font-size: 14px; font-weight: bold;
+    border-top: 1px dashed #000; border-bottom: 1px dashed #000;
+    padding: 5px 0; margin: 6px 0;
+  }
+  .item-row { margin: 8px 0; }
+  .item-name-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; line-height: 1.6; }
+  .item-detail { font-size: 13px; padding-left: 2px; line-height: 1.6; }
+  .item-desc-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .item-desc-row > span:first-child { flex-shrink: 0; max-width: 60%; }
+  .item-desc-ar { direction: rtl; text-align: right; margin-left: 8px; min-width: 0; }
+  .item-discount { font-size: 13px; padding-left: 2px; line-height: 1.6; }
+  .item-discount-reason { overflow-wrap: anywhere; }
+  .total-section { text-align: center; margin: 8px 0; }
+  .total-amount { font-size: 20px; font-weight: bold; line-height: 1.8; }
+  .total-items { font-size: 13px; margin-top: 4px; }
+  .section-label { display: flex; justify-content: space-between; font-size: 14px; font-weight: bold; margin: 5px 0 4px 0; }
+  .payment-row { display: flex; justify-content: space-between; font-size: 14px; margin: 4px 0; line-height: 1.6; }
+  .tax-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+  .tax-table th { font-size: 12px; font-weight: bold; border-bottom: 1px dashed #000; padding: 4px 1px; text-align: left; }
+  .tax-table td { padding: 4px 1px; line-height: 1.6; }
+  .ref-section { text-align: center; font-size: 13px; margin-top: 6px; line-height: 1.6; }
+  .barcode-img { display: block; margin: 3px auto; width: 64mm; height: 14mm; }
+  .served-by { font-size: 13px; text-align: center; margin-top: 6px; line-height: 1.6; }
+  .policy { font-size: 13px; text-align: center; line-height: 1.8; margin: 6px 0; }
+  .policy-ar { font-size: 13px; text-align: right; direction: rtl; line-height: 1.8; margin: 6px 0; color: #000; }
+  .thankyou { font-size: 15px; font-weight: bold; text-align: center; margin: 8px 0 4px 0; letter-spacing: 1px; }
+  .thankyou-ar { font-size: 14px; text-align: center; direction: rtl; margin-bottom: 6px; line-height: 1.6; }
+  .loyalty-code-label { font-size: 12px; text-align: center; margin-top: 2px; }
+  .loyalty-code-value { font-size: 18px; font-weight: bold; text-align: center; letter-spacing: 3px; margin: 4px 0; }
+  .loyalty-code-hint { font-size: 11px; text-align: center; color: #000; line-height: 1.5; }
+
+  /* ---- Desk Print -> PDF only ----------------------------------------
+     Everything below is scoped to .print-format, a wrapper Frappe adds only
+     in Desk print view / PDF. The till (QZ Tray) prints this format's HTML
+     without it, so none of these rules reach the paper receipt. */
+  .print-format .header-table td, .print-format .tax-table td, .print-format .tax-table th { padding: 2px 1px !important; }
+  .print-format .item-name-row, .print-format .item-desc-row, .print-format .payment-row,
+  .print-format .section-label, .print-format .col-header { display: table; width: 100%; }
+  .print-format .item-name-row > span, .print-format .item-desc-row > span, .print-format .payment-row > span,
+  .print-format .section-label > span, .print-format .col-header > span { display: table-cell; vertical-align: baseline; }
+  .print-format .item-name-row > span:last-child, .print-format .payment-row > span:last-child,
+  .print-format .section-label > span:last-child, .print-format .col-header > span:last-child { text-align: right; white-space: nowrap; padding-left: 6px; }
+  .print-format .item-desc-row > span.item-desc-ar { padding-left: 8px; }
+  .print-format .tax-table th { color: #000; }
+  .print-format .rcpt-feed { display: none; }
+  .print-format {
+    page-width: 80mm;
+    page-height: {{ _pdf_h }}mm;
+    margin-top: 2mm; margin-bottom: 2mm; margin-left: 2mm; margin-right: 2mm;
+  }
+  body .print-format { margin: 0 auto; }
+  /* Centre the receipt vertically on the page (leftover safety space split top/bottom). */
+  .print-format .rcpt-page { display: table; width: 100%; height: {{ _pdf_h - 6 }}mm; }
+  .print-format .rcpt-cell { display: table-cell; vertical-align: middle; }
+</style>
+<div class="rcpt-page"><div class="rcpt-cell">
+
+{% set logo_data_uri = frappe.call("posawesome.posawesome.api.print_assets.get_receipt_logo_data_uri", pos_profile=doc.pos_profile) %}
+{% if logo_data_uri %}
+<div style="text-align:center; margin-bottom:5px;">
+  <img src="{{ logo_data_uri }}" style="width:40mm; height:auto;">
+</div>
+{% endif %}
+
+<!-- HEADER -->
+<div class="store-name">{{ doc.pos_profile or "" }}</div>
+{% if print_settings.get("is_reprint") %}
+<div class="duplicate">*** DUPLICATE ***</div>
+{% endif %}
+{% set store_contact = frappe.db.get_value("POS Profile", doc.pos_profile, ["posa_receipt_address_en", "posa_receipt_address_ar", "posa_receipt_phone"], as_dict=True) or {} %}
+<div class="address">
+  {{ (store_contact.posa_receipt_address_en or "")|replace("\n", "<br>")|safe }}<br>
+  {{ (store_contact.posa_receipt_address_ar or "")|replace("\n", "<br>")|safe }}<br>
+  TEL: {{ store_contact.posa_receipt_phone or "" }} : رقم التلفون<br>
+  س ت : CR No: 1817094
+</div>
+
+<div class="divider"></div>
+
+
+{#- Who served the customer: an explicit Sales Team entry if one was picked,
+    otherwise the POS Cashier (posa_cashier) -- the staff member whose PIN
+    unlocked the till for this sale, set server-side at submit -- and only
+    then the logged-in account (the shared till login), for older invoices
+    saved before the cashier was recorded. -#}
+{% set _served_by_user = doc.get("posa_cashier") or doc.modified_by %}
+{% set sales_person_name = doc.sales_team[0].sales_person if doc.sales_team else (frappe.db.get_value("User", _served_by_user, "full_name") or _served_by_user).split()[0] %}
+
+<!-- TRANSACTION INFO -->
+<table class="header-table">
+  <tr>
+    <td><b>Date</b><br>تاريخ</td>
+    <td><b>Time</b><br>وقت</td>
+    <td><b>Number</b><br>رقم</td>
+    <td><b>Sales Person</b><br>مسؤول مبيعا</td>
+  </tr>
+  <tr>
+    <td>{{ doc.posting_date.strftime('%d-%m-%Y') if doc.posting_date else "" }}</td>
+    <td>{{ (doc.posting_time or "")|string|truncate(5, True, '') }}</td>
+    <td>{{ doc.name.split('-')[-1] if doc.name else "" }}</td>
+    <td>{{ sales_person_name }}</td>
+  </tr>
+</table>
+
+<div class="divider"></div>
+
+<!-- COLUMN HEADERS -->
+<div class="col-header">
+  <span>Description وصف</span>
+  <span>Tax Incl مع الضريبة</span>
+</div>
+
+<!-- ITEMS -->
+{# Arabic description (Item.custom_description_arabic): one lookup per receipt.
+   Skipped entirely if the custom field doesn't exist on this site, so the
+   receipt never fails to print because of it. #}
+{% set desc_ar_map = {} %}
+{% if doc.items and frappe.db.exists("Custom Field", "Item-custom_description_arabic") %}
+{% for ar_row in frappe.db.get_all("Item", filters={"name": ["in", doc.items|map(attribute="item_code")|list]}, fields=["name", "custom_description_arabic"]) %}
+{% if ar_row.custom_description_arabic and ar_row.custom_description_arabic.strip() %}{% set _ = desc_ar_map.update({ar_row.name: ar_row.custom_description_arabic.strip()}) %}{% endif %}
+{% endfor %}
+{% endif %}
+{% for item in doc.items %}
+<div class="item-row">
+  <div class="item-name-row">
+    <span>{{ item.qty|int }}x {{ item.item_name }}</span>
+    <span>{{ "%.3f"|format(item.amount) }}</span>
+  </div>
+  <div class="item-detail">{{ item.item_code }}</div>
+  {% set desc_ar = desc_ar_map.get(item.item_code) %}
+  {% if desc_ar %}
+  <div class="item-detail item-desc-row"><span>{{ item.description or "" }}</span><span class="item-desc-ar" dir="rtl" lang="ar">{{ desc_ar|e }}</span></div>
+  {% elif item.description %}<div class="item-detail">{{ item.description }}</div>{% endif %}
+  {% if item.discount_percentage and item.discount_percentage > 0 %}
+  <div class="item-discount">
+    Discount {% set _reason = (item.get("posa_discount_reason") or "")|trim %}{% if _reason and _reason != "Not recorded" %}<span class="item-discount-reason">{{ _reason|e }}</span> {% endif %}{{ item.discount_percentage }}%
+    on {{ "%.3f"|format(item.price_list_rate) }} is -{{ "%.3f"|format((item.price_list_rate - item.rate) * item.qty) }}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="divider"></div>
+
+<!-- TOTAL -->
+<div class="total-section">
+  <div class="total-amount">**** OMR {{ "%.3f"|format(doc.grand_total) }} ****</div>
+  <div class="total-items">{{ doc.total_qty|int }} item{% if doc.total_qty > 1 %}s{% endif %} : صنف</div>
+</div>
+
+<div class="divider"></div>
+
+<!-- TAX -->
+<table class="tax-table">
+  <tr>
+    <th>Tax ضريبة</th>
+    <th>Amount</th>
+    <th>Rate</th>
+    <th>Excl. VAT</th>
+  </tr>
+  {% for tax in doc.taxes %}
+  <tr>
+    <td>{{ tax.description }}</td>
+    <td>{{ "%.3f"|format(tax.tax_amount) }}</td>
+    <td>{{ tax.rate }}%</td>
+    <td>{{ "%.3f"|format(doc.net_total) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<div class="divider"></div>
+
+<!-- PAYMENT -->
+<div class="section-label">
+  <span>Payment</span>
+  <span>دفع</span>
+</div>
+{% for payment in doc.payments %}
+{% if payment.amount != 0 %}
+<div class="payment-row">
+  <span>{{ payment.mode_of_payment }}</span>
+  <span>{{ "%.3f"|format(payment.amount) }} OMR</span>
+</div>
+{% endif %}
+{% endfor %}
+
+<!-- CHANGE -->
+{% if doc.change_amount and doc.change_amount > 0 %}
+<div class="payment-row" style="font-weight:bold;">
+  <span>Change الباقي</span>
+  <span>{{ "%.3f"|format(doc.change_amount) }} OMR</span>
+</div>
+{% endif %}
+
+<!--
+  CUSTOMER CREDIT LOGIC
+  ---------------------------------
+  Checks whether the credit being redeemed on THIS invoice was created
+  in the SAME POS shift/visit (genuine exchange) or from an OLDER,
+  separate visit (real future credit redemption).
+
+  Delegates to the same canonical check the Z Report, the live Closing
+  Shift Overview, and Invoice Management all now use
+  (posawesome.posawesome.api.credit_exchange.get_customers_with_same_shift_return),
+  instead of this template's own separate inline SQL -- that old query had
+  no docstatus filter and could count a draft or cancelled return; the
+  shared function adds that guard and keeps every surface agreeing on the
+  same result.
+-->
+{% set is_same_visit = false %}
+{% if doc.posa_redeemed_customer_credit and doc.posa_redeemed_customer_credit > 0 %}
+{% set same_shift_customers = frappe.call("posawesome.posawesome.api.credit_exchange.get_customers_with_same_shift_return", customers=[doc.customer], pos_opening_shift=doc.posa_pos_opening_shift) %}
+{% if same_shift_customers and doc.customer in same_shift_customers %}
+{% set is_same_visit = true %}
+{% endif %}
+{% endif %}
+{% if doc.is_return %}
+<div class="payment-row" style="font-weight:bold;">
+  <span>Store Credit Issued رصيد صادر</span>
+  <span>{{ "%.3f"|format(doc.grand_total|abs) }} OMR</span>
+</div>
+{% endif %}
+
+{% if doc.posa_redeemed_customer_credit and doc.posa_redeemed_customer_credit > 0 %}
+{% if is_same_visit %}
+<div class="payment-row" style="font-weight:bold;">
+  <span>Exchange Value مبادلة</span>
+  <span>-{{ "%.3f"|format(doc.posa_redeemed_customer_credit) }} OMR</span>
+</div>
+{% else %}
+<div class="payment-row" style="font-weight:bold;">
+  <span>Credit Applied رصيد مستخدم</span>
+  <span>-{{ "%.3f"|format(doc.posa_redeemed_customer_credit) }} OMR</span>
+</div>
+{% if doc.posa_remaining_customer_credit_balance and doc.posa_remaining_customer_credit_balance > 0 %}
+<div class="payment-row" style="font-weight:bold;">
+  <span>Remaining Credit رصيد متبقي</span>
+  <span>{{ "%.3f"|format(doc.posa_remaining_customer_credit_balance) }} OMR</span>
+</div>
+{% endif %}
+{% endif %}
+{% endif %}
+
+<div class="divider"></div>
+
+<!-- REFERENCE -->
+<div class="ref-section" style="font-size:14px; font-weight:bold; letter-spacing:1px;">
+  Reference: {{ doc.name }}
+</div>
+{% if not doc.is_return %}
+<!-- INVOICE BARCODE: scanned on the POS Returns screen to load this invoice -->
+{{ code128_svg(invoice_scan_code(doc.name)) }}
+{% if doc.posa_return_valid_upto %}
+<div class="ref-section" style="font-weight:bold;">
+  Return/Exchange valid until: {{ frappe.utils.formatdate(doc.posa_return_valid_upto) }}
+</div>
+<div class="ref-section">صالح للإرجاع/الاستبدال حتى {{ frappe.utils.formatdate(doc.posa_return_valid_upto) }}</div>
+{% endif %}
+{% endif %}
+{% for payment in doc.payments %}
+{% if payment.reference_no %}
+<div class="ref-section" style="font-size:13px; font-weight:bold;">
+  Card Ref: {{ payment.reference_no }}
+</div>
+{% endif %}
+{% endfor %}
+
+<!-- SERVED BY -->
+<div class="served-by">You have been served by &nbsp; {{ sales_person_name }}</div>
+
+<div class="divider"></div>
+
+<!-- EXCHANGE POLICY -->
+<div class="policy">Exchange only within 15 days of purchase and only if there is genuine damage. With tags attached &amp; Original invoice. Item must be in good condition.</div>
+<div class="policy-ar">الاستبدال خلال 15 يوم من تاريخ الشراء فقط اذا كان هناك ضرر حقيقي بالمنتج وان تكون بحالة جيدة مع ارفاق الفاتورة.</div>
+
+<div class="divider"></div>
+
+{% if doc.is_return %}
+<div class="policy" style="font-weight:bold;">
+  Store Credit valid for 3 months from issue date.<br>
+  Please keep this receipt as your credit note.
+</div>
+<div class="policy-ar">
+  رصيد المتجر صالح لمدة 3 أشهر من تاريخ الإصدار.<br>
+  يرجى الاحتفاظ بهذه الفاتورة كإشعار دائن.
+</div>
+<div class="divider"></div>
+{% endif %}
+
+{# LOYALTY CODE SECTION — commented out, re-enable by removing this comment wrapper
+{% if doc.customer %}
+{% set customer_loyalty = frappe.db.get_value("Customer", doc.customer, ["posa_loyalty_portal_code", "posa_is_generic_customer"], as_dict=True) %}
+{% if customer_loyalty and customer_loyalty.posa_loyalty_portal_code and not customer_loyalty.posa_is_generic_customer %}
+<div class="loyalty-code-label">Your Loyalty Portal Code رمز الولاء الخاص بك</div>
+<div class="loyalty-code-value">{{ customer_loyalty.posa_loyalty_portal_code }}</div>
+<div class="loyalty-code-hint">Check your points online with your mobile number + this code<br>تحقق من نقاطك عبر الإنترنت باستخدام رقم هاتفك ورمزك</div>
+<div class="divider"></div>
+{% endif %}
+{% endif %}
+#}
+
+<!-- THANK YOU -->
+<div class="thankyou">THANK YOU FOR YOUR VISIT</div>
+<div class="thankyou-ar">شكراً لزيارتكم</div>
+<div class="rcpt-feed"><br><br><br></div>
+</div></div>
+{%- endif -%}

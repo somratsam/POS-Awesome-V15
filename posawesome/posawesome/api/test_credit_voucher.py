@@ -208,8 +208,11 @@ class TestVoucherTemplate(unittest.TestCase):
         label = credit_voucher.credit_voucher_label(credit_voucher.credit_voucher_code(doc.name))
         self.assertIn("Credit note voucher", text)
         self.assertIn("**** OMR 139.300 ****", text)
-        self.assertIn(f"Number: {label}", text)
-        self.assertIn("Customer: Sanju", text)
+        self.assertIn(f"Voucher code رمز القسيمة {label}", text)
+        self.assertIn(f"Return No. رقم المرتجع {doc.name}", text)
+        self.assertIn("Customer العميل Sanju", text)
+        self.assertIn("SWAN INTERNATIONAL S.P.C البجعة الدولية ش ش و", text)
+        self.assertIn("Tax Credit Note · إشعار دائن ضريبي", text)
         self.assertIn("[BARCODE]", text)
         self.assertEqual(html.count("<svg"), 1)
         self.assertIn("JACKET-BROWN PATTERN-40 1 139.300", text)
@@ -219,6 +222,34 @@ class TestVoucherTemplate(unittest.TestCase):
         self.assertNotIn("DUPLICATE", text)
         self.assertNotIn("NOT VALID", text)
         self.assertNotIn("VAT", text)
+
+    def test_original_invoice_number_and_date(self):
+        doc = _credit_return(return_against="ACC-SINV-2026-00241")
+        text = _text(self._render(doc))
+        self.assertIn("Original invoice الفاتورة الأصلية ACC-SINV-2026-00241", text)
+        orig_date = frappe.db.get_value("Sales Invoice", "ACC-SINV-2026-00241", "posting_date")
+        if orig_date:
+            self.assertIn(f"ACC-SINV-2026-00241 {getdate(orig_date).strftime('%d-%m-%Y')}", text)
+        self.assertNotIn("Original invoice", _text(self._render(_credit_return(return_against=None))))
+
+    def test_vat_line_from_the_returns_tax_rows(self):
+        doc = _credit_return(taxes=[{"description": "VAT - SI", "rate": 5, "tax_amount": -6.633}])
+        text = _text(self._render(doc))
+        self.assertIn("VAT 5% · ضريبة القيمة المضافة 6.633", text)
+        self.assertNotIn("VAT - SI", text)
+
+    def test_company_vat_number_from_tax_id(self):
+        company = frappe.db.get_value("Company", {"tax_id": ["is", "set"]}, ["name", "tax_id"], as_dict=True)
+        if not company:
+            self.skipTest("no company with a Tax ID on this site")
+        text = _text(self._render(_credit_return(company=company.name)))
+        self.assertIn(f"VAT No: {company.tax_id} : الرقم الضريبي", text)
+        self.assertNotIn("VAT No", _text(self._render(_credit_return(company=None))))
+
+    def test_time_before_ten_has_two_digit_hours(self):
+        text = _text(self._render(_credit_return(posting_time="3:40:56.076094")))
+        self.assertIn(" 03:40 ", text)
+        self.assertNotIn("3:40:", text)
 
     def test_reprint_says_duplicate_and_keeps_the_code(self):
         text = _text(self._render(_credit_return(), reprint=True))
@@ -260,6 +291,9 @@ class TestVoucherTemplate(unittest.TestCase):
         text = _text(html)
         self.assertIn("*** BALANCE · رصيد ***", text)
         self.assertIn("Used 45.000 on sale ACC-SINV-2026-00330. Remaining 5.000.", text)
+        # Arabic line: each number isolated so it never breaks or reorders
+        self.assertIn('<bdi class="nowrap" dir="ltr">ACC-SINV-2026-00330</bdi>', html)
+        self.assertIn("تم استخدام 45.000 في الفاتورة ACC-SINV-2026-00330 المتبقي 5.000", text)
         self.assertIn("**** OMR 5.000 ****", text)
         self.assertIn("[BARCODE]", text)
         self.assertNotIn("DUPLICATE", text)
