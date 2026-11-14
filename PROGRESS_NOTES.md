@@ -9750,3 +9750,101 @@ Rollback: to before tick-to-return `git checkout 3bc57258`; before the voucher
 `674d936a` (then bearer credit issued meanwhile can't be spent); everything
 `aea4114c` (also delete the Report "Staff Sales Performance"; the 3 fields
 stay). Each time `bench build --app posawesome`, clear-cache, restart.
+
+## 100. Invoice number per store (2026-11-14, `a10cf73c` on `develop-swan`, `6b09656b` on `stable`)
+
+**Request.** One company-wide series (ACC-SINV-2026-xxxxx) -> a series per
+store, set in Desk without code, returns in their own series; old invoices,
+credit notes and vouchers keep their numbers and keep working. Production
+switches on 1 January 2027; every POS Profile stays blank until then.
+
+**Built.** `api/invoice_naming.py`: POS Profile `posa_invoice_naming_series`
+(Select, "Sales and Return Controls" after Walk-in Customer; choices loaded by
+`pos_profile.js` from Sales Invoice's series list). Sales Invoice
+`before_naming` sets `naming_series` from the invoice's POS Profile, ignoring
+the till (Frappe skips the Select check for `naming_series`, so before this a
+till could send any series): sale `MCO-.YYYY.-`, return `MCO-CN-.YYYY.-`;
+blank -> `ACC-SINV-.YYYY.-`; no POS Profile (Desk) -> untouched; an amendment
+keeps the original's series (Frappe names it `<original>-N`). POS Profile
+`validate` refuses a series that isn't capital letters + `-.YYYY.-`, has a
+`CN` part, is longer than 4 characters, is ACC-SINV, or whose sales or `-CN`
+line isn't listed in Document Naming Settings. Document Naming Rule was not
+used: one counter forever (no yearly restart) and a misleading Series field.
+- Voucher: a credit note in a store series carries the prefix,
+  MCO-CN-2026-00001 -> `C26MCO00001xxxx`, printed `C26-MCO-00001-xxxx`; the
+  default series keeps the old form (old codes byte-identical). Lookup
+  narrows by `%-CN-20yy-n` and verifies the whole code.
+- Lost-voucher lookup by return number (`find_return_by_number`) is limited to
+  the authorized POS Profile (full name and number part).
+- Receipt barcode (`invoice_scan_code`): store names whole; ACC-SINV keeps the
+  number part. Returns search: a number-only scan (`\d{4}-\d+(-\d+)?`) opens
+  the exact `ACC-SINV-<number>` sale when it exists, else the normal LIKE.
+- Barcode length, measured (Chromium render, thresholded to dots, zxing) on
+  the 64 mm barcode: 16 characters / 231 modules decoded at 171, 180 and 203
+  dpi; 18 (253) failed at 171; 19 (264, full ACC-SINV name) failed at 171 and
+  180. Hence the 4-character prefix: names 15, vouchers 16; 3 letters keeps
+  an amendment (-1) at 16 too.
+
+**Verified on staging.** Rolled-back run: series added, picked on Test Pos ->
+sale ZQT-2026-00001 and return ZQT-CN-2026-00001 with the till sending
+`HACK-.YYYY.-`; voucher C26-ZQT-00001-26D9; `test 222` (blank) -> ACC-SINV;
+amendment of ACC-SINV-2026-00399 -> `-1`, ACC-SINV series; a CN series
+refused on the profile; nothing left behind (ACC-SINV counter 399). User then
+set it up in Desk and tested: all good.
+
+**Regression check.** Frontend 291/291 files, 1846/1846. Backend in
+isolation: `test_invoice_naming` 26 (incl. real `set_new_name`, rolled back),
+`test_credit_voucher` 63, `test_print_barcode` 4, `test_payments` 12,
+`test_stored_value` 2, `test_sales_credit` 51, `test_pos_awesome_branding` 3,
+`test_invoice_reporting_fields` 35, `test_customer_credit_invoice_fields` 2,
+`invoice_processing.test_utils` 12 and `.test_payment` 4; `test_invoices`,
+`test_submitted_invoice_shift_security`, `test_invoice_cancel_hooks`,
+`test_creation` fail identically with the change stashed (pre-existing).
+`bench build` exit 0. Migrate exit 0 twice, field position stable. System
+Settings 3/3, Asia/Muscat.
+
+**Production deploy: sections 95-100 together** (site `site1.local`; `stable`
+`aea4114c` -> `6b09656b`; replaces section 99's plan).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `aea4114c`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- section 99 step 3 (section 96 step 3 + three more), plus:
+   ```
+   cd ~/frappe-bench
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name='POS Profile-posa_invoice_naming_series' OR (dt='POS Profile' AND fieldname='posa_invoice_naming_series');
+   SHOW COLUMNS FROM \`tabPOS Profile\` LIKE 'posa_invoice_naming_series';
+   SELECT name FROM \`tabDocument Naming Rule\` WHERE document_type='Sales Invoice' AND disabled=0;
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype='Sales Invoice' AND doctype_event='Before Insert' AND disabled=0;"
+   grep -rn "before_naming" apps/*/*/hooks.py
+   bench --site site1.local mariadb -e "SELECT naming_series, is_return, COUNT(*) FROM \`tabSales Invoice\` GROUP BY 1,2;"
+   ```
+   -> no rows, nothing; last query: only `ACC-SINV-.YYYY.-` (anything else:
+   stop and check before 1 January -- old receipts are scanned by number only
+   for ACC-SINV).
+4. `cd apps/posawesome && git fetch upstream && git merge --ff-only 6b09656b`
+   -> `git rev-parse --short HEAD` = `6b09656b`.
+5. `bench --site site1.local migrate` -- exit 0 (3 fields and the report from
+   95-96, the POS Profile field from 100).
+6. `bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Checks: section 99 step 8, plus
+   ```
+   echo 'h=frappe.get_hooks("doc_events"); print(h["Sales Invoice"]["before_naming"], h["POS Profile"]["validate"]); print(frappe.get_meta("POS Profile").get_field("posa_invoice_naming_series").insert_after, frappe.db.sql("SELECT COUNT(*) FROM `tabPOS Profile` WHERE IFNULL(posa_invoice_naming_series,\"\")!=\"\"")[0][0]); from posawesome.posawesome.api.credit_voucher import credit_voucher_code as v; print(v("ACC-SINV-2026-00247")[:8])' | bench --site site1.local console
+   ```
+   -> `[...set_invoice_naming_series] [...validate_pos_profile]`, then
+   `posa_walkin_customer 0`, then `C2600247`.
+9. `bench --site site1.local posa-refresh-sales-credit --dry-run`, then the
+   real run, then once more -> 0 changed (section 96 step 9).
+10. Till checks: section 99 step 10, plus: a new sale is still the next
+    `ACC-SINV-2026-` number; scanning its receipt on Returns opens it; a
+    no-refund return's voucher reads `C26-<number>-xxxx` and works.
+11. After linking Sales Persons: section 99 step 11.
+**1 January 2027** (before the first sale; System Manager): Document Naming
+Settings -> Sales Invoice -> keep `ACC-SINV-.YYYY.-` first, add `<P>-.YYYY.-`
+and `<P>-CN-.YYYY.-` per store -> Update Series List; each POS Profile ->
+More Info -> Sales and Return Controls -> Invoice Naming Series -> Save.
+First sale -> `<P>-2027-00001`.
+Rollback: before store numbering `git checkout 7519cb16` (the field stays,
+harmless while blank; after 1 January blank every profile first -- vouchers
+already issued with a store prefix would no longer be found); further back as
+section 99. Each time `bench build --app posawesome`, clear-cache, restart.
