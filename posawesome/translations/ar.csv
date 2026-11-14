@@ -1963,7 +1963,7 @@ Paid with a voucher from a sale to {0} — the customer stays {0}.,مدفوع ب
 "This return of a sale to ""{0}"", a shared customer account, must be refunded in full or not at all. With no refund, its whole value is given as a voucher that works like cash.","يجب أن يُسترد مرتجع البيع إلى ""{0}""، وهو حساب عميل مشترك، بالكامل أو لا يُسترد إطلاقاً. بدون استرداد، تُعطى قيمته كاملة كقسيمة تعمل مثل النقد."
 "A return without an invoice can't leave store credit on ""{0}"", a shared customer account: select or create the real customer. (A return of a sale to ""{0}"" made from its receipt gives the credit as a voucher instead.)","لا يمكن لمرتجع بدون فاتورة أن يترك رصيداً على ""{0}""، وهو حساب عميل مشترك: اختر العميل الفعلي أو أنشئه. (أما مرتجع البيع إلى ""{0}"" من إيصاله فيُعطى رصيده كقسيمة.)"
 "This voucher is on ""{0}"", a shared customer account, and its credit wasn't given from the receipt of a sale, so it can't be used.","هذه القسيمة على ""{0}""، وهو حساب عميل مشترك، ولم يُعطَ رصيدها من إيصال بيع، لذا لا يمكن استخدامها."
-Anonymous customer,عميل مجهول
+Walk-in (no customer),عميل عابر (بدون عميل)
 Choose items to return,اختر الأصناف المرتجعة
 Select all,تحديد الكل
 Tick the items the customer is returning.,حدّد الأصناف التي يرجعها العميل.
@@ -1976,3 +1976,10 @@ Return selected,إرجاع المحدد
 Nothing selected,لم يتم تحديد شيء
 {0} of {1} lines · {2},{0} من {1} أسطر · {2}
 Select at least one item to return,حدّد صنفاً واحداً على الأقل للإرجاع
+Back to Desk,العودة إلى المكتب
+Leave the POS for the Desk home,مغادرة نقطة البيع إلى الصفحة الرئيسية للمكتب
+Leave the POS?,مغادرة نقطة البيع؟
+The current sale will be kept as a draft.,سيتم حفظ عملية البيع الحالية كمسودة.
+Stay,البقاء
+Save draft and leave,حفظ كمسودة والمغادرة
+The current sale couldn't be saved. It is still in the cart.,تعذّر حفظ عملية البيع الحالية. لا تزال في السلة.

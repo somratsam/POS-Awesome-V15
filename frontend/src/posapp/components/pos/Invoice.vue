@@ -1366,6 +1366,14 @@ export default {
 			set_all_items: this.handleSetAllItems,
 			load_return_invoice: this.handleLoadReturnInvoice,
 			share_last_invoice: this.share_last_invoice,
+			// Back to Desk (Navbar.vue): keep the current sale as a draft first.
+			save_draft_before_leaving: (request) => {
+				if (!request) return;
+				request.handled = true;
+				Promise.resolve(this.save_and_clear_invoice())
+					.then((saved) => request.done?.(Boolean(saved)))
+					.catch(() => request.done?.(false));
+			},
 			focus_cart_item_qty: this.focusCartItemQty,
 			set_new_line: this.handleSetNewLine,
 			calc_uom: this.calc_uom,

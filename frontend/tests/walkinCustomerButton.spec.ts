@@ -18,16 +18,23 @@ describe("pos_profile prop actually reaches Customer.vue (regression: it previou
 	});
 });
 
-describe("Anonymous customer (walk-in) button", () => {
+describe("Walk-in (no customer) button", () => {
 	it("is gated on the POS Profile's posa_walkin_customer field, not shown unconditionally", () => {
 		expect(customerSource).toContain('v-if="pos_profile?.posa_walkin_customer"');
 	});
 
 	it("carries the exact agreed label", () => {
-		expect(customerSource).toContain('{{ __("Anonymous customer") }}');
+		expect(customerSource).toContain('{{ __("Walk-in (no customer)") }}');
 	});
 
-	it("is visually muted (text variant, small size), not equal weight to the search field", () => {
+	it("has a subtle highlight in the theme's primary colour (tint and outline), not a loud fill", () => {
+		const rule = customerSource.match(/\.walkin-customer-btn \{[^}]*\}/s)?.[0] || "";
+		expect(rule).toContain("background-color: rgba(var(--v-theme-primary), 0.08)");
+		expect(rule).toContain("border: 1px solid rgba(var(--v-theme-primary), 0.35)");
+		expect(rule).not.toContain("opacity");
+	});
+
+	it("is small and text-weight, not equal weight to the search field", () => {
 		expect(customerSource).toMatch(/<v-btn[^>]*class="walkin-customer-btn"[^>]*variant="text"/s);
 		expect(customerSource).toMatch(/<v-btn[^>]*class="walkin-customer-btn"[^>]*size="small"/s);
 	});
