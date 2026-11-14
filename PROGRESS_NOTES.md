@@ -9659,3 +9659,94 @@ Rollback: `git checkout 674d936a`, `bench build --app posawesome`,
 clear-cache, restart. Bearer credit issued meanwhile stays on Anonymous;
 the old code can't spend it (generic-customer credit refused) until this
 change is back.
+
+## 99. Tick-to-return (2026-11-14, `2f7c1bf4` on `develop-swan`, `7519cb16` on `stable`)
+
+**Request.** A scanned receipt loaded every line into the return cart and
+staff deleted what wasn't returned -- easy to return too much. Now: nothing
+selected; staff tick the lines being returned (ticking = qty 1) and set each
+quantity, never above what is still returnable; original price and discount
+kept. One-line receipt with 1 left: straight to the cart. One line with 2+:
+the step, pre-ticked at the full quantity. Nothing ticked: "Select at least
+one item to return". Named and Anonymous returns, exchanges, Invoice
+Management.
+
+**Built.** `utils/returnItemSelection.ts` (initialReturnPicks, setPicked,
+setPickedQty, pickedReturnLines, linesWithoutPicking, buildPickedReturnTotal);
+`components/pos/flows/ReturnItemsPicker.vue` ("Choose items to return": tick,
+-/qty/+, Returnable, price, line amount, Select all, summary, error); Returns.vue
+(`submit_dialog` -> picker -> `load_picked_return`) and InvoiceManagement.vue
+(`createReturn` -> picker -> `loadPickedReturn`) build the return from the
+picked lines only, with amounts for the picked quantity and the grand total
+in proportion. A step before the cart, so the cart table, its keyboard grid
+and totals are unchanged; staff can still edit lines in the cart. Server:
+`creation._drop_unpicked_return_lines` in `submit_invoice` drops return lines
+at qty 0 and refuses a return whose lines are all 0 (no lines at all is left
+to ERPNext's own check). 12 Arabic rows.
+
+**Verified on staging** (headless Chromium, throwaway cashier): Anonymous
+one-line qty 2 (00389) -> pre-ticked 2, typing 5 kept 2, returned 1 (00390)
+-> Exchange used bearer voucher C26-00390-A6SX (00391); scanning 00389 again
+(1 left) -> straight to the cart; named 3-line 00388 -> picked the handbag
+only (00392) -> Exchange with same-shift credit (00393), no lock note;
+Invoice Management return of 00388 -> only the 2 lines still returnable,
+empty selection refused, belt only (00394). Offline: loading a receipt needs
+the server, and a linked return can't be finished offline -- the till's
+return check (`invoice_utils/validation.ts`) fetches the original from the
+server at PAY; existing behaviour, unchanged.
+
+**Regression check.** Frontend 291/291 files, 1846/1846 (mutations: picker
+starting ticked, skip at 2, Returns loading every line -- each caught).
+Backend in isolation: `test_return_line_picking` 5 (mutation: no drop --
+caught), `test_credit_voucher` 63, `test_return_generic_customer_credit_guard`
+9, `test_sales_credit` 51, `test_sales_by_cashier` 24,
+`test_staff_sales_performance` 16, `test_payments` 12, `test_offline_sync_invoices`
+4, `test_invoice_reporting_fields` 35, `test_customer_credit_invoice_fields` 2,
+`test_print_barcode` 4, `test_api_imports` 4, `test_pos_access` 12,
+`test_submitted_invoice_edit_customer` 9, `invoice_processing.test_utils` 12
+and `.test_payment` 4, closing `test_same_shift_exchange` 5,
+`test_sales_breakdown` 6, `test_z_report` 3, `test_z_report_vat` 8;
+`test_creation` the same 8 errors as before. `bench build` exit 0. No migrate.
+System Settings restored 3/3, Asia/Muscat.
+
+**Production deploy: sections 95-99 together** (site `site1.local`; `stable`
+`aea4114c` -> `7519cb16`; replaces the separate steps of sections 96, 97, 98).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `aea4114c`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- section 96 step 3 (every query no rows, commands print
+   nothing), plus:
+   ```
+   cd ~/frappe-bench
+   bench --help 2>/dev/null | grep -iE "fill-sales-person"
+   grep -rn "is_bearer_credit_note" apps/*/*/hooks.py
+   bench --site site1.local mariadb -e "SELECT html LIKE '%credit_note_voucher.html%' FROM \`tabPrint Format\` WHERE name='Swan Sales Invoice';"
+   ```
+   -> nothing, nothing, `1`.
+4. `cd apps/posawesome && git fetch upstream && git merge --ff-only 7519cb16`
+   -> `git rev-parse --short HEAD` = `7519cb16`.
+5. `bench --site site1.local migrate` -- exit 0 (3 fields and the Staff Sales
+   Performance report from sections 95-96; nothing new after that).
+6. `bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Checks: section 96 step 8 (fields, hooks, report), plus
+   ```
+   bench --help 2>/dev/null | grep -iE "fill-sales-person|refresh-sales-credit"
+   echo 'print("posawesome.posawesome.api.credit_voucher.is_bearer_credit_note" in frappe.get_hooks("jinja")["methods"]); from posawesome.posawesome.api.invoice_processing import creation as c; from posawesome.posawesome.api import sales_credit as s; print(c.apply_pos_sales_team is s.apply_pos_sales_team, hasattr(c, "_drop_unpicked_return_lines"))' | bench --site site1.local console
+   ```
+   -> both commands; `True` then `True True`.
+9. `bench --site site1.local posa-refresh-sales-credit --dry-run`, then the
+   real run, then once more -> 0 changed (section 96 step 9).
+10. Till checks: section 96 step 10, section 98 step 9 (Anonymous return by
+    receipt scan -> voucher -> Exchange; Return Without Invoice to Anonymous
+    refused; button "Anonymous customer"), and tick-to-return: a receipt with
+    several lines opens "Choose items to return" with nothing ticked; Return
+    selected with nothing ticked is refused; ticking one line returns only
+    that line at its original price; a one-line receipt with 1 goes straight
+    to the cart.
+11. After linking Sales Persons: `posa-fill-sales-person --dry-run`, real run;
+    then `posa-refresh-sales-credit --dry-run`, real run; each once more -> 0
+    changed (section 97 step 10).
+Rollback: to before tick-to-return `git checkout 3bc57258`; before the voucher
+`674d936a` (then bearer credit issued meanwhile can't be spent); everything
+`aea4114c` (also delete the Report "Staff Sales Performance"; the 3 fields
+stay). Each time `bench build --app posawesome`, clear-cache, restart.
