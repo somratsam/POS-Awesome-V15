@@ -9949,3 +9949,70 @@ restored to 3/3, Asia/Muscat. Offline receipts use their own template
 Rollback: `... receipt_record.restore_swan_receipt --kwargs "{'backup_path': '<path from step 6>'}"`
 (the old HTML works with the new code too); code: `git checkout 8afc7177`,
 clear-cache, restart.
+
+## 102. Return confirmation and the exchange voucher safety net (2026-11-14, `65c81f92` on `develop-swan`, `bcae9fec` on `stable`)
+
+**Why.** A cashier clicked "Exchange: continue to new sale" on a return the
+customer never asked for, not knowing it submits the return. Production
+ACC-SINV-2026-01500 was left with unused credit and no new sale (the user is
+correcting it with a matching sale; its shift was closed). The one-screen
+exchange is too big for now; this is the small fix (approved: 1, 2 and 3).
+
+**Built (frontend only).**
+1. Footer buttons for a no-money return: "Submit return → Exchange" (Ctrl/⌘+
+   Enter label kept) and "Submit return → Credit note".
+2. `resolveReturnSubmit` now always returns `{action: "ask", intent}` for a
+   no-money return: the button's intent, Exchange for a plain submit key,
+   `null` (both options) for a print key. `ReturnIntentDialog` became the
+   confirmation "Submit this return?": items going back to stock (returned
+   quantity), "<credit> becomes store credit for <customer>." (credit =
+   |grand_total|, `returnConfirmFigures`), "This can't be undone at the till.",
+   "Then: start the customer's new sale" / "Then: print the credit note
+   voucher"; **Back** focused (Escape = Back). Refunds and sales unchanged.
+3. Safety net. `customersStore.pendingExchange` {returnName, doctype,
+   customer, customerName, credit} is set when a return is submitted as an
+   exchange (`usePaymentSubmission`, with `armExchangeCredit`). It is settled
+   by the next sale for that customer if it used credit; otherwise
+   `abandonPendingExchange()` opens `exchangePrompt`: the sale submitted
+   without credit (checked before the post-submit customer reset), another
+   customer chosen (`setSelectedCustomer`), Cancel Sale (`cancel_invoice`,
+   before the cart/customer reset), Back to Desk (`Navbar.goDesk`, carries on
+   leaving when the prompt closes). `ExchangeCreditPrompt.vue` (mounted once
+   in `DefaultLayout`): "Print the credit note voucher?" -- return number,
+   customer, unused credit; Print (focused) prints the return through the same
+   path as "Submit return → Credit note" (`usePaymentPrinting.loadPrintPage`,
+   no reprint settings: first print, not DUPLICATE); Not now / Escape skip; a
+   failed print says to reprint from Invoice Management. In memory only: a
+   page reload forgets a pending exchange.
+Arabic for all 15 new strings (`ar.csv`).
+
+**Browser check (staging, headless Chromium, throwaway PIN cashier, then
+disabled).** Return of one item of MCO-2026-00001: footer labels; the
+Exchange button, Ctrl+X and Alt+P each opened the confirmation (Alt+P with
+both options), Back focused; Enter on it and Escape closed it with nothing
+submitted (0 returns). Submitted as exchange (MCO-CN-2026-00003, credit
+43.470) -> Cancel Sale -> prompt with the right text, Print focused -> Print
+requested `get_html_and_style` for MCO-CN-2026-00003 (no QZ here: the
+existing browser-print fallback question) and closed. Second exchange
+(MCO-CN-2026-00004, 96.600) -> Back to Desk -> prompt -> Not now -> left for
+the Desk. Both test returns cancelled afterwards. Customer-change trigger
+covered by tests, not clicked through.
+
+**Checks.** vitest 294/294 files, 1880/1880 (Node 24): `returnIntent` 17,
+`exchangeCreditSafetyNet` 11 (store, prompt, wiring), `returnConfirmArabic`
+1, `usePaymentSubmission` 60 (+5: pending set, settled, abandoned before the
+reset), `backToDesk` 12 (+1); removing the customer-change trigger or the
+sale-submit trigger fails a test (checked). Backend: N/A, no Python changed.
+`bench build --app posawesome` exit 0. Migrate: N/A. Security: no new server
+call; the prompt prints with Frappe's permission-checked
+`get_html_and_style`; all text through `{{ }}` (no `v-html`).
+
+**Production deploy** (after section 101's; `stable` `07e088f4` -> `bcae9fec`).
+1. `git fetch upstream && git merge --ff-only bcae9fec`
+2. `bench build --app posawesome` (exit 0), `bench --site site1.local clear-cache`,
+   `sudo supervisorctl restart all`. No migrate.
+3. Tills hard-refresh (Ctrl+Shift+R).
+4. Check: a no-refund return -> "Submit return → Exchange" -> confirmation ->
+   Back (nothing submitted); then Exchange -> Cancel Sale -> "Print the credit
+   note voucher?" -> Print.
+Rollback: `git checkout 07e088f4`, build, clear-cache, restart.
