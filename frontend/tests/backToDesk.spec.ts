@@ -6,6 +6,7 @@ import { canUseDesk } from "../src/posapp/utils/deskAccess";
 const read = (path: string) => readFileSync(resolve(__dirname, "..", path), "utf8");
 const navbarSource = read("src/posapp/components/Navbar.vue");
 const menuSource = read("src/posapp/components/navbar/NavbarMenu.vue");
+const appBarSource = read("src/posapp/components/navbar/NavbarAppBar.vue");
 const invoiceSource = read("src/posapp/components/pos/Invoice.vue");
 const arabic = read("../posawesome/translations/ar.csv");
 
@@ -20,15 +21,27 @@ describe("Back to Desk: who sees it", () => {
 		expect(canUseDesk(undefined)).toBe(false);
 	});
 
-	it("is a Menu quick action gated on canUseDesk that emits go-desk", () => {
-		expect(menuSource).toMatch(/canUseDesk\(\)\s*\?\s*\{\s*id: "back-to-desk",\s*label: __\("Back to Desk"\)/);
-		expect(menuSource).toMatch(/case "goDeskAction":\s*this\.closeMenu\(\);\s*this\.\$emit\("go-desk"\);/);
-		expect(menuSource).toMatch(/emits: \[[\s\S]*"go-desk",[\s\S]*\]/);
+	it("is a back-arrow icon button with a tooltip, first in the top bar, gated on canUseDesk", () => {
+		const button = appBarSource.match(/<v-tooltip v-if="showBackToDesk"[\s\S]*?<\/v-tooltip>/)?.[0] || "";
+		expect(button).toContain(":text=\"__('Back to Desk')\"");
+		expect(button).toContain('@click="$emit(\'go-desk\')"');
+		expect(button).toContain('isRtl ? "mdi-arrow-right" : "mdi-arrow-left"');
+		expect(appBarSource).toMatch(/showBackToDesk\(\) \{\s*return canUseDesk\(\);/);
+		// Before the drawer icon and the store title.
+		expect(appBarSource.indexOf("navbar-back-to-desk")).toBeLessThan(appBarSource.indexOf("<v-app-bar-nav-icon"));
+		expect(appBarSource.indexOf("navbar-back-to-desk")).toBeLessThan(appBarSource.indexOf("<v-toolbar-title"));
+		expect(appBarSource).toMatch(/\.back-to-desk-btn \{\s*order: -1;/);
 	});
 
-	it("is forwarded by the real caller: Navbar listens for go-desk on NavbarMenu", () => {
-		const menuTag = navbarSource.match(/<NavbarMenu[\s\S]*?\/>/)?.[0] || "";
-		expect(menuTag).toContain('@go-desk="goDesk"');
+	it("is forwarded by the real caller: Navbar listens for go-desk on NavbarAppBar", () => {
+		const barTag = navbarSource.match(/<NavbarAppBar[\s\S]*?>/)?.[0] || "";
+		expect(barTag).toContain('@go-desk="goDesk"');
+	});
+
+	it("is no longer in the Menu", () => {
+		expect(menuSource).not.toContain("back-to-desk");
+		expect(menuSource).not.toContain("go-desk");
+		expect(menuSource).not.toContain("Back to Desk");
 	});
 });
 
@@ -113,7 +126,6 @@ describe("Back to Desk: no sale lost silently", () => {
 	it("has Arabic for every new string", () => {
 		for (const text of [
 			"Back to Desk",
-			"Leave the POS for the Desk home",
 			"Leave the POS?",
 			"The current sale will be kept as a draft.",
 			"Stay",
