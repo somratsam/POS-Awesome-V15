@@ -147,6 +147,54 @@ class TestSaleReceipt(_ReceiptCase):
         self.assertNotIn("Exchange Value", text)
 
 
+class TestItemDescription(_ReceiptCase):
+    """The English description line prints only when it isn't already part
+    of the item name; the Arabic description always prints."""
+
+    def render_with_arabic(self, doc, arabic):
+        template = (
+            RECEIPT.replace("exchange_credit_sources(doc)", "ex_sources")
+            .replace('frappe.db.exists("Custom Field", "Item-custom_description_arabic")', "True")
+            .replace(
+                'frappe.db.get_all("Item", filters={"name": ["in", _all_codes]}, fields=["name", "custom_description_arabic"])',
+                "ar_rows",
+            )
+        )
+        rows = [frappe._dict(name=code, custom_description_arabic=text) for code, text in arabic.items()]
+        return frappe.render_template(
+            template, {"doc": doc, "print_settings": frappe._dict(), "ex_sources": _sources(), "ar_rows": rows}
+        )
+
+    def _items(self, description):
+        return [{"item_code": "IT-2", "item_name": "ABITO IN JERSEY-1-XL", "qty": 1, "amount": 96.6,
+                 "price_list_rate": 96.6, "rate": 96.6, "description": description}]
+
+    def test_description_that_repeats_the_name_is_left_out(self):
+        for description in ("ABITO IN JERSEY", "abito  in jersey", "<p>ABITO IN JERSEY</p>", "ABITO IN JERSEY-1-XL"):
+            html = self.render(_doc(items=self._items(description)))
+            self.assertNotIn('<div class="item-detail">ABITO IN JERSEY', html, description)
+            self.assertIn("1x ABITO IN JERSEY-1-XL 96.600 IT-2 ****", _text(html), description)
+
+    def test_description_that_adds_something_prints(self):
+        text = _text(self.render(_doc(items=self._items("Viscose jersey dress, long sleeves"))))
+        self.assertIn("IT-2 Viscose jersey dress, long sleeves", text)
+
+    def test_arabic_description_always_prints(self):
+        html = self.render_with_arabic(_doc(items=self._items("ABITO IN JERSEY")), {"IT-2": "فستان جيرسي"})
+        self.assertIn('<span class="item-desc-ar" dir="rtl" lang="ar">فستان جيرسي</span>', html)
+        self.assertIn('<div class="item-detail item-desc-row"><span></span>', html)
+        both = self.render_with_arabic(_doc(items=self._items("Long sleeves")), {"IT-2": "فستان جيرسي"})
+        self.assertIn("IT-2 Long sleeves فستان جيرسي", _text(both))
+
+    def test_pdf_height_counts_only_printed_description_lines(self):
+        def page_height(doc):
+            return int(re.search(r"page-height: (\d+)mm", self.render(doc)).group(1))
+
+        repeated = page_height(_doc(items=self._items("ABITO IN JERSEY")))
+        shown = page_height(_doc(items=self._items("Long sleeves")))
+        self.assertIn(shown - repeated, (5, 6))  # one 5.6 mm line, rounded
+
+
 class TestReturnReceipt(_ReceiptCase):
     def test_card_refund(self):
         doc = _return(name="ACC-SINV-2026-00355", payments=[{"mode_of_payment": "Visa", "amount": -77.28}])
@@ -210,6 +258,22 @@ class TestExchangeReceipt(_ReceiptCase):
         self.assertNotIn("BALANCE voucher", text)
         self.assertNotIn("Remaining Credit", text)
         self.assertIn("Simplified Tax Invoice", text)
+
+    def test_no_minus_zero(self):
+        # A zero-rated, free returned line (tax and net 0) and a difference
+        # that is a float rest: 0.3 - 0.1 - 0.2 = -2.8e-17.
+        ret = _return(net_total=0, grand_total=-0.1, taxes=[{"description": "VAT - SI", "rate": 0, "tax_amount": 0}],
+                      items=[{"item_code": "IT-9", "item_name": "GIFT BAG", "qty": -1, "amount": -0.0,
+                              "price_list_rate": 0, "rate": 0}])
+        sale = self._sale(grand_total=0.3, payments=[{"mode_of_payment": "Visa", "amount": 0}])
+        text = _text(self.render(sale, _sources([ret], used=0.1, other_credit=0.2)))
+        self.assertNotIn("-0.000", text)
+        self.assertIn("**** OMR 0.000 **** Difference paid", text)
+        self.assertIn("Difference paid الفرق 0.000 OMR", text)
+        self.assertIn("VAT returned 0.000 0% 0.000", text)
+        self.assertIn("-1x GIFT BAG 0.000", text)
+        # A real deduction keeps its sign.
+        self.assertIn("Credit note used إشعار دائن مستخدم -0.200 OMR", text)
 
     def test_leftover_credit_only_points_to_the_balance_voucher(self):
         ret = _return(name="ACC-SINV-2026-00390", grand_total=-92.4, net_total=-88)

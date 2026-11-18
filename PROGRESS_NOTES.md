@@ -10351,3 +10351,52 @@ above plus test_stock_lookup_suggest 7, test_submitted_invoice_edit_supervisor
 13, test_offline_sync_invoices 4, invoice_processing.test_utils 12, all OK.
 No build (no frontend files), no migrate (no doctype/fixture). System
 Settings restored 3/3 Asia/Muscat, `precision("grand_total")` 3.
+
+## 106. Printout cleanup (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** Remove unnecessary lines from the receipt, exchange receipt,
+credit note voucher, BALANCE voucher and Z Report; receipt design otherwise
+unchanged. Before/after screenshots of every printout were approved.
+
+- **Receipt / exchange receipt** (`swan_receipt.html`): the English
+  description line is left out when it is part of the item name (case and
+  spaces ignored; variants "ABITO IN JERSEY-1-XL" / "ABITO IN JERSEY" - 1,375
+  of 2,040 items on staging); the Arabic description always prints. "You
+  have been served by" unchanged. The Arabic lookup moved above the Desk PDF
+  height estimate so it counts only printed description lines.
+- **Credit note voucher** (`credit_note_voucher.html`): "A lost voucher can
+  only be replaced by a supervisor" removed (named vouchers); "Validity
+  starting date" and the two validity tables replaced by one line "Valid
+  until DD-MM-YYYY : صالحة حتى"; "Voucher code" row only when there is no
+  barcode (used/expired); no Customer row on Anonymous (bearer) vouchers;
+  "Stamp and signature" and its 22 mm blank removed (note gets a 12 px gap
+  instead). **BALANCE voucher**: "Remaining X" removed (English and Arabic).
+  Desk PDF page height re-measured on staging PDFs: every type one page with
+  21-31 mm spare (HEAD's Anonymous and BALANCE PDFs spilled onto a blank
+  second page; fixed).
+- **Z Report** (`z_report.json`): 2.5 mm side margins as on the receipt,
+  font unchanged (13 px + margins: two "↳" sub-lines wrap from 10,000.000
+  OMR; accepted). Additional Information no longer repeats Number of
+  Receipts, Number of returns, Items Sold, Items returned, Number of Items,
+  Discounts Granted, Net Sales incl. VAT; hint "Per receipt and per item..."
+  removed. Hidden when 0: Returned, ↳ of sales made in this shift, Returned
+  count, Items returned, Credit notes issued / used, Left on credit notes,
+  the Takings credit-note terms, VAT on returned items; the Credit Notes
+  heading when all its lines are 0. Payment modes 0 everywhere hidden in
+  Today's Payments and Cash Balance ("Nothing opened, expected or counted"
+  when none is left). Kept: Gross Sales Receipts and Total Register (staff
+  use them), "Equals Today's Payments above.", "Below zero..." (only when the
+  printed Net Sales is below 0). A hidden 0 term never breaks a total.
+- **No "-0.000"**: `amt()` / `minus()` macros in the Z Report and the
+  receipt (literal "-" in front of a 0, a stored -0.0, or a float rest such
+  as an exchange's difference). Vouchers needed none (amounts `|abs`).
+  Normal amounts print byte-for-byte as before.
+
+**Checks.** Vitest 298/298 files, 1944/1944 tests. Backend in isolation:
+test_credit_voucher 69, test_swan_receipt 20, test_z_report_layout 16,
+test_z_report_item_counts 7, test_z_report_vat 8, test_z_report 3,
+test_z_report_cash_net_of_change 5, test_closing_variance 12,
+test_discount_reasons 34, test_print_assets 4, all OK. No build (no frontend
+files). Migrate twice, idempotent; Z Report record = git. System Settings
+3/3 Asia/Muscat, `precision("grand_total")` 3. Not checked: the on-screen
+Shift Overview for "-0.000" (not a printout).

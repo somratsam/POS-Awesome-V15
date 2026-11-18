@@ -32,13 +32,18 @@
 {%- set balance_sale = (print_settings.get("balance_for") or "")|string -%}
 {%- set balance_used = credit_voucher_balance_use(doc.name, balance_sale) if balance_sale and not is_used else 0 -%}
 {%- set is_balance = balance_used > 0 -%}
+{%- set shows_barcode = (not is_used) and (not is_expired) and voucher_code -%}
+{%- set is_bearer = is_bearer_credit_note(doc) -%}
 {%- set returned_items = doc.items or [] -%}
 {%- set _disc = (doc.discount_amount or 0)|abs -%}
 {#- PDF (Desk Print / download) needs a fixed page height: base length plus
-    about 6 mm per item line (long names take two). Till printing ignores it. -#}
+    about 6 mm per item line (long names take two). Till printing ignores it.
+    Measured on staging PDFs (about 21 mm spare below the last line): the
+    Anonymous note is longer; the USED banner, the partly used "Remaining
+    from original" lines and the BALANCE block add their lines. -#}
 {%- set _ns = namespace(lines=0) -%}
 {%- for _it in returned_items -%}{%- set _ns.lines = _ns.lines + 1 + (1 if (_it.item_name or "")|length > 22 else 0) -%}{%- endfor -%}
-{%- set _pdf_h = (362 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0) + (24 if is_balance else 0) + (12 if is_used else 0))|round(0)|int -%}
+{%- set _pdf_h = (292 + 6 * (_ns.lines + (1 if _disc else 0)) + (14 if print_settings.get("is_reprint") else 0) + (20 if is_balance else 0) + (16 if is_used else 0) + (9 if is_bearer else 0) + (12 if is_partly_used else 0))|round(0)|int -%}
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body, .print-format { width: 76mm; padding-left: 2.5mm; padding-right: 2.5mm; font-family: 'Arial', sans-serif; font-size: 13px; color: #000; background: #fff; line-height: 1.45; }
@@ -76,16 +81,13 @@
   .items td { padding: 2px 0; vertical-align: top; }
   .items .n { text-align: right; white-space: nowrap; padding-left: 6px; }
   .items .total td { border-top: 1px solid #000; font-weight: bold; }
-  .stamp { margin-top: 14px; display: table; width: 100%; font-size: 13px; }
-  .stamp > span { display: table-cell; }
-  .stamp > span:last-child { text-align: right; direction: rtl; }
-  .stamp-line { border-bottom: 1px solid #000; height: 22mm; margin: 4px 0 8px 0; }
+  .valid { font-size: 13px; text-align: center; margin: 8px 0 2px 0; }
   .legal { font-size: 12px; text-align: center; line-height: 1.5; margin-top: 6px; }
   .doc-title { font-size: 13px; font-weight: bold; text-align: center; line-height: 1.4; margin-bottom: 6px; }
   .nowrap { white-space: nowrap; }
   .balance { font-size: 13px; text-align: center; margin: 2px 0; }
   .balance-ar { font-size: 13px; text-align: center; direction: rtl; margin: 2px 0 6px 0; }
-  .note { font-size: 11px; text-align: center; line-height: 1.5; }
+  .note { font-size: 11px; text-align: center; line-height: 1.5; margin-top: 12px; }
   .note-ar { font-size: 11px; text-align: center; direction: rtl; line-height: 1.6; }
   .print-format .meta td { padding: 1px 0 !important; }
   .print-format .rcpt-feed { display: none; }
@@ -127,8 +129,8 @@
 {% endif %}
 {% if is_balance %}
 <div class="banner">*** BALANCE · رصيد ***</div>
-<div class="balance">Used {{ "%.3f"|format(balance_used) }} on sale {{ balance_sale|e }}. Remaining {{ "%.3f"|format(remaining) }}.</div>
-<div class="balance-ar">تم استخدام <bdi class="nowrap" dir="ltr">{{ "%.3f"|format(balance_used) }}</bdi> في الفاتورة<br><bdi class="nowrap" dir="ltr">{{ balance_sale|e }}</bdi><br>المتبقي <bdi class="nowrap" dir="ltr">{{ "%.3f"|format(remaining) }}</bdi></div>
+<div class="balance">Used {{ "%.3f"|format(balance_used) }} on sale {{ balance_sale|e }}.</div>
+<div class="balance-ar">تم استخدام <bdi class="nowrap" dir="ltr">{{ "%.3f"|format(balance_used) }}</bdi> في الفاتورة<br><bdi class="nowrap" dir="ltr">{{ balance_sale|e }}</bdi></div>
 {% elif print_settings.get("is_reprint") %}
 <div class="banner">*** DUPLICATE ***</div>
 {% endif %}
@@ -141,8 +143,12 @@
   {%- set _orig_date = frappe.db.get_value("Sales Invoice", doc.return_against, "posting_date") %}
   <tr><td class="l">Original invoice<span class="lar">الفاتورة الأصلية</span></td><td class="v nw">{{ doc.return_against|e }}{% if _orig_date %}<br><span class="d">{{ frappe.utils.getdate(_orig_date).strftime('%d-%m-%Y') }}</span>{% endif %}</td></tr>
   {%- endif %}
+  {%- if not shows_barcode %}
   <tr><td class="l">Voucher code<span class="lar">رمز القسيمة</span></td><td class="v nw">{{ voucher_label }}</td></tr>
+  {%- endif %}
+  {%- if not is_bearer %}
   <tr><td class="l">Customer<span class="lar">العميل</span></td><td class="v">{{ (doc.customer_name or doc.customer)|e }}</td></tr>
+  {%- endif %}
 </table>
 
 <div class="worth">This credit note voucher is worth</div>
@@ -155,16 +161,9 @@
 <div class="use">Can be used as payment for your next purchases. Any amount not used stays on this voucher.</div>
 <div class="use-ar">يمكن استخدامها كوسيلة دفع في مشترياتك القادمة، ويبقى أي مبلغ غير مستخدم على هذه القسيمة.</div>
 
-<table class="meta" style="margin-top:8px;">
-  <tr><td class="l">Validity starting date:</td><td class="v">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }}</td></tr>
-  <tr><td class="l">Validity ending date:</td><td class="v">{{ valid_to.strftime('%d-%m-%Y') }}</td></tr>
-</table>
-<table class="meta">
-  <tr><td class="ar" style="text-align:right;">تاريخ بداية الصلاحية: <span dir="ltr">{{ valid_from.strftime('%d-%m-%Y') if valid_from else "" }}</span></td></tr>
-  <tr><td class="ar" style="text-align:right;">تاريخ انتهاء الصلاحية: <span dir="ltr">{{ valid_to.strftime('%d-%m-%Y') }}</span></td></tr>
-</table>
+<div class="valid">Valid until <b class="nowrap">{{ valid_to.strftime('%d-%m-%Y') }}</b> : صالحة حتى</div>
 
-{% if not is_used and not is_expired and voucher_code %}
+{% if shows_barcode %}
 {{ code128_svg(voucher_code) }}
 <div class="code">{{ voucher_label }}</div>
 {% endif %}
@@ -191,14 +190,12 @@
   <tr class="total"><td>Total · الإجمالي</td><td class="n"></td><td class="n">{{ "%.3f"|format(original_value) }}</td></tr>
 </table>
 
-<div class="stamp"><span>Stamp and signature</span><span>الختم والتوقيع</span></div>
-<div class="stamp-line"></div>
 
-{% if is_bearer_credit_note(doc) %}
+{% if is_bearer %}
 <div class="note">This voucher works like cash: whoever presents it can use it.<br>A lost voucher can't be replaced.</div>
 <div class="note-ar">تعمل هذه القسيمة مثل النقد: يمكن لمن يقدمها استخدامها.<br>لا يمكن استبدال القسيمة المفقودة.</div>
 {% else %}
-<div class="note">Keep this voucher. Present it to use your credit.<br>A lost voucher can only be replaced by a supervisor.</div>
-<div class="note-ar">يرجى الاحتفاظ بهذه القسيمة وتقديمها عند الاستخدام.<br>لا يمكن استبدال القسيمة المفقودة إلا بموافقة المشرف.</div>
+<div class="note">Keep this voucher. Present it to use your credit.</div>
+<div class="note-ar">يرجى الاحتفاظ بهذه القسيمة وتقديمها عند الاستخدام.</div>
 {% endif %}
 <div class="rcpt-feed"><br><br><br></div>

@@ -86,7 +86,7 @@ class TestZReportItemCounts(unittest.TestCase):
                 report = _report(rows)
                 self.assertEqual(report["items_sold"], sold)
                 self.assertEqual(report["items_returned"], returned)
-                # Number of Items and Total Quantity both print total_qty.
+                # Total Quantity prints total_qty.
                 self.assertEqual(report["total_qty"], net)
 
     def test_counts_stay_receipt_counts(self):
@@ -123,7 +123,8 @@ class TestZReportPrintFormatQuantities(unittest.TestCase):
             cls.html = json.load(f)["html"]
 
     def _render_qty(self, value):
-        macro = re.search(r"{% macro qty\(value\) %}.*?{% endmacro %}", self.html).group(0)
+        # qty() prints fractions through amt(), so both macros are needed.
+        macro = "".join(re.search(r"{%% macro %s\(.*?{%% endmacro %%}" % name, self.html).group(0) for name in ("amt", "qty"))
         return frappe.render_template(macro + "{{ qty(v) }}", {"v": value}).strip()
 
     def test_quantities_print_as_whole_numbers(self):
@@ -132,13 +133,14 @@ class TestZReportPrintFormatQuantities(unittest.TestCase):
         self.assertEqual(self._render_qty(-1.0), "-1")
         self.assertEqual(self._render_qty(1.5), "1.50")
 
-    def test_both_sections_show_sold_returned_and_the_net(self):
-        self.assertEqual(self.html.count("<span>Items Sold</span><span>{{ qty(report.items_sold) }}</span>"), 2)
+    def test_operations_shows_sold_returned_and_the_net_once(self):
+        # Additional Information no longer repeats these.
+        self.assertEqual(self.html.count("<span>Items Sold</span><span>{{ qty(report.items_sold) }}</span>"), 1)
         self.assertEqual(
-            self.html.count("<span>Items returned</span><span>{{ qty(report.items_returned) }}</span>"), 2
+            self.html.count("<span>Items returned</span><span>{{ qty(report.items_returned) }}</span>"), 1
         )
         self.assertIn("<span>Total Quantity</span><span>{{ qty(report.total_qty) }}</span>", self.html)
-        self.assertIn("<span>Number of Items</span><span>{{ qty(report.total_qty) }}</span>", self.html)
+        self.assertNotIn("Number of Items", self.html)
 
 
 if __name__ == "__main__":

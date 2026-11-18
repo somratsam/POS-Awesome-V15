@@ -106,7 +106,6 @@ class TestZReportPrintFormatVat(unittest.TestCase):
 
     def test_vat_lines(self):
         for label, key in (
-            ("Net Sales incl. VAT", "net_sales"),
             ("VAT on Sales", "vat_on_sales"),
             ("VAT on returned items", "vat_on_returns"),
             ("VAT Amount", "total_vat"),
@@ -114,13 +113,15 @@ class TestZReportPrintFormatVat(unittest.TestCase):
         ):
             with self.subTest(label):
                 self.assertIn(
-                    '<span>%s</span><span>{{ "%%.3f"|format(report.%s) }}' % (label, key), self.html
+                    '<span>%s</span><span>{{ amt(report.%s) }}' % (label, key), self.html
                 )
         self.assertNotIn("Tax Incl. Sales Figure", self.html)
+        # Net Sales incl. VAT repeated Net Sales; gone.
+        self.assertNotIn("Net Sales incl. VAT", self.html)
 
     def test_gross_sales_receipts_stays_gross(self):
         self.assertIn(
-            '<span>Gross Sales Receipts</span><span>{{ report.sale_count }} / {{ "%.3f"|format(report.gross_sales) }}',
+            '<span>Gross Sales Receipts</span><span>{{ report.sale_count }} / {{ amt(report.gross_sales) }}',
             self.html,
         )
 

@@ -208,7 +208,9 @@ class TestVoucherTemplate(unittest.TestCase):
         label = credit_voucher.credit_voucher_label(credit_voucher.credit_voucher_code(doc.name))
         self.assertIn("Credit note voucher", text)
         self.assertIn("**** OMR 139.300 ****", text)
-        self.assertIn(f"Voucher code رمز القسيمة {label}", text)
+        # With a barcode the code prints under it, not in a "Voucher code" row.
+        self.assertNotIn("Voucher code", text)
+        self.assertIn(f"[BARCODE] {label}", text)
         self.assertIn(f"Return No. رقم المرتجع {doc.name}", text)
         self.assertIn("Customer العميل Sanju", text)
         self.assertIn("SWAN INTERNATIONAL S.P.C البجعة الدولية ش ش و", text)
@@ -218,7 +220,12 @@ class TestVoucherTemplate(unittest.TestCase):
         self.assertIn("JACKET-BROWN PATTERN-40 1 139.300", text)
         self.assertIn("Total · الإجمالي 139.300", text)
         expiry = credit_voucher.credit_voucher_valid_until(doc)
-        self.assertIn(f"Validity ending date: {getdate(expiry).strftime('%d-%m-%Y')}", text)
+        self.assertIn(f"Valid until {getdate(expiry).strftime('%d-%m-%Y')} : صالحة حتى", text)
+        self.assertNotIn("Validity starting date", text)
+        self.assertNotIn("Validity ending date", text)
+        self.assertNotIn("تاريخ بداية الصلاحية", text)
+        self.assertNotIn("Stamp and signature", text)
+        self.assertNotIn("الختم والتوقيع", text)
         self.assertNotIn("DUPLICATE", text)
         self.assertNotIn("NOT VALID", text)
         self.assertNotIn("VAT", text)
@@ -260,6 +267,8 @@ class TestVoucherTemplate(unittest.TestCase):
         text = _text(self._render(_credit_return(outstanding_amount=0)))
         self.assertIn("USED — NOT VALID", text)
         self.assertNotIn("[BARCODE]", text)
+        # No barcode: the code prints in the "Voucher code" row instead.
+        self.assertIn("Voucher code رمز القسيمة", text)
 
     def _render_used(self, used_in):
         return _text(
@@ -289,6 +298,7 @@ class TestVoucherTemplate(unittest.TestCase):
         text = _text(self._render(_credit_return(posting_date=old)))
         self.assertIn("EXPIRED — NOT VALID", text)
         self.assertNotIn("[BARCODE]", text)
+        self.assertIn("Voucher code رمز القسيمة", text)
 
     def test_partly_used_voucher_is_worth_what_is_left(self):
         text = _text(self._render(_credit_return(outstanding_amount=-39.3)))
@@ -313,10 +323,13 @@ class TestVoucherTemplate(unittest.TestCase):
         html, calls = self._render_balance(doc, "ACC-SINV-2026-00330", 45)
         text = _text(html)
         self.assertIn("*** BALANCE · رصيد ***", text)
-        self.assertIn("Used 45.000 on sale ACC-SINV-2026-00330. Remaining 5.000.", text)
+        self.assertIn("Used 45.000 on sale ACC-SINV-2026-00330.", text)
+        # The rest is the big amount below; no separate "Remaining" line.
+        self.assertNotIn("Remaining 5.000", text)
+        self.assertNotIn("المتبقي 5.000", text)
         # Arabic line: each number isolated so it never breaks or reorders
         self.assertIn('<bdi class="nowrap" dir="ltr">ACC-SINV-2026-00330</bdi>', html)
-        self.assertIn("تم استخدام 45.000 في الفاتورة ACC-SINV-2026-00330 المتبقي 5.000", text)
+        self.assertIn("تم استخدام 45.000 في الفاتورة ACC-SINV-2026-00330", text)
         self.assertIn("**** OMR 5.000 ****", text)
         self.assertIn("[BARCODE]", text)
         self.assertNotIn("DUPLICATE", text)
@@ -357,7 +370,9 @@ class TestVoucherTemplate(unittest.TestCase):
 
     def test_posting_date_as_string_works(self):
         doc = _credit_return(posting_date=str(getdate(nowdate())))
-        self.assertIn("Validity starting date", _text(self._render(doc)))
+        text = _text(self._render(doc))
+        self.assertIn(f"Date التاريخ {getdate(nowdate()).strftime('%d-%m-%Y')}", text)
+        self.assertIn("Valid until ", text)
 
 
 class TestReceiptSwitch(unittest.TestCase):
@@ -758,6 +773,12 @@ class TestBearerVoucherHelpers(unittest.TestCase):
         self.assertIn("works like cash", bearer)
         self.assertIn("A lost voucher can't be replaced.", bearer)
         self.assertNotIn("supervisor", bearer)
-        self.assertIn("A lost voucher can only be replaced by a supervisor.", named)
+        self.assertIn("Keep this voucher. Present it to use your credit.", named)
+        # The named voucher no longer mentions replacing a lost voucher.
+        self.assertNotIn("lost voucher", named)
+        self.assertNotIn("supervisor", named)
         self.assertNotIn("works like cash", named)
+        # The Anonymous voucher has no Customer row; a named one keeps it.
+        self.assertNotIn("Customer العميل", bearer)
+        self.assertIn("Customer العميل", named)
         self.assertIn("[BARCODE]", bearer)
