@@ -2075,3 +2075,39 @@ Invoice discount on the receipt: -{0} (included in Returned),خصم الفاتو
 Checking…,جارٍ التحقق…
 Saving…,جارٍ الحفظ…
 The exchange could not be discarded.,تعذّر إلغاء الاستبدال.
+Exchange,استبدال
+Credit note,إشعار دائن
+Credit note issued {0},إشعار دائن صادر {0}
+{0} left of {1},متبقٍ {0} من {1}
+Expired on {0},انتهى في {0}
+Valid until {0},صالح حتى {0}
+Used {0} on {1},استُخدم {0} في {1}
+Exchange → {0},استبدال ← {0}
+Exchange for return {0},استبدال للمرتجع {0}
+Paid with credit note {0},مدفوعة بإشعار دائن {0}
+Returned: whole — {0},مُرجَعة: بالكامل — {0}
+Returned: part — {0},مُرجَعة: جزئياً — {0}
+Exchanges,الاستبدالات
+Paid with credit note,مدفوعة بإشعار دائن
+Credit notes,إشعارات دائنة
+Unused credit,رصيد غير مستخدم
+Paid with credit note {0} — the customer stays {1}.,مدفوعة بإشعار دائن {0} — يبقى العميل {1}.
+Paid with the customer's credit notes — the customer stays {0}.,مدفوعة بإشعارات العميل الدائنة — يبقى العميل {0}.
+This sale is paid with {0}'s credit — the customer stays {0}. Switch off Use Customer Balance to change it.,هذا البيع مدفوع برصيد {0} — يبقى العميل {0}. أوقف «استخدام رصيد العميل» لتغييره.
+Use credit note {0}?,استخدام إشعار دائن {0}؟
+Use credit note,استخدام إشعار دائن
+Credit notes used,الإشعارات الدائنة المستخدمة
+Credit notes issued,الإشعارات الدائنة الصادرة
+Exchanges Today,استبدالات اليوم
+Credit note issued and used in the same exchange,إشعار دائن صدر واستُخدم في نفس الاستبدال
++ Credit notes issued,+ الإشعارات الدائنة الصادرة
+- Credit notes used,- الإشعارات الدائنة المستخدمة
+"Sales paid with credit notes, not money",مبيعات مدفوعة بإشعارات دائنة، لا بالنقد
+Issued,الصادر
+Returned by currency,المرتجع حسب العملة
+Returns in this shift,المرتجعات في هذه الوردية
+Left on credit notes,المتبقي على الإشعارات الدائنة
+Credit notes issued in this shift,الإشعارات الدائنة الصادرة في هذه الوردية
+Credit Notes Issued,الإشعارات الدائنة الصادرة
+Credit Notes Used,الإشعارات الدائنة المستخدمة
+The return's value is issued as a credit note.,تُصدر قيمة المرتجع كإشعار دائن.

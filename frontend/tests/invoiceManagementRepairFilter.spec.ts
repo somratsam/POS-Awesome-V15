@@ -100,6 +100,10 @@ describe("InvoiceManagement repair candidate filter", () => {
 			matchesRepairCandidatePattern: (InvoiceManagement as any).methods.matchesRepairCandidatePattern,
 			changeAllocationRepairState: (InvoiceManagement as any).methods.changeAllocationRepairState,
 			isRepairCandidate: (InvoiceManagement as any).methods.isRepairCandidate,
+			historyCreditFilter: "all",
+			get historyInvoicesBeforeCreditFilter() {
+				return (InvoiceManagement as any).computed.historyInvoicesBeforeCreditFilter.call(this);
+			},
 		};
 
 		const filtered = (InvoiceManagement as any).computed.filteredHistoryInvoices.call(context);

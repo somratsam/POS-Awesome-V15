@@ -10183,3 +10183,126 @@ hand-added). System Settings restored 3/3, Asia/Muscat.
    method). Tills hard-refresh.
 3. The tick box stays off everywhere until a store is chosen.
 Rollback: previous commit, build, clear-cache, restart; the field stays (off).
+
+## 104. Credit notes, exchanges and Invoice Management on the real link (2026-11-18, on `develop-swan`, NOT committed)
+
+**Request.** Make credit redeem, Invoice Management and the shift closing
+consistent with the one-screen exchange (section 103): one set of words
+("Credit note", "Credit note issued", "Exchange", "Returned"), the real return
+<-> sale link instead of the "same shift" guess, a customer lock for credit,
+a reliable original-invoice status. Policy: returns are credit-only (no
+"Refunded" label; production has 0 money-refund returns, staging 1 test
+return ACC-SINV-2026-00355).
+
+**The real link (`api/credit_exchange.py`).** `get_credit_links(sales,
+credit_notes)`: the credit redemption Journal Entries (debit row = the
+credit note, credit row = the sale), batched, parameterised; `exchange` =
+both in the same POS Opening Shift. `get_exchange_credit_by_sale`,
+`get_returned_state` (part / whole by item code), `describe_credit` (list
+row fields), whitelisted `get_invoice_credit_details` (one invoice, read
+through `frappe.get_list`, so permissions apply; adds returned qty per line).
+The receipt's `exchange_credit_sources` and the voucher's "Used in exchange"
+use it. Removed: `get_customers_with_same_shift_return` (the guess) and
+`submitted_invoice_edits._apply_credit_exchange_badges`. Staging: 53
+exchanges; the guess had 7 wrong (2 Anonymous), e.g. ACC-SINV-2026-00379.
+
+**Invoice Management.** Badge + link line (`InvoiceCreditTags.vue`,
+`utils/invoiceCreditLabels.ts`) in History list/cards, Returns list (new
+Status column)/cards and the detail popup: "Exchange for return X" /
+"Exchange → X", "Paid with credit note X", "Credit note issued X" / "Y left
+of X" / "Used" (+ "Expired on"), "Returned: part / whole — X"; popup adds
+"Valid until", "Used Y on X" and a Returned qty column; links open the
+linked invoice. Chips with counts: History All / Sales / Exchanges / Paid
+with credit note / Returned; Returns All / Credit notes / Exchanges / Unused
+credit. A money-refund return: no badge, no line. Receipt: "Credit Applied"
+-> "Credit note used إشعار دائن مستخدم".
+
+**Customer lock.** While a named customer's credit is on the sale (scanned
+voucher or "Use Customer Balance"), the customer box is locked and Walk-in
+hidden ("Paid with credit note X — the customer stays Y."); switching
+"Use Customer Balance" off drops every scanned voucher and unlocks. Another
+customer's voucher is refused while credit is on. Dialog: "Use credit note
+X? The customer changes to Y." (Use credit note / Cancel). The server
+already refused another customer's credit.
+
+**Original status.** POS shows ERPNext's "Credit Note Issued" on a sale as
+"Paid" + the Returned line; status filter without "Credit Note Issued".
+Hook `invoice.refresh_returned_invoice_status` (Sales Invoice on_submit /
+on_cancel of a return): ERPNext `set_status` on the original, status column
+only, modified untouched. Patch `refresh_returned_invoice_status` (dry run:
+`bench --site <site> execute posawesome.patches.refresh_returned_invoice_status.dry_run`):
+staging 78 originals, 49 "Paid -> Credit Note Issued", applied by migrate.
+
+**Shift closing.** Overview, Z Report and the Closing Shift's field use
+`get_exchange_credit_by_sale` (only credit from same-shift returns).
+Wording: Returned / Returned count / Items returned / CREDIT NOTES / Credit
+notes issued / Credit notes used / ↳ of which in exchanges / Left on credit
+notes / + Credit notes issued / - Credit notes used / Number of returns /
+VAT on returned items; Overview cards and sections the same; Desk labels
+(label only) Credit Notes Issued / Credit Notes Used / Of Which in
+Exchanges. Old Z reprints recalculate (agreed); the stored Desk field stays.
+Staging: 7 of 59 closings reprint a different exchange figure (3 from
+August stored 0 before the field existed; CS-0000010, -13, -49, -51 were
+the guess), e.g. CS-0000049 557.200 -> 139.300; Net Sales, payments,
+takings unchanged.
+
+**Checks.** Vitest 296/296 files, 1937/1937 tests (Node 24). Backend in
+isolation: test_exchange_links_db 10, test_describe_credit 9,
+test_swan_receipt 15, test_credit_voucher 69, test_one_screen_exchange 39,
+test_one_screen_exchange_db 30, edit_supervisor 13, edit_customer 9,
+generic_customer_credit_guard 9, return_line_picking 5, payments 12,
+customer_credit_invoice_fields 2, gift_cards 14, sales_credit 51,
+offline_sync_invoices 4, invoice_reporting_fields 35, api_imports 4,
+pos_access 12, stored_value 2, customer 12, customers 4, invoice_processing
+test_payment 4 / test_utils 12, all 13 closing modules OK. Same failures
+with the change stashed (pre-existing): test_invoice_cancel_hooks 2 errors,
+test_invoices 1, test_submitted_invoice_shift_security 1, test_creation 8.
+`bench build` exit 0; migrate twice exit 0 (patch once, Z Report md5
+cbf70ac7 both times, labels kept). System Settings restored 3/3 Asia/Muscat.
+Browser (staging): IM chips/links/popup; voucher dialog -> lock -> switch
+off -> unlock. Test draft MCO-2026-00032 (test x) left from opening Payments.
+
+**Production deploy (later).** Before: (1) count of closings whose exchange
+figure changes (console snippet comparing `same_shift_exchange_total` with
+`data.get_same_shift_exchange_total`); (2) patch dry run; (3)
+`SELECT name FROM tabPrint Format WHERE html LIKE '%get_customers_with_same_shift_return%'`
+must be empty (the old receipt record called it; section 101's switch
+removed that). Then migrate (patch, labels, Z Report), build, clear-cache,
+restart.
+
+**Follow-up after the user's testing (same day, not committed).**
+- Label back to "Exchanges Today" (Overview card, Z Report "↳ Exchanges
+  Today" sub-row, Desk label), hint unchanged; Arabic "استبدالات اليوم".
+- Anonymous receipt reached the old return screen: Invoice Management's
+  return action (`createReturn`) never checked "One-screen exchange" (for
+  any customer). It now opens "Items on receipt" like the scan and the
+  Return / Exchange search. Browser: all three entry points x Anonymous
+  (MCO-2026-00027) and named (MCO-2026-00026) open the picker.
+- Old return screen (profiles with one-screen off): "80.850-.ر.ع" came from
+  `InvoiceTotals.vue` passing the currency to formatCurrency inside a field
+  that already has the symbol as prefix (two symbols, laid out right to
+  left); now number only, like the cart. Wording change proposed, not built.
+- The 4 failing modules fail identically at production's bcae9fec.
+- Deleted test drafts MCO-2026-00032 and MCO-CN-2026-00022 (mine).
+- Pre-deploy checks for production are plain SQL (the new code isn't there
+  yet); the closings query gives the same 7 rows on staging as the code.
+
+**Second follow-up (same day, not committed).**
+- Z Report: "↳ Exchanges Today" moved under "Credit notes issued" (as the
+  Overview).
+- Old return screen (one-screen off), built as proposed: "Credit note issued
+  (OMR)" instead of "Remaining Refund" on a credit return; under the
+  credit-only policy one line "The return's value is issued as a credit
+  note." instead of the Store as Credit switch and the policy note; panel
+  "Credit note"; no "Refund" badge on the payment methods. Profiles that
+  allow cash refunds keep the switch and refund wording.
+- Shift Overview cards: Total Invoices icon (`mdi-receipt-text-multiple` is not
+  in the bundled @mdi/font 7.4 -> `mdi-receipt-text-outline`); hints shown in
+  full (wrap; touch tills have no hover), cards in a row keep one height;
+  amounts on one line, the font follows the card width (container units,
+  1.25rem down to 0.8rem), gap 16 -> 12 px. Measured in headless Chromium at
+  1280/1366/1600/1920: no wrap, no overflow, up to "OMR 123,912.450".
+- Fixed: ClosingDialog's translate dropped arguments, so "of which exchanges
+  ({0})" showed "{0}" (pre-existing).
+- Deleted drafts MCO-CN-2026-00021 (user's) and my own test drafts.
+- The 4 old failing test modules: separate cleanup job later.

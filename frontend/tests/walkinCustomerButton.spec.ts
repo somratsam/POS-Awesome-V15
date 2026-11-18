@@ -63,4 +63,12 @@ describe("Walk-in (no customer) button", () => {
 	it("is exposed to the template via the setup return object", () => {
 		expect(customerSource).toMatch(/return \{[\s\S]*select_walkin_customer,[\s\S]*\};/);
 	});
+
+	it("locks the customer while a named customer's credit is on the sale, like an exchange", () => {
+		expect(customerSource).toContain("const credit = customersStore.creditOnSaleFor(customer);");
+		expect(customerSource).toContain('"Paid with credit note {0} — the customer stays {1}."');
+		expect(customerSource).toContain(`"Paid with the customer's credit notes — the customer stays {0}."`);
+		// Not on a return: a return's own customer rules apply there.
+		expect(customerSource).toMatch(/if \(doc\.is_return\) return "";\s*const credit = customersStore\.creditOnSaleFor\(customer\);/);
+	});
 });

@@ -2,7 +2,7 @@ import frappe
 from frappe.utils import flt, json
 from collections import defaultdict
 from frappe import _
-from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
+from posawesome.posawesome.api.credit_exchange import get_exchange_credit_by_sale
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
@@ -521,27 +521,13 @@ def get_closing_shift_overview(pos_opening_shift):
                     conversion_rate,
                 )
 
-    # "Exchanges Today": delegates the "which customers had a same-shift
-    # return" question to get_customers_with_same_shift_return() -- the
-    # single canonical check also used by the Z Report, the receipt print
-    # format, and Invoice Management, so this live pre-close figure agrees
-    # with the post-close one rather than using its own separate
-    # is_return-or-negative-total definition (a real, confirmed divergence
-    # this replaces -- see PROGRESS_NOTES.md).
-    exchange_customers = list({invoice.get("customer") for invoice in invoices if invoice.get("customer")})
-    returning_customers = set(
-        get_customers_with_same_shift_return(exchange_customers, opening_shift_doc.name)
+    # "Exchanges Today": credit the shift's sales used from returns made
+    # in this shift, through the credit Journal Entries -- the same figure as
+    # the Z Report and the Closing Shift (credit_exchange.get_exchange_credit_by_sale).
+    exchange_credit_by_sale = get_exchange_credit_by_sale(
+        [invoice.get("name") for invoice in invoices if invoice.get("name") and not invoice.get("is_return")]
     )
-
-    same_shift_exchange_total = 0.0
-    for invoice in invoices:
-        if invoice.get("is_return"):
-            continue
-        if invoice.get("customer") not in returning_customers:
-            continue
-        redeemed = flt(invoice.get("posa_redeemed_customer_credit"))
-        if redeemed > 0:
-            same_shift_exchange_total += redeemed
+    same_shift_exchange_total = sum(flt(amount) for amount in exchange_credit_by_sale.values())
 
     for entry in payment_entries:
         mode = entry.get("mode_of_payment")

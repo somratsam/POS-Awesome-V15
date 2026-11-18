@@ -108,7 +108,7 @@ class TestZReportPrintFormatVat(unittest.TestCase):
         for label, key in (
             ("Net Sales incl. VAT", "net_sales"),
             ("VAT on Sales", "vat_on_sales"),
-            ("VAT on Returns", "vat_on_returns"),
+            ("VAT on returned items", "vat_on_returns"),
             ("VAT Amount", "total_vat"),
             ("Net Excl. VAT", "net_excl_vat"),
         ):

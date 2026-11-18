@@ -178,14 +178,14 @@
    "default": "0",
    "fieldname": "customer_credit_issued",
    "fieldtype": "Currency",
-   "label": "Customer Credit Issued",
+   "label": "Credit Notes Issued",
    "read_only": 1
   },
   {
    "default": "0",
    "fieldname": "customer_credit_redeemed",
    "fieldtype": "Currency",
-   "label": "Customer Credit Redeemed",
+   "label": "Credit Notes Used",
    "read_only": 1
   },
   {
@@ -239,7 +239,7 @@
  ],
  "is_submittable": 1,
  "links": [],
- "modified": "2026-11-01 12:00:00.000000",
+ "modified": "2026-11-18 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "POSAwesome",
  "name": "POS Closing Shift",

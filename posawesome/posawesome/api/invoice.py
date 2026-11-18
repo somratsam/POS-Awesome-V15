@@ -46,10 +46,35 @@ def before_cancel(doc, method):
     update_coupon(doc, "cancelled")
 
 
+def on_submit(doc, method):
+    refresh_returned_invoice_status(doc)
+
+
 def on_cancel(doc, method):
     cancel_posawesome_credit_journal_entries(doc)
     restore_posawesome_gift_card_redemptions(doc)
     delete_invoice_submission_ledger_entries(doc)
+    refresh_returned_invoice_status(doc)
+
+
+def refresh_returned_invoice_status(doc):
+    """A return was submitted or cancelled: refresh the original sale's
+    status with ERPNext's own set_status ("Credit Note Issued" while it has a
+    submitted return, back to "Paid" when the last one is cancelled). ERPNext
+    does this only when the return's credit goes against the original; POS
+    returns keep it on themselves, so it was left as it was (section 104).
+    Only the status column; no modified date, no notification."""
+    if getattr(doc, "doctype", None) != "Sales Invoice":
+        return
+    if not int(doc.get("is_return") or 0) or not doc.get("return_against"):
+        return
+    if not frappe.db.exists("Sales Invoice", {"name": doc.return_against, "docstatus": 1}):
+        return
+    original = frappe.get_doc("Sales Invoice", doc.return_against)
+    before = original.status
+    original.set_status()
+    if original.status != before:
+        original.db_set("status", original.status, update_modified=False)
 
 
 def delete_invoice_submission_ledger_entries(doc):

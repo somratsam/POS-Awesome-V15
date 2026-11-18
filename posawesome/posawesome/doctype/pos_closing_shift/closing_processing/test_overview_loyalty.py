@@ -48,7 +48,7 @@ def _install_stubs():
     def db_get_value(doctype, name, field):
         if doctype == "POS Opening Shift":
             # The same opening shift frappe.get_doc returns above, as resolved by
-            # credit_exchange.get_customers_with_same_shift_return().
+            # the closing code.
             return ("POS-PROFILE-1", "My Co")
         if (doctype, name, field) == (
             "POS Profile",
@@ -60,6 +60,11 @@ def _install_stubs():
 
     frappe_module.db = SimpleNamespace(get_value=db_get_value)
     frappe_utils_module.flt = lambda value=0, precision=None: float(value or 0)
+    # credit_exchange (imported by the overview) needs these names too.
+    frappe_utils_module.cint = lambda value=0: int(float(value or 0))
+    frappe_utils_module.cstr = lambda value=None: "" if value is None else str(value)
+    frappe_utils_module.getdate = lambda value=None: value
+    frappe_utils_module.nowdate = lambda: "2026-11-18"
     frappe_utils_module.json = __import__("json")
 
     def get_base_value(row, amount_field, base_field, conversion_rate=None):
@@ -98,6 +103,8 @@ def _load_module():
     # test_cash_movement_integration), which needs the real frappe stubbed
     # out here; these tests are about other figures.
     module.drawer_cash_expected = lambda *args: (0.0, 0.0)
+    # "Exchanges Today" reads credit Journal Entries; none here.
+    module.get_exchange_credit_by_sale = lambda sales: {}
     # The sales breakdown reads invoices from the database; not this test's subject.
     module._shift_z_summary = lambda *args, **kwargs: {}
     return module

@@ -49,11 +49,11 @@ def _return(name, qty, amount=10.0):
     return _row(name, -qty, -amount, is_return=1)
 
 
-def breakdown_of(rows, exchange_customers=()):
+def breakdown_of(rows, exchange=None):
     """The real sales_breakdown over the same fake invoice rows."""
     invoice_rows = [frappe._dict(row, doctype="Sales Invoice") for row in rows]
     with patch.object(sales_breakdown, "_rows", return_value=invoice_rows), patch.object(
-        sales_breakdown, "get_customers_with_same_shift_return", return_value=list(exchange_customers)
+        sales_breakdown, "get_exchange_credit_by_sale", return_value=dict(exchange or {})
     ), patch.object(sales_breakdown.frappe, "get_all", return_value=[]):
         return sales_breakdown.get_sales_breakdown("SHIFT-1", {"Sales Invoice": [r.name for r in rows]})
 
@@ -135,7 +135,7 @@ class TestZReportPrintFormatQuantities(unittest.TestCase):
     def test_both_sections_show_sold_returned_and_the_net(self):
         self.assertEqual(self.html.count("<span>Items Sold</span><span>{{ qty(report.items_sold) }}</span>"), 2)
         self.assertEqual(
-            self.html.count("<span>Items Returned</span><span>{{ qty(report.items_returned) }}</span>"), 2
+            self.html.count("<span>Items returned</span><span>{{ qty(report.items_returned) }}</span>"), 2
         )
         self.assertIn("<span>Total Quantity</span><span>{{ qty(report.total_qty) }}</span>", self.html)
         self.assertIn("<span>Number of Items</span><span>{{ qty(report.total_qty) }}</span>", self.html)

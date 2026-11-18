@@ -7,7 +7,7 @@
 				color="primary"
 				:label="frappe._('Net Total')"
 				class="sleek-field pos-themed-input"
-				:model-value="formatCurrency(invoice_doc.net_total, displayCurrency)"
+				:model-value="formatCurrency(invoice_doc.net_total)"
 				readonly
 				:prefix="currencySymbol()"
 				persistent-placeholder
@@ -21,7 +21,7 @@
 				:label="frappe._('Tax and Charges')"
 				class="sleek-field pos-themed-input"
 				hide-details
-				:model-value="formatCurrency(invoice_doc.total_taxes_and_charges, displayCurrency)"
+				:model-value="formatCurrency(invoice_doc.total_taxes_and_charges)"
 				readonly
 				:prefix="currencySymbol()"
 				persistent-placeholder
@@ -35,7 +35,7 @@
 				:label="frappe._('Total Amount')"
 				class="sleek-field pos-themed-input"
 				hide-details
-				:model-value="formatCurrency(invoice_doc.total, displayCurrency)"
+				:model-value="formatCurrency(invoice_doc.total)"
 				readonly
 				:prefix="currencySymbol()"
 				persistent-placeholder
@@ -50,7 +50,7 @@
 				class="sleek-field pos-themed-input"
 				hide-details
 				:model-value="
-					formatCurrency(diff_payment < 0 ? -diff_payment : diff_payment, displayCurrency)
+					formatCurrency(diff_payment < 0 ? -diff_payment : diff_payment)
 				"
 				readonly
 				:prefix="currencySymbol()"
@@ -154,6 +154,9 @@
 </template>
 
 <script setup>
+// Amounts: the field's prefix shows the currency symbol, so the value is the
+// number alone (a second symbol made "-80.850 ر.ع." read "80.850-.ر.ع" right to
+// left); the same as the cart and Grand Total.
 import { computed } from "vue";
 
 const props = defineProps({

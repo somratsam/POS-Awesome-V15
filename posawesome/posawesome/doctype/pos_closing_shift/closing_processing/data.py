@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 from frappe.utils import cint, cstr, flt, getdate
-from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
+from posawesome.posawesome.api.credit_exchange import get_exchange_credit_by_sale
 from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.access import authorize_shift_close
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.invoices import (
@@ -141,44 +141,21 @@ def get_shift_invoice_rows(closing_shift_doc):
     return rows
 
 
-def get_same_shift_exchange_total(invoice_rows, pos_opening_shift, returning_customers=None):
-    """Return the "Exchanges Today" total: for every customer who both
-    returned an item and redeemed customer credit within this same shift,
-    sum the redeemed amount on their non-return invoice(s).
+def get_same_shift_exchange_total(invoice_rows, pos_opening_shift, exchange_credit_by_sale=None):
+    """The Closing Shift's "Exchanges Today" (field same_shift_exchange_total):
+    the credit the shift's sales used from returns made in the same shift,
+    found through the credit Journal Entries (credit_exchange
+    .get_exchange_credit_by_sale) -- the same figure as the Z Report and the
+    Overview. Credit from older credit notes is not counted.
 
-    Delegates the "which customers had a same-shift return" question to
-    get_customers_with_same_shift_return() -- the single canonical check
-    also used by the receipt print format, the live Overview screen, and
-    Invoice Management, so all four surfaces agree on what counts as an
-    exchange. This function's own job is only the second half: summing
-    posa_redeemed_customer_credit across those customers' non-return
-    invoices in invoice_rows.
-
-    returning_customers: optionally pass a precomputed set/list (as
-    get_customers_with_same_shift_return() would return) to skip the
-    query -- used by this function's own tests to exercise the summing
-    logic without a live database. Falls back to querying it itself when
-    not provided, which is what every real caller does.
-
-    Display-only: does not feed update_customer_credit_totals() or any
-    other stored accounting figure.
+    exchange_credit_by_sale: optionally passed in (tests); otherwise read.
+    Display-only: does not feed update_customer_credit_totals() or any other
+    stored accounting figure.
     """
-    if returning_customers is None:
-        customers = list({row.get("customer") for row in invoice_rows if row.get("customer")})
-        returning_customers = get_customers_with_same_shift_return(customers, pos_opening_shift)
-    returning_customers = set(returning_customers)
-
-    total = 0.0
-    for row in invoice_rows:
-        if row.get("is_return"):
-            continue
-        if row.get("customer") not in returning_customers:
-            continue
-        redeemed = flt(row.get("posa_redeemed_customer_credit"))
-        if redeemed > 0:
-            total += redeemed
-
-    return total
+    sales = [row.get("name") for row in invoice_rows if row.get("name") and not row.get("is_return")]
+    if exchange_credit_by_sale is None:
+        exchange_credit_by_sale = get_exchange_credit_by_sale(sales) if sales and pos_opening_shift else {}
+    return sum(flt(exchange_credit_by_sale.get(name)) for name in sales)
 
 
 def get_payment_mode_counts(

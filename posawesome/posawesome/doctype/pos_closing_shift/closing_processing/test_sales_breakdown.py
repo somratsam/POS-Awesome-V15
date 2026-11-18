@@ -20,10 +20,12 @@ def inv(name, grand_total, *, is_return=0, customer="CUST-1", qty=1, paid=None, 
     )
 
 
-def breakdown(rows, returning=(), origin_shifts=None):
+def breakdown(rows, exchange=None, origin_shifts=None):
+    """exchange: {sale: credit it used from same-shift returns} -- what the
+    credit Journal Entries say (credit_exchange.get_exchange_credit_by_sale)."""
     origins = [frappe._dict(name=k, posa_pos_opening_shift=v) for k, v in (origin_shifts or {}).items()]
     with patch.object(sales_breakdown, "_rows", return_value=rows), patch.object(
-        sales_breakdown, "get_customers_with_same_shift_return", return_value=list(returning)
+        sales_breakdown, "get_exchange_credit_by_sale", return_value=dict(exchange or {})
     ), patch.object(sales_breakdown.frappe, "get_all", return_value=origins):
         return sales_breakdown.get_sales_breakdown(SHIFT, {"Sales Invoice": [r.name for r in rows]})
 
@@ -32,7 +34,7 @@ class TestSalesBreakdown(unittest.TestCase):
     def test_credit_note_not_used(self):
         # Sale 72.970 by card, returned for store credit in the same shift.
         b = breakdown([inv("S1", 72.97), inv("R1", -72.97, is_return=1, paid=0, return_against="S1")],
-                      returning=["CUST-1"], origin_shifts={"S1": SHIFT})
+                      origin_shifts={"S1": SHIFT})
         self.assertEqual((b["gross_sales"], b["returns"], b["net_sales"]), (72.97, 72.97, 0.0))
         self.assertEqual((b["credit_issued"], b["credit_redeemed"], b["left_as_store_credit"]), (72.97, 0, 72.97))
         self.assertEqual(b["takings"], 72.97)
@@ -44,7 +46,7 @@ class TestSalesBreakdown(unittest.TestCase):
         b = breakdown(
             [inv("S1", 72.97), inv("R1", -72.97, is_return=1, paid=0, return_against="S1"),
              inv("S2", 72.97, paid=0, redeemed=72.97)],
-            returning=["CUST-1"], origin_shifts={"S1": SHIFT},
+            exchange={"S2": 72.97}, origin_shifts={"S1": SHIFT},
         )
         self.assertEqual((b["gross_sales"], b["net_sales"]), (145.94, 72.97))
         self.assertEqual((b["exchange_count"], b["exchange_sales"], b["same_shift_exchange_total"]), (1, 72.97, 72.97))
@@ -77,13 +79,25 @@ class TestSalesBreakdown(unittest.TestCase):
         bridge = b["net_sales"] + b["credit_issued"] - b["credit_redeemed"] - b["refunds"] - b["loyalty"] - b["write_off"] - b["rounding"] - b["unpaid"]
         self.assertAlmostEqual(bridge, b["takings"])
 
-    def test_credit_used_by_a_customer_without_a_same_shift_return_is_not_an_exchange(self):
-        b = breakdown([inv("S1", 50, paid=0, redeemed=50, customer="OTHER")], returning=[])
+    def test_credit_from_an_older_credit_note_is_not_an_exchange(self):
+        # Even when the same (shared) customer returned something this shift.
+        b = breakdown([inv("R1", -30, is_return=1, paid=0, customer="Anonymous", return_against="OLD"),
+                       inv("S1", 50, paid=0, redeemed=50, customer="Anonymous")], exchange={},
+                      origin_shifts={"OLD": "SHIFT-OLD"})
         self.assertEqual((b["exchange_count"], b["receipts"], b["credit_redeemed"]), (0, 1, 50))
+        self.assertEqual((b["same_shift_exchange_total"], b["left_as_store_credit"]), (0, 30))
+
+    def test_only_the_same_shift_part_of_a_sales_credit_counts(self):
+        # 60 from this shift's return, 40 from an older credit note.
+        b = breakdown([inv("R1", -60, is_return=1, paid=0, return_against="S0"),
+                       inv("S1", 100, paid=0, redeemed=100)], exchange={"S1": 60},
+                      origin_shifts={"S0": SHIFT})
+        self.assertEqual((b["exchange_count"], b["exchange_sales"]), (1, 100))
+        self.assertEqual((b["credit_redeemed"], b["same_shift_exchange_total"], b["left_as_store_credit"]), (100, 60, 0))
 
     def test_open_and_closed_shift_use_the_same_numbers(self):
         rows = [inv("S1", 72.97), inv("R1", -72.97, is_return=1, paid=0, return_against="S1")]
-        self.assertEqual(breakdown(rows, ["CUST-1"], {"S1": SHIFT}), breakdown(list(rows), ["CUST-1"], {"S1": SHIFT}))
+        self.assertEqual(breakdown(rows, {}, {"S1": SHIFT}), breakdown(list(rows), {}, {"S1": SHIFT}))
 
 
 if __name__ == "__main__":

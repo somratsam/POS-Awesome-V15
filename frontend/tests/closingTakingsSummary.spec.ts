@@ -43,8 +43,8 @@ describe("overview: Takings and the shared figures", () => {
 		const s = summaryOf(EXCHANGE);
 		expect(s.takingsRows.value.map((r: any) => [r.label, r.amount])).toEqual([
 			["Net Sales", 72.97],
-			["+ Credit Issued", 72.97],
-			["- Credit Redeemed", 72.97],
+			["+ Credit notes issued", 72.97],
+			["- Credit notes used", 72.97],
 		]);
 		expect(s.takingsTotal.value).toBe(72.97);
 		expect(s.leftAsStoreCredit.value).toBe(0);
@@ -61,7 +61,7 @@ describe("overview: Takings and the shared figures", () => {
 		const earlier = summaryOf({ ...EXCHANGE, net_sales: -139.3, receipts: 0, exchange_count: 0, sales_per_receipt: null, returns_earlier: 139.3 }, { returns: { count: 1, company_currency_total: 139.3 } });
 		const c2 = (key: string) => [...earlier.primaryInsights.value, ...earlier.secondaryInsights.value].find((c: any) => c.key === key);
 		expect(c2("average-ticket").value).toBe("-");
-		expect(c2("returns").caption).toBe("Return count: 1 · of earlier sales: 139.3");
+		expect(c2("returns").caption).toBe("Credit notes: 1 · of earlier sales: 139.3");
 	});
 
 	it("the overview response keeps z_summary, with 'nothing to divide by' as null", async () => {
@@ -91,7 +91,7 @@ describe("ShiftOverview Takings section", () => {
 		customerCreditIssuedSummary: {}, customerCreditIssuedByCurrency: [], paymentsByMode: [], overviewCompanyCurrency: "OMR",
 		formatCurrencyWithSymbol: (value: number, currency: string) => `${value} ${currency}`, shouldShowCompanyEquivalent: () => false,
 		showExchangeRates: () => false, formatExchangeRates: () => "", isCashMode: () => true, overpaymentDeductionForCurrency: () => 0,
-		takingsRows: [{ key: "net", label: "Net Sales", amount: 0 }, { key: "issued", label: "+ Credit Issued", amount: 72.97 }, { key: "redeemed", label: "- Credit Redeemed", amount: 0 }],
+		takingsRows: [{ key: "net", label: "Net Sales", amount: 0 }, { key: "issued", label: "+ Credit notes issued", amount: 72.97 }, { key: "redeemed", label: "- Credit notes used", amount: 0 }],
 		takingsTotal: 72.97,
 		leftAsStoreCredit: 72.97,
 	};

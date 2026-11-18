@@ -164,11 +164,10 @@ class POSClosingShift(Document):
         self.customer_credit_redeemed = flt(credit_redeemed)
 
     def update_same_shift_exchange_total(self):
-        # "Exchanges Today": display-only breakdown of how much of
-        # customer_credit_redeemed came from a customer who returned an item
-        # and redeemed credit within this same shift (a genuine exchange),
-        # as opposed to redeeming older, cross-visit credit. Deliberately a
-        # separate, independent method -- does not feed into or get fed by
+        # "Exchanges Today": display-only part of customer_credit_redeemed
+        # -- credit the shift's sales used from returns made in this same shift,
+        # through the credit Journal Entries (not older credit notes).
+        # Deliberately separate: does not feed into or get fed by
         # update_customer_credit_totals()'s own stored figures.
         self.same_shift_exchange_total = flt(
             get_same_shift_exchange_total(get_shift_invoice_rows(self), self.pos_opening_shift)

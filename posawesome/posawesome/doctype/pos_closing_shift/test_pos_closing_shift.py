@@ -50,9 +50,9 @@ class DummyClosingShiftDoc:
 
 
 def _resolve_opening_shift(mock_exchange_frappe, returning_customers=()):
-    """Point credit_exchange.get_customers_with_same_shift_return() -- called by
-    the overview's "Exchanges Today" figure -- at the same opening shift this
-    test's get_doc returns, instead of a real database lookup."""
+    """No exchanges: credit_exchange.get_exchange_credit_by_sale() (the
+    overview's and the closing's "Exchanges Today") is patched to {} by
+    the test, so nothing reads the database."""
     mock_exchange_frappe.db.get_value.return_value = ("POS-PROFILE-1", "My Co")
     mock_exchange_frappe.get_all.return_value = list(returning_customers)
 
@@ -249,8 +249,8 @@ class TestPOSClosingShift(unittest.TestCase):
         "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.drawer_cash_expected",
         new=lambda *args: (0.0, 0.0),
     )
-    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.api.credit_exchange.frappe")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_exchange_credit_by_sale", return_value={})
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data.get_exchange_credit_by_sale", return_value={})
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
@@ -289,7 +289,10 @@ class TestPOSClosingShift(unittest.TestCase):
             "Sales Invoice",
             submit_printed=0,
         )
-        mock_exchange_auth.assert_called_once_with("POS-PROFILE-1", company="My Co")
+        # The overview authorizes the shift itself; "Exchanges Today"
+        # comes from the credit Journal Entries of the shift's sales.
+        mock_get_authorized_pos_profile.assert_called()
+        mock_exchange_auth.assert_called_once()
 
     # Expected Cash comes from the Payment Reconciliation build, covered in
     # test_cash_movement_integration; these tests are about other figures.
@@ -297,8 +300,8 @@ class TestPOSClosingShift(unittest.TestCase):
         "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.drawer_cash_expected",
         new=lambda *args: (0.0, 0.0),
     )
-    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.api.credit_exchange.frappe")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_exchange_credit_by_sale", return_value={})
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data.get_exchange_credit_by_sale", return_value={})
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")
@@ -365,8 +368,8 @@ class TestPOSClosingShift(unittest.TestCase):
         "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.drawer_cash_expected",
         new=lambda *args: (0.0, 0.0),
     )
-    @patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile")
-    @patch("posawesome.posawesome.api.credit_exchange.frappe")
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_exchange_credit_by_sale", return_value={})
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data.get_exchange_credit_by_sale", return_value={})
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_authorized_pos_profile")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_payment_entries")
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.fetch_shift_invoices")

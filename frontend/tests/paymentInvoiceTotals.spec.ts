@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 import { mount } from "@vue/test-utils";
 
@@ -112,5 +112,23 @@ describe("InvoiceTotals", () => {
 		expect(itemDiscountTooltip.attributes("data-tooltip")).toContain(
 			"Additional Discount is the separate invoice-level discount.",
 		);
+	});
+
+	it("shows a return's negative amounts with the field's symbol only (no second symbol)", () => {
+		const formatCurrency = vi.fn((value: number) => String(value));
+		mount(InvoiceTotals, {
+			props: {
+				invoice_doc: { currency: "OMR", net_total: -77, total_taxes_and_charges: -3.85, total: -80.85, grand_total: -80.85, is_return: 1 },
+				itemDiscountTotal: 0,
+				displayCurrency: "OMR",
+				diff_payment: -80.85,
+				diff_label: "Remaining",
+				currencySymbol: () => "ر.ع.",
+				formatCurrency,
+			},
+			global: { components: { VRow: BoxStub, VCol: BoxStub, VIcon: VIconStub, VTooltip: VTooltipStub, VTextField: VTextFieldStub } },
+		});
+		expect(formatCurrency).toHaveBeenCalled();
+		for (const call of formatCurrency.mock.calls) expect(call.length).toBe(1);
 	});
 });

@@ -43,3 +43,4 @@ posawesome.patches.backfill_invoice_style_name_and_mrp_excl_vat
 posawesome.patches.set_pos_discount_reason_offer_rates
 posawesome.patches.backfill_item_selling_price
 posawesome.patches.backfill_customer_store
+posawesome.patches.refresh_returned_invoice_status
