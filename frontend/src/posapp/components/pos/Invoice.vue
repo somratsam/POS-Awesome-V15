@@ -1940,4 +1940,21 @@ export default {
 	opacity: 0.9;
 	font-size: 0.95rem;
 }
+/* Medium and small size tiers (see the bottom bar in InvoiceSummary.vue):
+   the cart card fills the height the smaller bottom bar leaves. Its inline
+   height (a fixed 58/64/72 % of the window, or the saved drag-resize height)
+   only applies on large screens, where the resize corner still is. */
+@media (min-width: 1100px) and (max-width: 1599px), (min-width: 1100px) and (max-height: 959px) {
+	.invoice-shell:not(.invoice-shell--counter-grid) {
+		flex-direction: column;
+		height: calc(100vh - 64px);
+	}
+
+	.invoice-shell:not(.invoice-shell--counter-grid) > .invoice-main-card {
+		flex: 1 1 0;
+		height: auto !important;
+		max-height: none !important;
+		min-height: 0;
+	}
+}
 </style>

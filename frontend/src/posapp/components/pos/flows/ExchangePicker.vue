@@ -149,7 +149,7 @@ const subtitle = computed(() =>
 const returnableUntil = computed(() => userDate(receipt.value.returnable_until));
 const blockedReason = (line) => lineBlockedReason(line, shortDate, __);
 const historyNote = (line) => lineHistoryNote(line, shortDate, __);
-const money = (value) => `${props.currencySymbol(receipt.value.currency)}${props.formatCurrency(value)}`;
+const money = (value) => `${props.currencySymbol(receipt.value.currency)} ${props.formatCurrency(value)}`;
 
 const summary = computed(() => {
 	const count = pickedCount(draft.value);

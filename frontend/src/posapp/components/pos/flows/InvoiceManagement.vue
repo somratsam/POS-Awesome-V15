@@ -4407,6 +4407,13 @@ export default {
 	overflow: auto;
 }
 
+/* The tab content clips its overflow (it slides between tabs), which cut off
+   the top of the floating labels on the first row of filters (Status,
+   From Date, To Date). Room for them inside the clip. */
+.invoice-management-card__body > .v-window {
+	padding-top: 10px;
+}
+
 .invoice-management-footer {
 	position: sticky;
 	bottom: 0;

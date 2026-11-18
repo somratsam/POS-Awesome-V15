@@ -31,7 +31,7 @@
 				<div class="drafts-rail__card-top">
 					<strong>{{ draft.customer_name || __("Walk-in Customer") }}</strong>
 					<span class="drafts-rail__amount">
-						{{ currencySymbol(draft.currency) }}{{ formatCurrency(draft.grand_total) }}
+						{{ currencySymbol(draft.currency) }} {{ formatCurrency(draft.grand_total) }}
 					</span>
 				</div>
 				<div class="drafts-rail__meta">
@@ -54,7 +54,7 @@
 				>
 					<strong>{{ draft.customer_name || __("Walk-in Customer") }}</strong>
 					<span class="drafts-rail__chip-meta">
-						{{ currencySymbol(draft.currency) }}{{ formatCurrency(draft.grand_total) }}
+						{{ currencySymbol(draft.currency) }} {{ formatCurrency(draft.grand_total) }}
 					</span>
 					<span class="drafts-rail__chip-meta">
 						{{ formatDraftAge(draft) }} . {{ draft.status || __("Draft") }}

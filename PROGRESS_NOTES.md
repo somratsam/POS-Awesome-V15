@@ -10400,3 +10400,133 @@ test_discount_reasons 34, test_print_assets 4, all OK. No build (no frontend
 files). Migrate twice, idempotent; Z Report record = git. System Settings
 3/3 Asia/Muscat, `precision("grand_total")` 3. Not checked: the on-screen
 Shift Overview for "-0.000" (not a printout).
+
+## 107. Return label, "OMR 0.000", Invoice Management filter labels, smaller bottom bar on small screens, Sales Person at the top of the payment screen (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** Design fixes from a proposal reviewed with before/after
+screenshots. A calmer "refined" light theme was proposed and **rejected**:
+today's colours and look stay exactly as they are. A text-size step (cart,
+item list, headings, payment screen about 1-2 px smaller on smaller screens)
+was built, then **reverted** at the user's request. Every screen it touched
+was re-measured and matches the original sizes again.
+
+- **Return button label** (`InvoiceActionButtons.vue`): "Return" when the
+  POS Profile tick box One-screen exchange is off, "Return / Exchange" when
+  on, on both the normal screen and fast counter mode (the normal screen
+  said "Sales Return"). Production still shows "Sales Return" until
+  section 103 (One-screen exchange) reaches `stable`. The label reads the
+  profile loaded when the POS opens, so reload after ticking the box.
+- **"OMR 0.000"**: new `joinMoney(symbol, amount)` in `format.ts` (symbol,
+  one space, amount; just the amount when the symbol is hidden), used by both
+  shared `formatCurrency(value, currency)` helpers. A space added where the
+  symbol was glued to the amount: Active sale box and fast counter totals
+  (`InvoiceSummary.vue`), exchange figures and RETURN rows
+  (`ExchangeReturnRows.vue`), "Items on receipt" (`ExchangePicker.vue`),
+  payment "Exchange credit" row (`Payments.vue`), small-screen dock
+  (`Pos.vue`), drafts drawer and rail, old return screen (`Returns.vue`),
+  POS Pay sidebar (14 places). `ExchangeHost.vue` and the tender-button
+  fallback (`PaymentConfirmationDialog.vue`) already printed a space; they now
+  go through `joinMoney` too. Printouts are untouched (built server-side with
+  Frappe's own format). Display only, no amount or rounding change.
+- **Invoice Management filter labels**: the tops of "Status", "From Date"
+  and "To Date" were cut off, because the tab content (`v-window`) clips its
+  overflow for the slide animation. Fixed with 10 px top padding inside it
+  (`InvoiceManagement.vue`). Note: `*.vue.css` files are gitignored build
+  copies; the scoped `<style>` in the `.vue` file is the real one.
+- **Bottom bar scales down on smaller screens** (normal POS screen, 1100 px
+  wide and up; fast counter mode and the under-1100 mobile dock untouched).
+  Tiers by browser window size: **large** >= 1600 wide and >= 960 tall:
+  as before (bar 226 px). **Medium** 1100-1599 wide or under 960 tall:
+  buttons 36 px, PAY 40 px, bar 174 px. **Small** 1100-1365 wide or under
+  768 tall: buttons 32 px, PAY 36 px, bar 146 px. Same buttons, places,
+  order and colours, and the empty slot next to Return is kept for Print
+  Draft / Customer Screen (`InvoiceSummary.vue`, `InvoiceActionButtons.vue`).
+  The cart card used to be a fixed 58/64/72 % of the window height, so a
+  smaller bar alone only left a gap; on medium/small it now fills the height
+  the bar leaves (`Invoice.vue`: shell `height: calc(100vh - 64px)`, card
+  `flex: 1`), with `Pos.vue` bottom padding 6 px. The drag-to-resize corner
+  (and its saved height) only applies on large now (`useInvoiceUI.ts`
+  `canResizeInvoicePanel`: >= 1600 x 960, was >= 1280 x 860). Cart rows
+  fully visible (4 in the cart): 1280x720 1 -> 2, 1366x657 (a 1366x768
+  laptop in Chrome) 1 -> 2, 1366x768 2 -> 3, 1536x730 (1080p at 125%) 1 -> 3,
+  1536x864 3 -> 4, 1600x900 3 -> 4, 1920x1080 4 (same). No size scrolls the
+  page. Layout heights are computed at page load: measure by reloading at
+  each size, not by resizing.
+- **Sales Person on the payment screen**: it sat in the right column's last
+  grid row, the row shared with the long "Credit and Output" panel, so it
+  started 824 px down with a 406 px empty band above it (off-screen even on
+  1920x1080). Now the right column is one `payment-side` wrapper with Sales
+  Person and Print first, then Redemption and Totals (8 px apart); grid
+  areas "summary side" / "methods side" / "settlement side". Its field is
+  visible without scrolling at every size. Same `PaymentSelectionFields`
+  component and bindings; saving (`sales_team` = that person at 100%) and
+  auto-fill (server-side at submit, `sales_credit.apply_pos_sales_team`) are
+  unchanged. A live sale on staging (ACC-SINV-2026-00409, by the user)
+  saved Sales Person "aziz" at 100% after the move. On narrow single-column
+  windows Sales Person now comes before the totals and Credit and Output.
+
+**Checks.** Vitest 300/300 files, 1956/1956 tests (new:
+`moneyFormatSpace.spec.ts` 4 incl. a scan of every `.vue`/`.ts` for a symbol
+glued to an amount; `paymentSalesPersonPlacement.spec.ts` 3; 4 label cases in
+`invoiceActionButtons.spec.ts`; resize-corner threshold in
+`useInvoiceUI.spec.ts`; each new test checked to fail on the old code).
+Backend: `test_sales_credit` 51/51 OK (Sales Person rules); no server file
+changed. `bench build` exit 0. No migrate (no doctype, fixture or print
+format). System Settings after the test run: precision 3/3, Asia/Muscat,
+`precision("grand_total")` 3. All layout numbers above were measured in
+headless Chromium on staging after a real build. Revert check (1366x657,
+1366x768, 1920x1080): cart rows 69/69/73 px, edit boxes 32 px, item list
+14 px with 16 px cell padding (9/11/17 rows visible, 30 of 32 rows
+wrapping), headings, customer and search fields and payment titles, fields
+and buttons back at 16 px with 40/48 px heights, payment overflow 512 / 401 /
+89 px: all as before the text-size step. Not live-tested: an exchange in
+progress (same Active sale classes), Arabic/RTL, dark mode, fast counter mode.
+
+**Audit for later (not built).** Every POS screen measured at 1280x720,
+1366x657, 1366x768, 1440x900 and 1920x1080 for scroll and cut-off, on this
+build (before the text-size revert; numbers for the original text sizes are
+the 1366x657 / 1366x768 / 1920x1080 ones below). Proposed fixes for medium
+and small only, same layout and colours; a mock-up showed 1920x1080
+unchanged with them loaded.
+- **Cart scrolls sideways** 45 px at 1366, 20 at 1440, 76 at 1280 (the last
+  column, price history, out of view). Cause: `useItemsTableResponsive.ts`
+  draws columns at their preferred widths (sum 919 px in an 874 px box)
+  while the drop-optional-column check uses the smaller minimum widths. Fix:
+  use the existing minimum widths when the preferred ones don't fit; the
+  existing rule still drops the optional column below that.
+- **Item list scrolls sideways** 26 px (1366x657), 82 px (1366x768): UOM out
+  of view; prices wrap to two lines. Five columns with 16 px padding in a
+  ~390-440 px panel. Fix: fixed column shares (25/28/21/13/13 %), 6 px
+  padding.
+- **Payment screen** full page height, 512 / 401 / 89 px below the fold
+  (Master Card, Maal, Credit and Output; at 1366x657 Grand Total half
+  hidden). The left column sets the height (four ~143 px method cards).
+  Fix: tighter method cards (gaps, 36 px method buttons, 24 px quick-amount
+  buttons), tighter totals rows and panel padding; mock-up 355 / 143 px on
+  small / medium (Credit and Output still needs a scroll on small).
+- **Invoice Management**: whole dialog scrolls 167 px at 1366x657 (about
+  1.5 invoice rows visible), 56 px at 1366x768; "Show repair candidates" cut
+  by 32-40 px (13-21 px on large). Cause: `.invoice-management-card__body`
+  `min-height: 580px` + header/tabs/footer = 773 px; summary tiles 124 px;
+  the button needs 284 px in a 245 px grid slot. Fix: no min-height on
+  medium/small, tile padding 10/14, smaller gaps, button text 0.78 rem.
+- **Return search** (old return screen) fields area scrolls 18 / 12 / 12 px:
+  12 px padding per field row plus `v-row` negative margins (a 12 px phantom
+  scroll at every size). Fix: 4 px row padding, no row margins in
+  `.returns-card__content`.
+- **Offers / Coupons view**: whole page scrolls 28 / 18 / 16 px (at 1366x657
+  PAY is pushed half off the bottom). `PosOffers.vue` / `PosCoupons.vue`:
+  card `80vh` + Back bar `11vh` + margins > window. Fix: card height =
+  window - Back bar - header.
+- **Closing shift**: ~2,190 / 1,950 / 1,770 px to scroll (fixed 900 px
+  dialog, long report). Change Returned, Cash Drawer Snapshot and Submitted
+  Cash Movements share one half-width column (`ShiftOverview.vue`
+  `v-col md=6`, right half empty). Fix: tighter overview cards; optionally
+  those three side by side (-210 px).
+- Fit already: New customer, Cancel sale, Z Report history; drafts drawer
+  (only its list scrolls). Not checked: Sales by Cashier (restricted menu,
+  not reachable with the test cashier).
+- Open questions from the review: fix the three small large-screen defects
+  too (repair button, 12 px return-search scroll, 16 px offers page scroll)?
+  Closing three-cards layout OK? Is "all but Credit and Output visible" good
+  enough for the payment screen on small?

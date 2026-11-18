@@ -112,89 +112,112 @@
 						/>
 					</section>
 
-					<section class="payment-section payment-section--adjustments">
-						<div class="payment-section__header">
-							<h3 class="payment-section__title">{{ __("Redemption and Totals") }}</h3>
-						</div>
-						<div
-							v-if="exchangeMode"
-							class="exchange-credit-row"
-							data-testid="exchange-credit-row"
-						>
-							<v-icon size="18" icon="mdi-lock" class="exchange-credit-row__lock" />
-							<span class="exchange-credit-row__label">
-								{{ __("Exchange credit") }} ·
-								{{ __("return of {0}", [exchangeStore.receipt?.name || ""]) }}
-							</span>
-							<strong class="exchange-credit-row__amount">
-								−{{ currencySymbol(invoice_doc.currency) }}{{ formatCurrency(exchange_credit) }}
-							</strong>
-						</div>
-						<PaymentRedemption
-							v-else
-							:invoice-doc="invoice_doc"
-							:customer-info="customer_info"
-							:pos-profile="pos_profile"
-							:available-points-amount="available_points_amount"
-							:loyalty-amount="loyalty_amount"
-							:available-customer-credit="available_customer_credit"
-							:redeem-customer-credit="redeem_customer_credit"
-							:redeemed-customer-credit="redeemed_customer_credit"
-							:format-currency="formatCurrency"
-							:format-float="formatFloat"
-							:currency-symbol="currencySymbol"
-							@set-formatted-currency="handleRedemptionFormattedCurrency"
-						/>
-						<InvoiceTotals
-							:invoice_doc="invoice_doc"
-							:displayCurrency="displayCurrency"
-							:diff_payment="diff_payment"
-							:diff_label="paymentDiffLabel"
-							:item-discount-total="paymentItemDiscountTotal"
-							:currencySymbol="currencySymbol"
-							:formatCurrency="formatCurrency"
-						/>
-						<div class="payment-section__subsection">
-							<h3 class="payment-section__title payment-section__title--subsection">
-								{{ __("Fulfillment Details") }}
-							</h3>
-						</div>
-						<PaymentAdditionalInfo
-							:invoice-doc="invoice_doc"
-							:pos-profile="pos_profile"
-							:invoice-type="invoiceType"
-							:return-validity-enabled="returnValidityEnabled"
-							:return-validity-min-date="returnValidityMinDate"
-							:addresses="addresses"
-							:new-delivery-date="new_delivery_date"
-							:return-valid-upto-date="return_valid_upto_date"
-							:address-filter="addressFilter"
-							@update:new-delivery-date="
-								(val) => {
-									new_delivery_date = val;
-									update_delivery_date();
-								}
-							"
-							@update:return-valid-upto-date="
-								(val) => {
-									return_valid_upto_date = val;
-									updateReturnValidUpto();
-								}
-							"
-							@new-address="new_address"
-						/>
-						<PaymentPurchaseOrder
-							:invoice-doc="invoice_doc"
-							:pos-profile="pos_profile"
-							:new-po-date="new_po_date"
-							@update:new-po-date="
-								(val) => {
-									new_po_date = val;
-									update_po_date();
-								}
-							"
-						/>
-					</section>
+					<!-- Right column: Sales Person first, then the totals, stacked with no gap
+					     (they used to share grid rows with the long left-hand panels). -->
+					<div class="payment-side">
+						<section class="payment-section payment-section--meta">
+							<div class="payment-section__header">
+								<h3 class="payment-section__title">{{ __("Sales Person and Print") }}</h3>
+							</div>
+							<PaymentSelectionFields
+								:sales-persons="sales_persons"
+								:sales-person="sales_person"
+								:readonly="readonly"
+								:follows-original="!!(invoice_doc?.is_return && invoice_doc?.return_against)"
+								:print-formats="print_formats"
+								:print-format="print_format"
+								:show-print-format="
+									parseBooleanSetting(pos_profile?.posa_allow_select_print_format_in_payments)
+								"
+								@update:sales-person="sales_person = $event"
+								@update:print-format="print_format = $event"
+							/>
+						</section>
+
+						<section class="payment-section payment-section--adjustments">
+							<div class="payment-section__header">
+								<h3 class="payment-section__title">{{ __("Redemption and Totals") }}</h3>
+							</div>
+							<div
+								v-if="exchangeMode"
+								class="exchange-credit-row"
+								data-testid="exchange-credit-row"
+							>
+								<v-icon size="18" icon="mdi-lock" class="exchange-credit-row__lock" />
+								<span class="exchange-credit-row__label">
+									{{ __("Exchange credit") }} ·
+									{{ __("return of {0}", [exchangeStore.receipt?.name || ""]) }}
+								</span>
+								<strong class="exchange-credit-row__amount">
+									−{{ currencySymbol(invoice_doc.currency) }} {{ formatCurrency(exchange_credit) }}
+								</strong>
+							</div>
+							<PaymentRedemption
+								v-else
+								:invoice-doc="invoice_doc"
+								:customer-info="customer_info"
+								:pos-profile="pos_profile"
+								:available-points-amount="available_points_amount"
+								:loyalty-amount="loyalty_amount"
+								:available-customer-credit="available_customer_credit"
+								:redeem-customer-credit="redeem_customer_credit"
+								:redeemed-customer-credit="redeemed_customer_credit"
+								:format-currency="formatCurrency"
+								:format-float="formatFloat"
+								:currency-symbol="currencySymbol"
+								@set-formatted-currency="handleRedemptionFormattedCurrency"
+							/>
+							<InvoiceTotals
+								:invoice_doc="invoice_doc"
+								:displayCurrency="displayCurrency"
+								:diff_payment="diff_payment"
+								:diff_label="paymentDiffLabel"
+								:item-discount-total="paymentItemDiscountTotal"
+								:currencySymbol="currencySymbol"
+								:formatCurrency="formatCurrency"
+							/>
+							<div class="payment-section__subsection">
+								<h3 class="payment-section__title payment-section__title--subsection">
+									{{ __("Fulfillment Details") }}
+								</h3>
+							</div>
+							<PaymentAdditionalInfo
+								:invoice-doc="invoice_doc"
+								:pos-profile="pos_profile"
+								:invoice-type="invoiceType"
+								:return-validity-enabled="returnValidityEnabled"
+								:return-validity-min-date="returnValidityMinDate"
+								:addresses="addresses"
+								:new-delivery-date="new_delivery_date"
+								:return-valid-upto-date="return_valid_upto_date"
+								:address-filter="addressFilter"
+								@update:new-delivery-date="
+									(val) => {
+										new_delivery_date = val;
+										update_delivery_date();
+									}
+								"
+								@update:return-valid-upto-date="
+									(val) => {
+										return_valid_upto_date = val;
+										updateReturnValidUpto();
+									}
+								"
+								@new-address="new_address"
+							/>
+							<PaymentPurchaseOrder
+								:invoice-doc="invoice_doc"
+								:pos-profile="pos_profile"
+								:new-po-date="new_po_date"
+								@update:new-po-date="
+									(val) => {
+										new_po_date = val;
+										update_po_date();
+									}
+								"
+							/>
+						</section>
+					</div>
 
 					<section v-if="!exchangeMode" class="payment-section payment-section--settlement">
 						<div class="payment-section__header">
@@ -256,24 +279,6 @@
 						/>
 					</section>
 
-					<section class="payment-section payment-section--meta">
-						<div class="payment-section__header">
-							<h3 class="payment-section__title">{{ __("Sales Person and Print") }}</h3>
-						</div>
-						<PaymentSelectionFields
-							:sales-persons="sales_persons"
-							:sales-person="sales_person"
-							:readonly="readonly"
-							:follows-original="!!(invoice_doc?.is_return && invoice_doc?.return_against)"
-							:print-formats="print_formats"
-							:print-format="print_format"
-							:show-print-format="
-								parseBooleanSetting(pos_profile?.posa_allow_select_print_format_in_payments)
-							"
-							@update:sales-person="sales_person = $event"
-							@update:print-format="print_format = $event"
-						/>
-					</section>
 				</div>
 			</div>
 		</v-card>
@@ -3085,10 +3090,9 @@ defineExpose({
 	gap: var(--pos-space-2);
 	align-items: start;
 	grid-template-areas:
-		"summary adjustments"
-		"methods adjustments"
-		"settlement adjustments"
-		"settlement meta";
+		"summary side"
+		"methods side"
+		"settlement side";
 }
 
 .payment-section {
@@ -3118,12 +3122,16 @@ defineExpose({
 	grid-area: settlement;
 }
 
-.payment-sections--dialog .payment-section--adjustments {
-	grid-area: adjustments;
+.payment-side {
+	display: flex;
+	flex-direction: column;
+	gap: var(--pos-space-3);
+	min-width: 0;
 }
 
-.payment-sections--dialog .payment-section--meta {
-	grid-area: meta;
+.payment-sections--dialog .payment-side {
+	grid-area: side;
+	gap: var(--pos-space-2);
 }
 
 .payment-section--summary {

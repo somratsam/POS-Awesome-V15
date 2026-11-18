@@ -213,8 +213,8 @@
 											<span>{{ item.name }}</span>
 										</div>
 										<div class="returns-result-card__amount">
-											{{ currencySymbol(item.currency)
-											}}{{ formatCurrency(item.grand_total) }}
+											{{ currencySymbol(item.currency) }}
+											{{ formatCurrency(item.grand_total) }}
 										</div>
 									</div>
 									<div class="returns-result-card__meta">

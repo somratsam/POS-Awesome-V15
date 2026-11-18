@@ -3,8 +3,10 @@
  *
  * **Resizable invoice panel**
  * The invoice item list panel can be resized by the operator on large screens.
- * `canResizeInvoicePanel()` returns `true` only when the viewport is at least
- * 1280 × 860 px; below that threshold a viewport-fraction default is used instead.
+ * `canResizeInvoicePanel()` returns `true` only on the large size tier: a
+ * viewport of at least 1600 × 960 px. Below that (the medium and small tiers,
+ * see the bottom bar in InvoiceSummary.vue) the cart card fills the height
+ * the bottom bar leaves instead (Invoice.vue), and there is no resize corner.
  * The clamped height is persisted in `localStorage` under the key
  * `posawesome_invoice_height` and reloaded on the next session.
  * The maximum height scales with viewport size: 58 % on very small screens,
@@ -65,7 +67,7 @@ export function useInvoiceUI() {
 	};
 
 	const canResizeInvoicePanel = () => {
-		return getViewportWidth() >= 1280 && getViewportHeight() >= 860;
+		return getViewportWidth() >= 1600 && getViewportHeight() >= 960;
 	};
 
 	const getMaxInvoiceHeightPx = () => {

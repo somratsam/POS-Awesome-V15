@@ -28,13 +28,13 @@
 				</template>
 				<div v-if="!exchangeStore.active" class="counter-grid-summary__metric">
 					<span>{{ __("Gross") }}</span>
-					<strong>{{ currencySymbol(displayCurrency) }}{{ formatCurrency(grossTotal) }}</strong>
+					<strong>{{ currencySymbol(displayCurrency) }} {{ formatCurrency(grossTotal) }}</strong>
 				</div>
 				<div v-if="!exchangeStore.active" class="counter-grid-summary__metric">
 					<span>{{ __("Item discount") }}</span>
 					<strong
-						>{{ currencySymbol(displayCurrency)
-						}}{{ formatCurrency(total_items_discount_amount) }}</strong
+						>{{ currencySymbol(displayCurrency) }}
+						{{ formatCurrency(total_items_discount_amount) }}</strong
 					>
 				</div>
 				<div v-if="!exchangeStore.active" class="counter-grid-summary__metric counter-grid-summary__metric--qty">
@@ -101,7 +101,7 @@
 				</div>
 				<div v-else class="counter-grid-summary__metric counter-grid-summary__metric--total">
 					<span>{{ __("Net total") }}</span>
-					<strong>{{ currencySymbol(displayCurrency) }}{{ formatCurrency(subtotal) }}</strong>
+					<strong>{{ currencySymbol(displayCurrency) }} {{ formatCurrency(subtotal) }}</strong>
 				</div>
 			</div>
 
@@ -171,7 +171,7 @@
 					<div v-else class="summary-hero__copy">
 						<span class="summary-hero__eyebrow">{{ __("Active sale") }}</span>
 						<strong class="summary-hero__amount">
-							{{ currencySymbol(displayCurrency) }}{{ formatCurrency(subtotal) }}
+							{{ currencySymbol(displayCurrency) }} {{ formatCurrency(subtotal) }}
 						</strong>
 						<div class="summary-hero__meta">
 							<span
@@ -179,8 +179,8 @@
 								{{ __("qty") }}</span
 							>
 							<span>
-								{{ currencySymbol(displayCurrency)
-								}}{{ formatCurrency(total_items_discount_amount) }}
+								{{ currencySymbol(displayCurrency) }}
+								{{ formatCurrency(total_items_discount_amount) }}
 								{{ __("discount") }}
 							</span>
 						</div>
@@ -449,7 +449,7 @@ const isCounterGrid = computed(() => props.presentation === "counter-grid");
 const exchangeStore = useExchangeStore();
 const exchangePrecision = computed(() => Number(props.pos_profile?.currency_precision) || 3);
 const exchangeMoney = (value) =>
-	`${props.currencySymbol(props.displayCurrency)}${props.formatCurrency(Math.abs(Number(value) || 0))}`;
+	`${props.currencySymbol(props.displayCurrency)} ${props.formatCurrency(Math.abs(Number(value) || 0))}`;
 const exchangeNewQty = computed(() => Math.max(Number(props.total_qty) || 0, 0));
 const exchangeNewTotal = computed(() => (exchangeNewQty.value > 0 ? Number(props.subtotal) || 0 : null));
 const exchangeLabels = computed(() =>
@@ -996,6 +996,92 @@ defineExpose({
 
 	.sticky-summary-card--dock-safe {
 		margin-bottom: calc(var(--bottom-safe-space) + 8px);
+	}
+}
+/* Size tiers for the bottom bar (normal POS screen, 1100 px wide and up):
+   large   >= 1600 wide and >= 960 tall  -> today's sizes
+   medium  1100-1599 wide, or < 960 tall -> bar about 180 px
+   small   1100-1365 wide, or < 768 tall -> bar about 158 px
+   Same layout, order and colours; only padding and sizes shrink. The buttons
+   are in InvoiceActionButtons.vue, the cart fill in Invoice.vue. */
+@media (min-width: 1100px) and (max-width: 1599px), (min-width: 1100px) and (max-height: 959px) {
+	.sticky-summary-card:not(.counter-grid-summary-card) {
+		padding: 6px 10px !important;
+	}
+
+	.summary-hero {
+		padding: 8px 12px;
+		gap: 10px;
+		border-radius: 14px;
+	}
+
+	.summary-hero__eyebrow {
+		font-size: 0.66rem;
+	}
+
+	.summary-hero__amount {
+		font-size: 1.4rem;
+	}
+
+	.summary-hero__meta {
+		flex-wrap: nowrap;
+		gap: 10px;
+		font-size: 0.78rem;
+		white-space: nowrap;
+	}
+
+	.summary-hero__field-wrap {
+		width: min(220px, 100%);
+	}
+
+	.summary-hero__field-wrap :deep(.v-field__input) {
+		min-height: 36px;
+		padding-top: 6px;
+		padding-bottom: 6px;
+	}
+
+	.invoice-summary-actions {
+		padding-top: 2px !important;
+		padding-bottom: 2px !important;
+	}
+}
+
+@media (min-width: 1100px) and (max-width: 1365px), (min-width: 1100px) and (max-height: 767px) {
+	.sticky-summary-card:not(.counter-grid-summary-card) {
+		padding: 4px 8px !important;
+	}
+
+	.summary-hero {
+		padding: 6px 10px;
+		gap: 8px;
+		border-radius: 12px;
+	}
+
+	.summary-hero__copy {
+		gap: 2px;
+	}
+
+	.summary-hero__eyebrow {
+		font-size: 0.62rem;
+	}
+
+	.summary-hero__amount {
+		font-size: 1.2rem;
+	}
+
+	.summary-hero__meta {
+		font-size: 0.74rem;
+	}
+
+	.summary-hero__field-wrap {
+		width: min(190px, 100%);
+	}
+
+	.summary-hero__field-wrap :deep(.v-field__input) {
+		min-height: 32px;
+		padding-top: 4px;
+		padding-bottom: 4px;
+		font-size: 0.85rem;
 	}
 }
 </style>
