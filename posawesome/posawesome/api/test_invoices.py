@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util
 import pathlib
 import sys
@@ -94,6 +95,9 @@ def _install_frappe_stub():
     invoice_processing_creation.repair_invoice_submission = lambda *args, **kwargs: None
     invoice_processing_creation.validate_cart_items = lambda *args, **kwargs: None
     invoice_processing_creation._reapply_incoming_payment_amounts = lambda *args, **kwargs: None
+    invoice_processing_creation.trusted_invoice_shift_reassignment = (
+        lambda *args, **kwargs: contextlib.nullcontext()
+    )
     sys.modules["posawesome.posawesome.api.invoice_processing.creation"] = invoice_processing_creation
 
     invoice_processing_returns = types.ModuleType("posawesome.posawesome.api.invoice_processing.returns")
@@ -211,6 +215,7 @@ class TestInvoicesApi(unittest.TestCase):
         self.invoices.frappe.db.exists = lambda *args, **kwargs: False
         self.invoices.frappe.db.has_column = lambda doctype, fieldname: fieldname == "pos_closing_entry"
         self.invoices.frappe.db.get_value = lambda *args, **kwargs: None
+        self._set_edit_approver("supervisor@example.com")
 
         rows = self.invoices.list_submitted_invoices(
             doctype="Sales Invoice",
@@ -222,6 +227,45 @@ class TestInvoicesApi(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["filters"]["docstatus"], 1)
         self.assertTrue(rows[0]["can_edit_submitted_invoice"])
         self.assertIsNone(rows[0]["edit_block_reason"])
+        self.assertEqual(rows[0]["edit_authorized_by"], "supervisor@example.com")
+
+    def test_list_submitted_invoices_blocks_editing_without_supervisor(self):
+        self.invoices.frappe.get_list = lambda *args, **kwargs: [
+            {
+                "name": "SINV-0001",
+                "doctype": "Sales Invoice",
+                "docstatus": 1,
+                "is_return": 0,
+                "return_against": None,
+                "creation": "2026-07-10 00:00:00",
+                "amended_from": None,
+                "pos_profile": "POS-1",
+                "company": "Company 1",
+                "status": "Paid",
+            }
+        ]
+        self.invoices.frappe.get_all = lambda *args, **kwargs: []
+        self.invoices.frappe.db.exists = lambda *args, **kwargs: False
+        self.invoices.frappe.db.has_column = lambda doctype, fieldname: fieldname == "pos_closing_entry"
+        self.invoices.frappe.db.get_value = lambda *args, **kwargs: None
+        self._set_edit_approver(None)
+
+        rows = self.invoices.list_submitted_invoices(
+            doctype="Sales Invoice",
+            filters={"pos_profile": "POS-1"},
+            fields=["name", "status"],
+        )
+
+        self.assertFalse(rows[0]["can_edit_submitted_invoice"])
+        self.assertTrue(rows[0]["edit_requires_supervisor"])
+        self.assertIn("Only a POS supervisor", rows[0]["edit_block_reason"])
+        self.assertIsNone(rows[0]["edit_authorized_by"])
+
+    def _set_edit_approver(self, approver):
+        edits = sys.modules["posawesome.posawesome.api.submitted_invoice_edits"]
+        original = edits.get_submitted_invoice_edit_approver
+        edits.get_submitted_invoice_edit_approver = lambda _profile: approver
+        self.addCleanup(setattr, edits, "get_submitted_invoice_edit_approver", original)
 
     def test_list_submitted_invoices_blocks_return_invoice_editing(self):
         self.invoices.frappe.get_list = lambda *args, **kwargs: [

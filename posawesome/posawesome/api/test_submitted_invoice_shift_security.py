@@ -102,6 +102,10 @@ def _load_module(captured):
     creation.submit_invoice = submit_invoice
     sys.modules["posawesome.posawesome.api.invoice_processing.creation"] = creation
 
+    processing_utils = types.ModuleType("posawesome.posawesome.api.invoice_processing.utils")
+    processing_utils.apply_zero_valuation_rate_defaults = lambda *_args, **_kwargs: None
+    sys.modules["posawesome.posawesome.api.invoice_processing.utils"] = processing_utils
+
     api_utils = types.ModuleType("posawesome.posawesome.api.utils")
     api_utils.assert_pos_profile_write_allowed = lambda *_args, **_kwargs: None
     sys.modules["posawesome.posawesome.api.utils"] = api_utils

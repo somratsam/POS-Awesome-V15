@@ -5,6 +5,17 @@ import types
 import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
+_ORIGINAL_MODULES = dict(sys.modules)
+_FAKED_PREFIXES = ("frappe", "erpnext", "posawesome")
+
+
+def tearDownModule():
+    for name in list(sys.modules):
+        if name.startswith(_FAKED_PREFIXES) and name not in _ORIGINAL_MODULES:
+            sys.modules.pop(name, None)
+    for name, module in _ORIGINAL_MODULES.items():
+        if name.startswith(_FAKED_PREFIXES):
+            sys.modules[name] = module
 
 
 class FakePaymentEntry:

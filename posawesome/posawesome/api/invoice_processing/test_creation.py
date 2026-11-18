@@ -129,6 +129,7 @@ def _install_framework_stubs():
     frappe_module.get_cached_value = lambda *args, **kwargs: None
     frappe_module.get_cached_doc = lambda *args, **kwargs: _FrappeDict()
     frappe_module.flags = types.SimpleNamespace(ignore_account_permission=False)
+    frappe_module.local = types.SimpleNamespace(message_log=[])
     publish_realtime_calls = []
     frappe_module.db = types.SimpleNamespace(
         get_value=lambda *args, **kwargs: None,
@@ -687,6 +688,7 @@ class TestUpdateInvoiceReturnPayments(unittest.TestCase):
             items=[],
             payments=[
                 FakeDoc(
+                    mode_of_payment="Cash",
                     amount=125,
                     base_amount=None,
                 )
@@ -742,6 +744,7 @@ class TestUpdateInvoiceReturnPayments(unittest.TestCase):
             items=[],
             payments=[
                 FakeDoc(
+                    mode_of_payment="Cash",
                     amount=None,
                     base_amount=125,
                 )
@@ -2623,6 +2626,32 @@ class TestInvoiceIdempotency(unittest.TestCase):
                 "offline_sync",
             ):
                 pass
+
+    def test_trusted_delayed_work_rejects_unsupported_source(self):
+        original_get_doc = self.creation.frappe.get_doc
+
+        def get_doc(*args):
+            raise AssertionError(("no lookup expected", args))
+
+        self.creation.frappe.get_doc = get_doc
+        self.addCleanup(setattr, self.creation.frappe, "get_doc", original_get_doc)
+
+        for source in ("", None, "client", "pos_ui", "OFFLINE_SYNC", "submitted_amendment "):
+            with self.subTest(source=source):
+                invoice = {
+                    "pos_profile": "Main POS",
+                    "company": "Test Company",
+                    "posa_pos_opening_shift": "POS-OPEN-CLOSED",
+                }
+                data = {"posa_pos_opening_shift": "POS-OPEN-CLOSED"}
+                with self.assertRaisesRegex(Exception, "Unsupported trusted shift reassignment source"):
+                    with self.creation.trusted_invoice_shift_reassignment(invoice, data, source):
+                        self.fail("body must not run for an unsupported source")
+                self.assertEqual(invoice["posa_pos_opening_shift"], "POS-OPEN-CLOSED")
+                self.assertEqual(data["posa_pos_opening_shift"], "POS-OPEN-CLOSED")
+                self.assertIsNone(
+                    getattr(self.creation.frappe.flags, "posa_trusted_shift_audit", None)
+                )
 
     def test_accepted_background_shift_ownership_survives_later_shift_close(self):
         opening_doc = FakeDoc(

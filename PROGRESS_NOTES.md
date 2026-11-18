@@ -10306,3 +10306,48 @@ restart.
   ({0})" showed "{0}" (pre-existing).
 - Deleted drafts MCO-CN-2026-00021 (user's) and my own test drafts.
 - The 4 old failing test modules: separate cleanup job later.
+
+## 105. Old failing backend test modules fixed (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** Fix the 4 modules that already failed on production's
+`bcae9fec` and the "Standard Buying" crash. Test files only; no app code
+changed. Each failure was an outdated test, not a bug.
+
+- `test_submitted_invoice_shift_security` (1/1): missing fake for
+  `invoice_processing.utils` (imported by `submitted_invoice_edits.py`).
+- `test_invoices` (7/7): fake `creation` lacked
+  `trusted_invoice_shift_reassignment`; the "editable" test now names the
+  supervisor approver (Edit Invoice is supervisor-only since `22e37d32`); new
+  test: no supervisor -> blocked, "Only a POS supervisor".
+- `test_invoice_cancel_hooks` (5/5): fakes for invoice.py's validate-time
+  helpers; cancelled doc has `.get` (on_cancel's status refresh, section 104);
+  `tearDownModule` restores the real frappe (ended the runner's
+  "'frappe.utils' is not a package" crash).
+- `invoice_processing.test_creation` (114/114): all 8 errors came from
+  `166eeaba` (fake frappe lacked `local.message_log`, fake payment rows lacked
+  `mode_of_payment`). New `test_trusted_delayed_work_rejects_unsupported_source`
+  on the real guard (refused before any lookup, shift untouched, no audit
+  flag); confirmed it fails with "client" temporarily allowed.
+- `invoice_processing.test_payment` (4/4): `tearDownModule` (exit was 1 from a
+  teardown crash, pre-existing).
+- `test_pos_invoice_submission_ledger` (2/2, couldn't start): cause is
+  ERPNext's test bootstrap (`erpnext/tests/utils.py`, run on import) checking
+  "Standard Buying" by name + currency INR; staging's is OMR, so it inserts a
+  duplicate. Now `IntegrationTestCase` with
+  `IGNORE_TEST_RECORD_DEPENDENCIES = ["Company", "POS Profile"]` (it uses the
+  site's own POS Profile); cashier roles "POS User" if it exists (site-made,
+  production only) + "Sales User". No data changed.
+- `test_submitted_invoice_edits_credit_badge` no longer exists (section 104).
+  `test_stock_lookup_suggest` already used `unittest.TestCase`, 7/7.
+
+**Staging data.** Earlier crashed bootstrap runs (2026-08-11) left ERPNext
+`_Test` records (13 companies, 10 customers, 20 items, 12 warehouses) - left
+as they are. The 14 `@example.com` users (3 with System Manager) are now
+disabled, not deleted. Production (`site1.local`): 0 `@example.com` users, 0
+`_Test` companies (user's check).
+
+**Checks.** Vitest 298/298 files, 1944/1944 tests. Backend in isolation: the 6
+above plus test_stock_lookup_suggest 7, test_submitted_invoice_edit_supervisor
+13, test_offline_sync_invoices 4, invoice_processing.test_utils 12, all OK.
+No build (no frontend files), no migrate (no doctype/fixture). System
+Settings restored 3/3 Asia/Muscat, `precision("grand_total")` 3.

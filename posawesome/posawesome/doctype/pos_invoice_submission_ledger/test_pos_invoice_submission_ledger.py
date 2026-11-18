@@ -4,13 +4,18 @@ import unittest
 from unittest.mock import patch
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 
 DOCTYPE = "POS Invoice Submission Ledger"
 
+# The tests use the site's own POS Profile, not generated test records. Making
+# Company/POS Profile test records loads ERPNext's test bootstrap, which inserts
+# an INR "Standard Buying" Price List and crashes on a site whose one is OMR.
+IGNORE_TEST_RECORD_DEPENDENCIES = ["Company", "POS Profile"]
 
-class TestPosInvoiceSubmissionLedger(FrappeTestCase):
+
+class TestPosInvoiceSubmissionLedger(IntegrationTestCase):
     def setUp(self):
         super().setUp()
         frappe.set_user("Administrator")
@@ -24,7 +29,13 @@ class TestPosInvoiceSubmissionLedger(FrappeTestCase):
                 "send_welcome_email": 0,
             }
         ).insert(ignore_permissions=True)
-        user.add_roles("POS User")
+        # "POS User" is a site-made role (production has it, staging doesn't);
+        # "Sales User" is the stock role every store cashier also holds.
+        cashier_roles = [
+            role for role in ("POS User", "Sales User") if frappe.db.exists("Role", role)
+        ]
+        self.assertTrue(cashier_roles)
+        user.add_roles(*cashier_roles)
         self.manager_user = f"test-pos-manager-ledger-{uuid.uuid4().hex[:10]}@example.com"
         manager = frappe.get_doc(
             {
