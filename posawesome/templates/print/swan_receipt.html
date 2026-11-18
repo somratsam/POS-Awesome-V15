@@ -19,6 +19,30 @@
     keeps its own quiet zones. -#}
 {%- set ex = exchange_credit_sources(doc) -%}
 {%- set is_exchange = ex.returns|length > 0 -%}
+{# Arabic description (Item.custom_description_arabic): one lookup per receipt.
+   Skipped entirely if the custom field doesn't exist on this site, so the
+   receipt never fails to print because of it. #}
+{% set desc_ar_map = {} %}
+{% set _all_codes = doc.items|map(attribute="item_code")|list %}
+{% for r in ex.returns %}{% set _all_codes = _all_codes + (r.items|map(attribute="item_code")|list) %}{% endfor %}
+{% if _all_codes and frappe.db.exists("Custom Field", "Item-custom_description_arabic") %}
+{% for ar_row in frappe.db.get_all("Item", filters={"name": ["in", _all_codes]}, fields=["name", "custom_description_arabic"]) %}
+{% if ar_row.custom_description_arabic and ar_row.custom_description_arabic.strip() %}{% set _ = desc_ar_map.update({ar_row.name: ar_row.custom_description_arabic.strip()}) %}{% endif %}
+{% endfor %}
+{% endif %}
+{#- The English description line prints only when it adds something: not
+    when the description is already part of the item name (a variant
+    "ABITO IN JERSEY-1-XL" with the description "ABITO IN JERSEY"). The
+    Arabic description always prints. -#}
+{%- macro english_desc(it) -%}
+{%- set _d = (it.description or "")|striptags|trim|lower -%}
+{%- if _d and _d not in ((it.item_name or "")|striptags|lower) -%}{{ it.description }}{%- endif -%}
+{%- endmacro -%}
+{#- Amounts never print as "-0.000": a 0 stored as -0.0, or a tiny float rest
+    (an exchange's difference is worked out here), prints without the sign;
+    minus() puts "-" only in front of an amount that isn't 0. -#}
+{%- macro amt(value) -%}{%- set _s = "%.3f"|format(value or 0) -%}{{ _s[1:] if _s == "-0.000" else _s }}{%- endmacro -%}
+{%- macro minus(value) -%}{%- set _s = amt(value)|string -%}{{ _s if _s == "0.000" else "-" ~ _s }}{%- endmacro -%}
 {#- Desk Print -> PDF page height. wkhtmltopdf needs a fixed page height, so
     estimate this receipt's length from its content (line heights measured on
     staging) plus a safety margin; leftover space is split above/below the
@@ -30,7 +54,7 @@
 {%- set _r = ((_it.get("posa_discount_reason") or "")|trim) if (_it.discount_percentage or 0) > 0 else "" -%}
 {%- set _r = "" if _r == "Not recorded" else _r -%}
 {#- A discount reason makes the discount line longer: ~44 characters fit per line at 80mm. -#}
-{%- set _ns.lines = _ns.lines + 2 + (1 if (_it.item_name or "")|length > 18 else 0) + (1 if _it.description else 0) + (1 if (_it.discount_percentage or 0) > 0 else 0) + ((((_r|length) + 40) / 44)|round(0, "ceil")|int - 1 if _r else 0) -%}
+{%- set _ns.lines = _ns.lines + 2 + (1 if (_it.item_name or "")|length > 18 else 0) + (1 if (english_desc(_it) or desc_ar_map.get(_it.item_code)) else 0) + (1 if (_it.discount_percentage or 0) > 0 else 0) + ((((_r|length) + 40) / 44)|round(0, "ceil")|int - 1 if _r else 0) -%}
 {%- endfor -%}
 {%- set _pays = doc.payments|selectattr("amount")|list|length -%}
 {%- set _extra = (doc.payments|selectattr("reference_no")|list|length)
@@ -202,33 +226,23 @@
 </div>
 
 <!-- ITEMS -->
-{# Arabic description (Item.custom_description_arabic): one lookup per receipt.
-   Skipped entirely if the custom field doesn't exist on this site, so the
-   receipt never fails to print because of it. #}
-{% set desc_ar_map = {} %}
-{% set _all_codes = doc.items|map(attribute="item_code")|list %}
-{% for r in ex.returns %}{% set _all_codes = _all_codes + (r.items|map(attribute="item_code")|list) %}{% endfor %}
-{% if _all_codes and frappe.db.exists("Custom Field", "Item-custom_description_arabic") %}
-{% for ar_row in frappe.db.get_all("Item", filters={"name": ["in", _all_codes]}, fields=["name", "custom_description_arabic"]) %}
-{% if ar_row.custom_description_arabic and ar_row.custom_description_arabic.strip() %}{% set _ = desc_ar_map.update({ar_row.name: ar_row.custom_description_arabic.strip()}) %}{% endif %}
-{% endfor %}
-{% endif %}
 {% macro item_rows(rows) %}
 {% for item in rows %}
 <div class="item-row">
   <div class="item-name-row">
     <span>{{ item.qty|int }}x {{ item.item_name }}</span>
-    <span>{{ "%.3f"|format(item.amount) }}</span>
+    <span>{{ amt(item.amount) }}</span>
   </div>
   <div class="item-detail">{{ item.item_code }}</div>
   {% set desc_ar = desc_ar_map.get(item.item_code) %}
+  {% set desc_en = english_desc(item) %}
   {% if desc_ar %}
-  <div class="item-detail item-desc-row"><span>{{ item.description or "" }}</span><span class="item-desc-ar" dir="rtl" lang="ar">{{ desc_ar|e }}</span></div>
-  {% elif item.description %}<div class="item-detail">{{ item.description }}</div>{% endif %}
+  <div class="item-detail item-desc-row"><span>{{ desc_en }}</span><span class="item-desc-ar" dir="rtl" lang="ar">{{ desc_ar|e }}</span></div>
+  {% elif desc_en %}<div class="item-detail">{{ desc_en }}</div>{% endif %}
   {% if item.discount_percentage and item.discount_percentage > 0 %}
   <div class="item-discount">
     Discount {% set _reason = (item.get("posa_discount_reason") or "")|trim %}{% if _reason and _reason != "Not recorded" %}<span class="item-discount-reason">{{ _reason|e }}</span> {% endif %}{{ item.discount_percentage }}%
-    on {{ "%.3f"|format(item.price_list_rate) }} is -{{ "%.3f"|format(((item.price_list_rate - item.rate) * item.qty)|abs) }}
+    on {{ amt(item.price_list_rate) }} is {{ minus(((item.price_list_rate - item.rate) * item.qty)|abs) }}
   </div>
   {% endif %}
 </div>
@@ -249,10 +263,10 @@
 <!-- TOTAL -->
 <div class="total-section">
   {% if is_exchange %}
-  <div class="total-amount">**** OMR {{ "%.3f"|format(doc.grand_total - ex.used - ex.other_credit) }} ****</div>
+  <div class="total-amount">**** OMR {{ amt(doc.grand_total - ex.used - ex.other_credit) }} ****</div>
   <div class="total-items">Difference paid : الفرق المدفوع</div>
   {% else %}
-  <div class="total-amount">**** OMR {{ "%.3f"|format(doc.grand_total) }} ****</div>
+  <div class="total-amount">**** OMR {{ amt(doc.grand_total) }} ****</div>
   <div class="total-items">{{ doc.total_qty|int }} item{% if doc.total_qty|abs != 1 %}s{% endif %} : صنف</div>
   {% endif %}
 </div>
@@ -270,17 +284,17 @@
   {% for tax in doc.taxes %}
   <tr>
     <td>VAT</td>
-    <td>{{ "%.3f"|format(tax.tax_amount) }}</td>
+    <td>{{ amt(tax.tax_amount) }}</td>
     <td>{{ tax.rate }}%</td>
-    <td>{{ "%.3f"|format(doc.net_total) }}</td>
+    <td>{{ amt(doc.net_total) }}</td>
   </tr>
   {% endfor %}
   {% for r in ex.returns %}{% for tax in r.taxes %}
   <tr>
     <td>VAT returned</td>
-    <td>-{{ "%.3f"|format(tax.tax_amount|abs) }}</td>
+    <td>{{ minus(tax.tax_amount|abs) }}</td>
     <td>{{ tax.rate }}%</td>
-    <td>-{{ "%.3f"|format(r.net_total|abs) }}</td>
+    <td>{{ minus(r.net_total|abs) }}</td>
   </tr>
   {% endfor %}{% endfor %}
 </table>
@@ -293,15 +307,15 @@
   <span>Summary</span>
   <span>ملخص</span>
 </div>
-<div class="payment-row"><span>Returned total المرتجع</span><span>-{{ "%.3f"|format(ex.returned) }} OMR</span></div>
-<div class="payment-row"><span>New items total الجديد</span><span>{{ "%.3f"|format(doc.grand_total) }} OMR</span></div>
-{% if ex.other_credit %}<div class="payment-row"><span>Credit note used إشعار دائن مستخدم</span><span>-{{ "%.3f"|format(ex.other_credit) }} OMR</span></div>{% endif %}
-<div class="payment-row" style="font-weight:bold;"><span>Difference paid الفرق</span><span>{{ "%.3f"|format(doc.grand_total - ex.used - ex.other_credit) }} OMR</span></div>
+<div class="payment-row"><span>Returned total المرتجع</span><span>{{ minus(ex.returned) }} OMR</span></div>
+<div class="payment-row"><span>New items total الجديد</span><span>{{ amt(doc.grand_total) }} OMR</span></div>
+{% if ex.other_credit %}<div class="payment-row"><span>Credit note used إشعار دائن مستخدم</span><span>{{ minus(ex.other_credit) }} OMR</span></div>{% endif %}
+<div class="payment-row" style="font-weight:bold;"><span>Difference paid الفرق</span><span>{{ amt(doc.grand_total - ex.used - ex.other_credit) }} OMR</span></div>
 {% for payment in doc.payments %}
 {% if payment.amount != 0 %}
 <div class="payment-row">
   <span>&nbsp;&nbsp;{{ payment.mode_of_payment }}</span>
-  <span>{{ "%.3f"|format(payment.amount) }} OMR</span>
+  <span>{{ amt(payment.amount) }} OMR</span>
 </div>
 {% endif %}
 {% endfor %}
@@ -317,7 +331,7 @@
 {% if payment.amount != 0 %}
 <div class="payment-row">
   <span>Refunded · {{ payment.mode_of_payment }}</span>
-  <span>{{ "%.3f"|format(payment.amount|abs) }} OMR</span>
+  <span>{{ amt(payment.amount|abs) }} OMR</span>
 </div>
 {% endif %}
 {% endfor %}
@@ -330,7 +344,7 @@
 {% if payment.amount != 0 %}
 <div class="payment-row">
   <span>{{ payment.mode_of_payment }}</span>
-  <span>{{ "%.3f"|format(payment.amount) }} OMR</span>
+  <span>{{ amt(payment.amount) }} OMR</span>
 </div>
 {% endif %}
 {% endfor %}
@@ -340,14 +354,14 @@
 {% if doc.change_amount and doc.change_amount > 0 %}
 <div class="payment-row" style="font-weight:bold;">
   <span>Change الباقي</span>
-  <span>{{ "%.3f"|format(doc.change_amount) }} OMR</span>
+  <span>{{ amt(doc.change_amount) }} OMR</span>
 </div>
 {% endif %}
 
 {% if doc.is_return and credit_kept > 0.0005 %}
 <div class="payment-row" style="font-weight:bold;">
   <span>Store Credit Issued رصيد صادر</span>
-  <span>{{ "%.3f"|format(credit_kept) }} OMR</span>
+  <span>{{ amt(credit_kept) }} OMR</span>
 </div>
 {% endif %}
 {#- Credit still unused (not refunded, not spent on an exchange): the last
@@ -362,7 +376,7 @@
 {% if not is_exchange and ex.other_credit > 0 %}
 <div class="payment-row" style="font-weight:bold;">
   <span>Credit note used إشعار دائن مستخدم</span>
-  <span>-{{ "%.3f"|format(ex.other_credit) }} OMR</span>
+  <span>{{ minus(ex.other_credit) }} OMR</span>
 </div>
 {% endif %}
 
