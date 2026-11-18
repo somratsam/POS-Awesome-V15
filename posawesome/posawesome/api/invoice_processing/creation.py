@@ -86,6 +86,12 @@ RETURN_OUTSTANDING_MESSAGE_MARKERS = (
 )
 
 
+def _in_atomic_exchange():
+    """One-screen exchange in progress (one_screen_exchange.submit_exchange):
+    nothing may be queued for later."""
+    return bool(getattr(getattr(frappe, "flags", None), "posa_exchange_atomic", None))
+
+
 def _permission_denied(message):
     frappe.throw(message, getattr(frappe, "PermissionError", PermissionError))
 
@@ -423,8 +429,13 @@ def _save_ledger_with_lock_retry(ledger_doc, operation, retries):
         try:
             operation()
             return
-        except (TimestampMismatchError, frappe.QueryDeadlockError):
+        except (TimestampMismatchError, frappe.QueryDeadlockError) as error:
             if attempts >= retries:
+                raise
+            # A deadlock rolled back the whole transaction; in a one-screen
+            # exchange that includes the return, so carrying on would save
+            # the sale alone.
+            if isinstance(error, frappe.QueryDeadlockError) and _in_atomic_exchange():
                 raise
             attempts += 1
             ledger_name = getattr(ledger_doc, "name", None)
@@ -2484,6 +2495,8 @@ def submit_invoice(invoice, data, submit_in_background=False):
         frappe.throw(_("This invoice request is already being processed. Please try again."))
 
     invoice_name = invoice.get("name")
+    if _in_atomic_exchange():
+        submit_in_background = 0
     if (
         submit_in_background
         and allow_background_submit
@@ -2776,7 +2789,9 @@ def submit_invoice(invoice, data, submit_in_background=False):
             total_cash,
             cash_account,
             payments,
-            bool(allow_background_submit),
+            # One-screen exchange: the credit Journal Entry is made now, in
+            # the same transaction as both invoices.
+            bool(allow_background_submit) and not _in_atomic_exchange(),
             getattr(getattr(frappe, "session", None), "user", None),
             ledger_doc.name if ledger_doc else None,
         )

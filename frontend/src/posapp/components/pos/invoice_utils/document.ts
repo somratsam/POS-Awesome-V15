@@ -6,6 +6,7 @@ import {
 import { _getPlcConversionRate } from "./currency";
 import { resolvePosDocumentDoctype } from "../../../utils/posDocumentMode";
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
+import { peekExchangeStore } from "../../../stores/exchangeStore";
 
 declare const flt: (_value: unknown, _precision?: number) => number;
 declare const frappe: any;
@@ -496,6 +497,14 @@ export function get_invoice_doc(context: any) {
 				payment.base_amount = -Math.abs(payment.base_amount);
 			}
 		});
+	}
+
+	// One-screen exchange: the new items' draft (saved by Pay) carries the
+	// exchange's own key, the one submit_exchange uses for the sale, so a
+	// discard deletes exactly this draft (discard_exchange_draft).
+	const exchange = peekExchangeStore();
+	if (exchange?.active && !isReturn) {
+		doc.posa_client_request_id = `${exchange.ensureExchangeId()}:sale`;
 	}
 
 	return doc;

@@ -93,7 +93,7 @@
 							@remove-payment="removePaymentLine"
 						/>
 						<PaymentGiftCardSection
-							:enabled="Boolean(pos_profile?.posa_use_gift_cards)"
+							:enabled="Boolean(pos_profile?.posa_use_gift_cards) && !exchangeMode"
 							:expanded="giftCardInlineExpanded"
 							:applied-amount="giftCardAppliedAmount"
 							:card-code="giftCardCode || giftCardRedemptions[0]?.gift_card_code || ''"
@@ -116,7 +116,22 @@
 						<div class="payment-section__header">
 							<h3 class="payment-section__title">{{ __("Redemption and Totals") }}</h3>
 						</div>
+						<div
+							v-if="exchangeMode"
+							class="exchange-credit-row"
+							data-testid="exchange-credit-row"
+						>
+							<v-icon size="18" icon="mdi-lock" class="exchange-credit-row__lock" />
+							<span class="exchange-credit-row__label">
+								{{ __("Exchange credit") }} ·
+								{{ __("return of {0}", [exchangeStore.receipt?.name || ""]) }}
+							</span>
+							<strong class="exchange-credit-row__amount">
+								−{{ currencySymbol(invoice_doc.currency) }}{{ formatCurrency(exchange_credit) }}
+							</strong>
+						</div>
 						<PaymentRedemption
+							v-else
 							:invoice-doc="invoice_doc"
 							:customer-info="customer_info"
 							:pos-profile="pos_profile"
@@ -181,7 +196,7 @@
 						/>
 					</section>
 
-					<section class="payment-section payment-section--settlement">
+					<section v-if="!exchangeMode" class="payment-section payment-section--settlement">
 						<div class="payment-section__header">
 							<h3 class="payment-section__title">{{ __("Credit and Output") }}</h3>
 						</div>
@@ -272,6 +287,9 @@
 				:compact="dialogMode"
 				:show-keyboard-shortcuts="counterGridMode"
 				:return-choice="noMoneyReturn"
+				:exchange="exchangeMode"
+				:checking="exchangeStore.checking"
+				:saving="exchangeMode && exchangeStore.submitting"
 				@submit="submit"
 				@submit-and-print="submit(undefined, false, true)"
 				@submit-exchange="submitReturnAs('exchange')"
@@ -421,6 +439,8 @@ import {
 	creditRemainderMessage,
 } from "../../utils/voucherMessages";
 import { isNoMoneyReturn, resolveReturnSubmit, returnConfirmFigures } from "../../utils/returnIntent";
+import { useExchangeStore } from "../../stores/exchangeStore";
+import { useExchangeSubmit } from "../../composables/pos/exchange/useExchangeSubmit";
 import {
 	balanceVoucherSettings,
 	recordBalanceVoucherPrint,
@@ -447,6 +467,8 @@ const invoiceStore = useInvoiceStore();
 const customersStore = useCustomersStore();
 const uiStore = useUIStore();
 const toastStore = useToastStore();
+const exchangeStore = useExchangeStore();
+const { submitExchange } = useExchangeSubmit();
 const syncStore = useSyncStore();
 const socketStore = useSocketStore();
 
@@ -590,6 +612,21 @@ const paymentItemDiscountTotal = computed(() => {
 
 const displayCurrency = computed(() => (invoice_doc.value ? invoice_doc.value.currency : ""));
 const isPaymentOpen = computed(() => activeView.value === "payment" || paymentDialogOpen.value);
+// One-screen exchange, customer pays more: this is the exchange's new sale.
+// The return's value is a locked credit (never "Use Customer Balance"); it
+// counts as already paid, like loyalty points. Only Cash/Card pay the rest.
+const exchangeMode = computed(
+	() => Boolean(exchangeStore.active && invoice_doc.value && !invoice_doc.value.is_return),
+);
+const exchange_credit = computed(() => {
+	if (!exchangeMode.value) return 0;
+	const total = flt(invoice_doc.value.rounded_total || invoice_doc.value.grand_total, currency_precision.value);
+	return flt(Math.min(Math.abs(exchangeStore.returned || 0), Math.max(total, 0)), currency_precision.value);
+});
+// Store credit and the exchange credit: what is covered before Cash/Card.
+const credit_covered = computed(() =>
+	flt((redeemed_customer_credit.value || 0) + exchange_credit.value, currency_precision.value),
+);
 const netInvoiceSettlementAmount = computed(() => {
 	if (!invoice_doc.value) return 0;
 
@@ -599,7 +636,7 @@ const netInvoiceSettlementAmount = computed(() => {
 	);
 	const coveredAmount = flt(
 		(invoice_doc.value?.loyalty_amount || loyalty_amount.value || 0) +
-			(redeemed_customer_credit.value || 0),
+			(credit_covered.value || 0),
 		currency_precision.value,
 	);
 
@@ -952,7 +989,7 @@ const paymentCalculations = usePaymentCalculations({
 	posProfile: pos_profile,
 	currencyPrecision: currency_precision,
 	loyaltyAmount: loyalty_amount,
-	redeemedCustomerCredit: redeemed_customer_credit,
+	redeemedCustomerCredit: credit_covered,
 	customerCreditDict: customer_credit_dict,
 	customerInfo: customer_info,
 	giftCardRedemptions,
@@ -1114,8 +1151,9 @@ const visiblePaymentMethods = computed(() =>
 );
 
 const creditSaleAllowed = computed(() => parseBooleanSetting(pos_profile.value?.posa_allow_credit_sale));
+// Never in a one-screen exchange: its change comes from cash only.
 const creditChangeOnSalesAllowed = computed(() =>
-	parseBooleanSetting(pos_profile.value?.posa_allow_credit_change_on_sales),
+	parseBooleanSetting(pos_profile.value?.posa_allow_credit_change_on_sales) && !exchangeMode.value,
 );
 
 // Confirmed business policy: exchange/credit only for returns, no refund of any
@@ -1581,7 +1619,7 @@ const rebalancePreferredPaymentCoverage = (giftCardAmount = giftCardAppliedAmoun
 		precision: currency_precision.value,
 		isCashLikePayment,
 		loyaltyAmount: invoice_doc.value?.loyalty_amount || loyalty_amount.value,
-		redeemedCustomerCredit: redeemed_customer_credit.value,
+		redeemedCustomerCredit: credit_covered.value,
 		giftCardAmount,
 	});
 };
@@ -2235,8 +2273,65 @@ const settleReturnIntent = (intent) => {
 const submitReturnAs = (intent) =>
 	submitInvoiceWrapper(intent === "credit_note", undefined, { returnIntent: intent });
 
+// One-screen exchange: the return and this sale are submitted together
+// (useExchangeSubmit), never through the normal invoice submit.
+const submitExchangeFromPayments = async (print) => {
+	submissionInFlight.value = true;
+	loading.value = true;
+	try {
+		const doc = JSON.parse(JSON.stringify(invoice_doc.value || {}));
+		(doc.payments || []).forEach((row) => {
+			row.amount = flt(row.amount || 0, currency_precision.value);
+		});
+		const cashChange = flt(change_due.value || 0, currency_precision.value);
+		// Already the server's: the returned value quoted for the RETURN lines
+		// and this sale's own saved draft -- the confirmation opens at once;
+		// submit_exchange re-checks both.
+		const saleTotal = flt(doc.rounded_total || doc.grand_total, currency_precision.value);
+		const returnedValue = exchangeStore.quotedReturned;
+		const figures =
+			returnedValue === null
+				? null
+				: {
+						returned: returnedValue,
+						sale_total: saleTotal,
+						pay: flt(Math.max(saleTotal - returnedValue, 0), currency_precision.value),
+					};
+		// Straight to saving, like a normal sale: no confirmation here.
+		const submitted = await submitExchange({
+			confirm: false,
+			figures,
+			sale: doc,
+			saleData: cashChange > 0 ? { paid_change: cashChange } : {},
+			print: Boolean(print),
+			expectKinds: ["pays"],
+			printDoc: ({ name, settings }) =>
+				loadPrintPage({
+					doctype: "Sales Invoice",
+					name,
+					doc: { name, doctype: "Sales Invoice" },
+					settings,
+				}),
+		});
+		if (submitted) {
+			customer_credit_dict.value = [];
+			sales_person.value = "";
+			finishSubmissionNavigation(true);
+			customersStore.setSelectedCustomer(pos_profile.value?.customer || null);
+			eventBus.emit("focus_item_search");
+		}
+	} finally {
+		loading.value = false;
+		submissionInFlight.value = false;
+	}
+};
+
 const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {}) => {
 	if (submissionInFlight.value || returnIntentDialog.value || creditRemainderDialog.value) {
+		return;
+	}
+	if (exchangeMode.value) {
+		await submitExchangeFromPayments(print);
 		return;
 	}
 
@@ -2586,6 +2681,10 @@ watch(redeemed_customer_credit, () => {
 	rebalancePreferredPaymentCoverage();
 });
 
+watch(exchange_credit, () => {
+	rebalancePreferredPaymentCoverage();
+});
+
 watch(sales_person, (newVal) => {
 	if (!invoice_doc.value) return;
 	if (newVal) {
@@ -2875,6 +2974,26 @@ defineExpose({
 </script>
 
 <style scoped>
+.exchange-credit-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	margin-bottom: 8px;
+	border-radius: 8px;
+	border: 1px solid rgba(var(--v-theme-primary), 0.35);
+	background: rgba(var(--v-theme-primary), 0.06);
+}
+.exchange-credit-row__label {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.exchange-credit-row__amount {
+	white-space: nowrap;
+	color: rgb(var(--v-theme-error));
+}
 .payment-section__header--with-action {
 	flex-direction: row;
 	align-items: center;

@@ -20,7 +20,9 @@ describe("pos_profile prop actually reaches Customer.vue (regression: it previou
 
 describe("Walk-in (no customer) button", () => {
 	it("is gated on the POS Profile's posa_walkin_customer field, not shown unconditionally", () => {
-		expect(customerSource).toContain('v-if="pos_profile?.posa_walkin_customer"');
+		// ...and hidden while the customer box is locked (exchange, Anonymous
+		// voucher), agreed 2026-11-17.
+		expect(customerSource).toContain('v-if="pos_profile?.posa_walkin_customer && !sharedCustomerLockNote"');
 	});
 
 	it("carries the exact agreed label", () => {

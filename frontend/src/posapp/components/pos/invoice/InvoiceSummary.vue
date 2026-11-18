@@ -8,18 +8,36 @@
 	>
 		<div v-if="isCounterGrid" class="counter-grid-summary" data-testid="counter-grid-summary">
 			<div class="counter-grid-summary__metrics">
-				<div class="counter-grid-summary__metric">
+				<template v-if="exchangeStore.active">
+					<div class="counter-grid-summary__metric" data-testid="exchange-metric-returned">
+						<span>{{ __("Returned") }}</span>
+						<strong>−{{ exchangeMoney(exchangeStore.returned) }}</strong>
+					</div>
+					<div
+						v-if="exchangeNewTotal !== null"
+						class="counter-grid-summary__metric"
+						data-testid="exchange-metric-new"
+					>
+						<span>{{ __("New items") }}</span>
+						<strong>{{ exchangeMoney(exchangeNewTotal || 0) }}</strong>
+					</div>
+					<div class="counter-grid-summary__metric counter-grid-summary__metric--qty">
+						<span>{{ __("Quantity") }}</span>
+						<strong>{{ exchangeQty }}</strong>
+					</div>
+				</template>
+				<div v-if="!exchangeStore.active" class="counter-grid-summary__metric">
 					<span>{{ __("Gross") }}</span>
 					<strong>{{ currencySymbol(displayCurrency) }}{{ formatCurrency(grossTotal) }}</strong>
 				</div>
-				<div class="counter-grid-summary__metric">
+				<div v-if="!exchangeStore.active" class="counter-grid-summary__metric">
 					<span>{{ __("Item discount") }}</span>
 					<strong
 						>{{ currencySymbol(displayCurrency)
 						}}{{ formatCurrency(total_items_discount_amount) }}</strong
 					>
 				</div>
-				<div class="counter-grid-summary__metric counter-grid-summary__metric--qty">
+				<div v-if="!exchangeStore.active" class="counter-grid-summary__metric counter-grid-summary__metric--qty">
 					<span>{{ __("Quantity") }}</span>
 					<strong>{{ formatFloat(total_qty, hide_qty_decimals ? 0 : undefined) }}</strong>
 				</div>
@@ -73,7 +91,15 @@
 						"
 					/>
 				</div>
-				<div class="counter-grid-summary__metric counter-grid-summary__metric--total">
+				<div
+					v-if="exchangeStore.active"
+					class="counter-grid-summary__metric counter-grid-summary__metric--total"
+					data-testid="exchange-metric-result"
+				>
+					<span>{{ exchangeLabels.headline }}</span>
+					<strong v-if="exchangeLabels.amount">{{ exchangeLabels.amount }}</strong>
+				</div>
+				<div v-else class="counter-grid-summary__metric counter-grid-summary__metric--total">
 					<span>{{ __("Net total") }}</span>
 					<strong>{{ currencySymbol(displayCurrency) }}{{ formatCurrency(subtotal) }}</strong>
 				</div>
@@ -91,6 +117,10 @@
 				:printLoading="printLoading"
 				:paymentLoading="paymentLoading"
 				:customerDisplayLoading="customerDisplayLoading"
+				:exchange-active="exchangeStore.active"
+				:exchange-enabled="exchangeStore.enabled"
+				:exchange-button-label="exchangeLabels.button"
+				:exchange-checking="exchangeStore.checking"
 				@save-and-clear="handleSaveAndClear"
 				@load-drafts="handleLoadDrafts"
 				@select-order="handleSelectOrder"
@@ -125,7 +155,20 @@
 				</v-alert>
 
 				<div v-if="!useCompactSaleDock" class="summary-hero">
-					<div class="summary-hero__copy">
+					<div v-if="exchangeStore.active" class="summary-hero__copy" data-testid="exchange-hero">
+						<span class="summary-hero__eyebrow">{{ exchangeLabels.headline }}</span>
+						<strong v-if="exchangeLabels.amount" class="summary-hero__amount">
+							{{ exchangeLabels.amount }}
+						</strong>
+						<div class="summary-hero__meta">
+							<span>{{ __("Returned") }} −{{ exchangeMoney(exchangeStore.returned) }}</span>
+							<span v-if="exchangeNewTotal !== null">
+								{{ __("New items") }} {{ exchangeMoney(exchangeNewTotal) }}
+							</span>
+							<span>{{ exchangeQty }}</span>
+						</div>
+					</div>
+					<div v-else class="summary-hero__copy">
 						<span class="summary-hero__eyebrow">{{ __("Active sale") }}</span>
 						<strong class="summary-hero__amount">
 							{{ currencySymbol(displayCurrency) }}{{ formatCurrency(subtotal) }}
@@ -213,6 +256,10 @@
 					:printLoading="printLoading"
 					:paymentLoading="paymentLoading"
 					:customerDisplayLoading="customerDisplayLoading"
+					:exchange-active="exchangeStore.active"
+					:exchange-enabled="exchangeStore.enabled"
+					:exchange-button-label="exchangeLabels.button"
+					:exchange-checking="exchangeStore.checking"
 					@save-and-clear="handleSaveAndClear"
 					@load-drafts="handleLoadDrafts"
 					@select-order="handleSelectOrder"
@@ -316,6 +363,9 @@ import {
 	shouldShowDocumentSourceSelector,
 } from "../../../utils/documentSources";
 import InvoiceActionButtons from "./InvoiceActionButtons.vue";
+import { useExchangeStore } from "../../../stores/exchangeStore";
+import { exchangeFigures } from "../../../utils/oneScreenExchange";
+import { exchangeCartLabels, exchangeQtyText } from "../../../utils/oneScreenExchangeText";
 import ParkedOrdersList from "./ParkedOrdersList.vue";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
 
@@ -393,6 +443,25 @@ const additionalDiscountPercentageDisplay = ref(
 	normalizeDiscountDisplay(props.additional_discount_percentage),
 );
 const isCounterGrid = computed(() => props.presentation === "counter-grid");
+
+// One-screen exchange: Returned / New items / Customer pays, Credit note
+// issued or Even exchange, in the place of the sale's totals.
+const exchangeStore = useExchangeStore();
+const exchangePrecision = computed(() => Number(props.pos_profile?.currency_precision) || 3);
+const exchangeMoney = (value) =>
+	`${props.currencySymbol(props.displayCurrency)}${props.formatCurrency(Math.abs(Number(value) || 0))}`;
+const exchangeNewQty = computed(() => Math.max(Number(props.total_qty) || 0, 0));
+const exchangeNewTotal = computed(() => (exchangeNewQty.value > 0 ? Number(props.subtotal) || 0 : null));
+const exchangeLabels = computed(() =>
+	exchangeCartLabels(
+		exchangeFigures(exchangeStore.returned, exchangeNewTotal.value, exchangePrecision.value),
+		exchangeMoney,
+		window.__ || ((text) => text),
+	),
+);
+const exchangeQty = computed(() =>
+	exchangeQtyText(exchangeStore.backQty, exchangeNewQty.value, window.__ || ((text) => text)),
+);
 const useCompactSaleDock = computed(() => responsive.windowWidth.value < 1100);
 const showDesktopDrafts = computed(() => Boolean(responsive.isDesktop.value));
 const showReturnDiscountAlert = computed(

@@ -18,6 +18,7 @@ import {
 } from "../../../utils/perf.js";
 import { classifyClipboardScanText } from "./scannerInput/clipboardScan";
 import { dispatchStockLookupScan } from "./stockLookupScanRoute";
+import { dispatchExchangeScan } from "./exchangeScanRoute";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -336,6 +337,14 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		// See stockLookupScanRoute.ts -- with the dialog closed this is a
 		// no-op and the scan continues exactly as before.
 		if (dispatchStockLookupScan(normalizedCode)) return;
+		// One-screen exchange: a receipt opens its picker; with the picker
+		// open, an item ticks its line there (exchangeScanRoute).
+		if (
+			dispatchExchangeScan(normalizedCode, (code) => onBarcodeScanned(code, confidence))
+		) {
+			if (clearSearchHandler.value) clearSearchHandler.value();
+			return;
+		}
 
 		const runScanPipeline = async (code: string) => {
 			const mark = perfMarkStart("pos:scan-handler");

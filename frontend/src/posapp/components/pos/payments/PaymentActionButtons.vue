@@ -56,11 +56,19 @@
 					data-testid="payment-submit"
 					:aria-keyshortcuts="showKeyboardShortcuts ? 'Control+Enter Meta+Enter' : undefined"
 					@click="$emit('submit')"
-					:loading="loading"
+					:loading="loading && !checking && !saving"
 					:disabled="loading || validatePayment"
 					:class="{ 'submit-highlight': highlightSubmit }"
 				>
-					<span>{{ __("Submit") }}</span>
+					<span>{{
+						exchange
+							? checking
+								? __("Checking…")
+								: saving
+									? __("Saving…")
+									: __("Submit exchange")
+							: __("Submit")
+					}}</span>
 					<kbd v-if="showKeyboardShortcuts" class="payment-footer-btn__shortcut">
 						Ctrl/⌘+Enter
 					</kbd>
@@ -79,10 +87,18 @@
 						showKeyboardShortcuts ? 'Control+Shift+Enter Meta+Shift+Enter' : undefined
 					"
 					@click="$emit('submit-and-print')"
-					:loading="loading"
+					:loading="loading && !checking && !saving"
 					:disabled="loading || validatePayment"
 				>
-					<span>{{ __("Submit & Print") }}</span>
+					<span>{{
+						exchange
+							? checking
+								? __("Checking…")
+								: saving
+									? __("Saving…")
+									: __("Submit exchange & Print")
+							: __("Submit & Print")
+					}}</span>
 					<kbd v-if="showKeyboardShortcuts" class="payment-footer-btn__shortcut">
 						Ctrl/⌘+Shift+Enter
 					</kbd>
@@ -115,6 +131,12 @@ defineProps({
 	compact: Boolean,
 	showKeyboardShortcuts: Boolean,
 	returnChoice: Boolean,
+	// One-screen exchange, customer pays more.
+	exchange: Boolean,
+	// The exchange's figures are being checked before the confirmation.
+	checking: Boolean,
+	// The exchange is being saved (no confirmation on this screen).
+	saving: Boolean,
 });
 
 defineEmits(["submit", "submit-and-print", "submit-exchange", "submit-credit-note", "cancel"]);

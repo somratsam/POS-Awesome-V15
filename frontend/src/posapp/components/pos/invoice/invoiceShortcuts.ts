@@ -1,4 +1,6 @@
 import { resolveReturnDefaultAmount } from "../../../utils/paymentInitialization";
+import { peekExchangeStore } from "../../../stores/exchangeStore";
+import { discardExchange } from "../invoice_utils/exchange";
 
 const isAltOnly = (event: KeyboardEvent) =>
 	event.altKey && !event.ctrlKey && !event.metaKey;
@@ -232,6 +234,31 @@ const invoiceShortcuts: Record<string, unknown> & ThisType<InvoiceShortcutsVm> =
 			}
 
 			const key = event.key;
+
+			// One-screen exchange: Ctrl/⌘+Enter = the main button, Escape =
+			// "Discard? Nothing saved." Not while a dialog or Payments is open,
+			// nor while Escape still has text to clear in a box.
+			const exchange = peekExchangeStore();
+			if (
+				exchange?.active &&
+				!exchange.prompt &&
+				!exchange.pickerOpen &&
+				!this.paymentVisible &&
+				!document.querySelector(".v-overlay--active")
+			) {
+				if (key === "Enter" && (event.ctrlKey || event.metaKey) && !event.altKey) {
+					consumeEvent(event);
+					if (!event.repeat) this.show_payment?.();
+					return;
+				}
+				const target = event.target as HTMLInputElement | null;
+				const hasText = Boolean(target && "value" in target && String(target.value || "").length);
+				if (key === "Escape" && !hasText) {
+					consumeEvent(event);
+					void discardExchange(this);
+					return;
+				}
+			}
 
 			if (shouldEnterInvoiceGridFromArrow(event)) {
 				const count = this.items?.length || 0;

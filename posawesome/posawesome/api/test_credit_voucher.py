@@ -261,6 +261,29 @@ class TestVoucherTemplate(unittest.TestCase):
         self.assertIn("USED — NOT VALID", text)
         self.assertNotIn("[BARCODE]", text)
 
+    def _render_used(self, used_in):
+        return _text(
+            frappe.render_template(
+                TEMPLATE.replace("credit_note_used_in_exchange(", "used_in("),
+                {
+                    "doc": _credit_return(outstanding_amount=0),
+                    "print_settings": frappe._dict(),
+                    "used_in": lambda name: used_in,
+                },
+            )
+        )
+
+    def test_used_in_an_exchange_names_the_sale(self):
+        text = self._render_used("MCO-2026-00011")
+        self.assertIn("USED — NOT VALID", text)
+        self.assertIn("Used in exchange MCO-2026-00011", text)
+        self.assertIn("استُخدمت في الاستبدال MCO-2026-00011", text)
+
+    def test_used_elsewhere_adds_nothing(self):
+        text = self._render_used("")
+        self.assertIn("USED — NOT VALID", text)
+        self.assertNotIn("Used in exchange", text)
+
     def test_expired_voucher_has_no_code_to_scan(self):
         old = add_days(getdate(nowdate()), -200)
         text = _text(self._render(_credit_return(posting_date=old)))

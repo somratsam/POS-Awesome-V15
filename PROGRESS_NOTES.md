@@ -10016,3 +10016,170 @@ call; the prompt prints with Frappe's permission-checked
    Back (nothing submitted); then Exchange -> Cancel Sale -> "Print the credit
    note voucher?" -> Print.
 Rollback: `git checkout 07e088f4`, build, clear-cache, restart.
+
+## 103. One-screen Return / Exchange (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** One cart holds the RETURN lines from one receipt and the new
+items; the return and the new sale are saved together or not at all. Behind
+the POS Profile tick box **"One-screen exchange"** (`posa_one_screen_exchange`,
+"Sales and Return Controls", off by default; to be switched on one store at a
+time). Off: today's flow (section 102) is unchanged. Online only. Later, not
+now: a return reason per line, gift receipt, several receipts per exchange.
+
+**Starting.** A receipt barcode scanned or typed in the item box (Classic
+search box, counter-grid entry row, or any hardware scan:
+`useScannerInput` -> `exchangeScanRoute`), or a receipt chosen in the
+"Return / Exchange" button's search (renamed from "Sales Return" / "Return"),
+opens **"Items on receipt"** (`ExchangePicker.vue`). Both orders work: with
+new items already in the cart the till asks "Add a return from this
+receipt?" (and "The customer changes to X." when it does). The same receipt
+again reopens the picker; another receipt: "One receipt per exchange...".
+No exchange without a receipt (Return Without Invoice unchanged).
+
+**Picker.** Every line; greyed with the reason when nothing is left
+("returned 1 on 17 Nov", "0 left"); "returnable until <date>" in the header;
+nothing ticked (a one-line receipt with 1 left comes ticked, as today);
+clicking anywhere on a row ticks/unticks it; scanning an item's barcode
+ticks one more of it (never above what is left), "This item isn't on this
+receipt" otherwise. While the picker is open every scan goes to it, never to
+the cart. Receipt messages (same rules as today's returns): "Return period
+ended on <date>", "This receipt was cancelled", "This is a return receipt,
+not a sale"; another store of the same company is allowed (today's rule);
+another company is "not found".
+
+**Cart.** RETURN rows sit in the cart's own columns (body.prepend slot of the
+items table, `ExchangeReturnRows.vue`): RETURN tag, receipt number under the
+name, pink row, -1 with -/+ in QTY, Orig. Price / Disc % / Disc Amt / Rate
+as grey plain text ("Price and discount from the receipt" on hover; never
+editable, no discount dialog), red amount, delete icon, no chart icon. They
+are not cart items (no pricing rules, offers or stock checks touch them). A
+receipt with an invoice-level discount shows "Invoice discount on the
+receipt: -X (included in Returned)". New items work as today. The customer
+box is locked ("Exchange for receipt X — the customer stays Y.") and the
+Walk-in button is hidden whenever the customer box is locked (exchange and
+Anonymous voucher). Save & Clear, Drafts, Print Draft hidden; Alt+S refused
+("No hold or draft during an exchange..."). Ctrl/⌘+Enter = main button;
+Esc = "Discard? Nothing saved."; Cancel Sale also discards.
+
+**Totals (approved wording).** Classic hero / counter-grid metrics:
+"Customer pays X" (button "Pay X"), "Credit note issued X" (named and
+Anonymous; button "Submit exchange"), "Even exchange" (no amount; button
+"Submit exchange"), plain return "Credit note issued X" (button "Submit
+return → Credit note"); under it "Returned −X · New items Y · 1 back · 1 new".
+Customer pays more -> Payments: locked row "Exchange credit · return of
+<receipt> −X", only Cash/Card (Visa, Master Card, Maal); store credit,
+vouchers, gift card, loyalty, credit change and credit sale hidden; buttons
+"Submit exchange" / "Submit exchange & Print" save directly (no
+confirmation; "Saving…", a second press ignored). Credit left / even / plain
+return: one confirmation from the cart with Back focused ("Submit this
+exchange? 1 back (X), 1 new (Y), customer pays Z / credit note issued Z /
+even exchange." — "Submit this return?" for a plain return); the dialog
+stays open as "Saving…" until saved, and these always print.
+
+**Server (`api/one_screen_exchange.py`).**
+- `submit_exchange`: the return and the sale through the normal
+  `submit_invoice`, one after the other, in one savepoint; any error rolls
+  everything back (both invoices, credit Journal Entry, stock, GL, loyalty,
+  submission ledger). Nothing is queued: background submission and the
+  background credit Journal Entry are off for this request
+  (`creation._in_atomic_exchange`); the ledger does not retry after a
+  deadlock (it has already undone the return). One exchange id from the
+  till; the return is submitted as "<id>:return", the sale as "<id>:sale"
+  (a retry replays both). The original receipt row is locked FOR UPDATE.
+- The till sends only which receipt lines and how many; `_build_return`
+  takes price, discount, discount reason and the invoice-discount share
+  (prorated as the Returns screen does) from the original lines and refuses
+  more than is left or a line from another receipt.
+- The sale is paid with the credit of the return just created: the server
+  builds that credit row itself; `credit_voucher._authorize_exchange_credit`
+  authorizes only that return (request-local flag set by the server, never
+  from the request), "<return>: exchange" in Credit Authorized By (bearer
+  Anonymous returns included). Client credit rows are replaced; gift card,
+  credit change, credit sale, loyalty and non Cash/Bank payments refused.
+- The figures the cashier saw (returned, new items total, pay) must match the
+  server's to the baisa, the credit Journal Entry must be posted in full and
+  the sale fully paid, or nothing is saved ("Totals changed: ...").
+- `quote_exchange`: builds both drafts through `update_invoice` inside a
+  savepoint that is always rolled back, and drops the "document changed"
+  notifications they queued -- the till's figures are the server's. The cart
+  checks itself in the background 0.4 s after its last change (each change
+  restarts the wait; no call when nothing that decides the figures changed);
+  Payments needs no check (its figures are already the server's).
+- `get_exchange_receipt`: the picker's receipt (lines sold / returned with
+  dates / left, barcodes, reasons). `discard_exchange_draft`: a discarded
+  exchange deletes only its own unsubmitted sale draft (the sale draft saved
+  by Pay carries "<id>:sale"; the key is unique), whatever the profile's
+  "Auto Delete Draft Invoice" setting -- never another draft, a submitted
+  invoice or a return.
+- Credit left over stays on the return (section 87): the receipt prints,
+  then the BALANCE voucher (existing record + print). Plain return: the
+  credit note voucher. Printing: always the exchange receipt (section 101's
+  template) for an exchange.
+- Item 10: a fully used credit note's reprint shows under the USED banner
+  "Used in exchange <sale>" / "استُخدمت في الاستبدال" (Jinja method
+  `credit_note_used_in_exchange`, sales that used it in the credit note's own
+  shift).
+
+**Live checks (staging, headless Chromium, throwaway PIN cashier, disabled
+after).** Pays more MCO-CN-2026-00007 / MCO-2026-00010 (80.850 credit +
+28.650 Visa) and MCO-CN-2026-00015 / MCO-2026-00024; even MCO-CN-2026-00008 /
+MCO-2026-00011 (Ctrl+Enter); credit left MCO-CN-2026-00009 / MCO-2026-00012
+(30.450 left, BALANCE voucher printed and recorded); plain return
+MCO-CN-2026-00010. Exchange receipt of MCO-2026-00010 shows RETURNED / NEW
+ITEMS / VAT returned / Difference paid. Click -> confirmation: payment screen
+1.1-1.2 s -> ~0.2 s (now no confirmation there at all), cart 0.36 s. Pay ->
+Cancel Payment -> Esc -> Discard deleted the draft MCO-2026-00025. Six test
+drafts (MCO-2026-00013, 00019-00023) deleted on request. Test Pos has the
+tick box ON on staging.
+
+**Invoice Management today (question, nothing changed).** Returns: status
+"Return" + orange "Credit Note" badge; Returns tab "Against" = original.
+Originals after a return: "Paid" or "Credit Note Issued" (unreliable --
+ERPNext refreshes the original's status only sometimes; 49 "Paid", 28 "Credit
+Note Issued" on staging). Exchange sale: "Paid" + blue "Exchange" badge
+(same customer had a return in the shift -- a guess, not a link). Next job:
+consistent labels, a real return <-> sale link, reliable original status.
+
+**"Auto Delete Draft Invoice" (question).** At Closing Shift submit it deletes
+every unprinted draft of that opening shift (any PIN cashier); printed drafts
+are submitted instead; the same setting lets Cancel Sale delete the cart's
+draft. Deletes with normal permissions: needs Delete on Sales Invoice
+(staging: only Accounts Manager). Store logins without it would fail the close
+if it were on. Off on both staging profiles; check production's roles.
+
+**Checks.** Frontend 295/295 files, 1924/1924 (Node 24) -- includes
+`oneScreenExchange.spec.ts`; `walkinCustomerButton.spec.ts` updated for the
+lock rule. Backend in isolation: `test_one_screen_exchange` 39,
+`test_one_screen_exchange_db` 30 (real invoices: failure at each step leaves
+nothing, VAT, baisa, Anonymous, replay, background setting ignored, prices
+from the receipt, receipts for the picker, quote = submit, discard scope),
+`test_credit_voucher` 69, `test_return_generic_customer_credit_guard` 9,
+`test_payments` 12, `test_swan_receipt` 15, `test_return_line_picking` 5,
+`test_sales_credit` 51, `test_sales_by_cashier` 24,
+`test_staff_sales_performance` 16, `test_invoice_reporting_fields` 35,
+`test_customer_credit_invoice_fields` 2, `test_offline_sync_invoices` 4,
+`test_print_barcode` 4, `test_api_imports` 4, `test_pos_access` 12,
+`test_stored_value` 2, `test_gift_cards` 14, `test_customer` 12,
+`test_customers` 4, `test_submitted_invoice_edit_customer` 9,
+`invoice_processing.test_utils` 12 / `.test_payment` 4, closing
+`test_same_shift_exchange` 5, `test_z_report` 3, `test_z_report_vat` 8,
+`test_z_report_layout` 6, `test_sales_breakdown` 6, `test_overview_loyalty`
+4, `test_closing_variance` 12; `test_creation` the same 8 pre-existing errors
+(identical with the change stashed); `test_submitted_invoice_edits_credit_badge`
+and `test_pos_invoice_submission_ledger` can't start on staging (duplicate
+"Standard Buying" price list), as before. Breakage checks: removing the
+rollback, the synchronous credit entry, the exchange authorisation, the
+confirmation, the picker scan route, the 0.4 s wait or the draft filter each
+fails a test. `bench build` exit 0. Migrate twice exit 0; the field stays
+after `posa_sales_by_cashier_hidden`; fixture diff purely additive (54 lines,
+hand-added). System Settings restored 3/3, Asia/Muscat.
+
+**Production deploy (later, with stable; not done).**
+1. Backup. Name check: `SELECT name FROM \`tabCustom Field\` WHERE
+   name='POS Profile-posa_one_screen_exchange'` -> none;
+   `grep -rn credit_note_used_in_exchange apps/*/*/hooks.py` -> none.
+2. Merge, `bench --site site1.local migrate` (the new field), `bench build
+   --app posawesome`, clear-cache, `sudo supervisorctl restart all` (new Jinja
+   method). Tills hard-refresh.
+3. The tick box stays off everywhere until a store is chosen.
+Rollback: previous commit, build, clear-cache, restart; the field stays (off).

@@ -119,6 +119,7 @@ jinja = {
         "posawesome.posawesome.api.credit_voucher.credit_voucher_valid_until",
         "posawesome.posawesome.api.credit_voucher.credit_voucher_balance_use",
         "posawesome.posawesome.api.credit_voucher.is_bearer_credit_note",
+        "posawesome.posawesome.api.credit_voucher.credit_note_used_in_exchange",
         # Receipt (posawesome/templates/print/swan_receipt.html): the returns
         # that paid for an exchange
         "posawesome.posawesome.api.credit_voucher.exchange_credit_sources",

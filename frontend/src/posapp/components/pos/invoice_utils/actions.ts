@@ -1,5 +1,7 @@
 import { useItemAddition } from "../../../composables/pos/items/useItemAddition";
 import { get_invoice_doc, get_invoice_items, get_payments } from "./document";
+import { peekExchangeStore } from "../../../stores/exchangeStore";
+import { deleteExchangeDraft } from "./exchange";
 import { _logPriceListDebug, _buildPriceListSnapshot } from "./currency";
 import { applyReturnDiscountProration } from "./item_updates";
 import { prepareDocumentFlowAction } from "../../../utils/documentSources";
@@ -162,7 +164,15 @@ export async function cancel_invoice(context: any) {
 
 	context.posting_date = frappe.datetime.nowdate();
 
-	if (doc.name && context.pos_profile.posa_allow_delete) {
+	// One-screen exchange: cancelling it deletes its own sale draft only,
+	// whatever the delete setting (deleteExchangeDraft); a refusal keeps it.
+	const exchangeActive = Boolean(peekExchangeStore()?.active);
+	if (exchangeActive && !(await deleteExchangeDraft(context))) {
+		context.cancel_dialog = false;
+		return;
+	}
+
+	if (doc.name && context.pos_profile.posa_allow_delete && !exchangeActive) {
 		await frappe.call({
 			method: "posawesome.posawesome.api.invoices.delete_invoice",
 			args: { invoice: doc.name },
@@ -181,6 +191,8 @@ export async function cancel_invoice(context: any) {
 	// The exchange this sale was for won't happen: ask to print the
 	// voucher for its unused credit (ExchangeCreditPrompt).
 	context.customersStore?.abandonPendingExchange?.();
+	// One-screen exchange: its RETURN lines go too (nothing was saved).
+	peekExchangeStore()?.reset();
 	// Use the clear_invoice logic
 	clearInvoice(context);
 	// A cancelled sale drops its bearer voucher (customersStore).
@@ -205,6 +217,14 @@ export async function save_and_clear_invoice(context: any) {
 	// _paymentInFlight guard.
 	if (context._saveAndClearInFlight) {
 		return;
+	}
+	// One-screen exchange: nothing is held or saved as a draft.
+	if (peekExchangeStore()?.active) {
+		context.toastStore?.show?.({
+			title: __("No hold or draft during an exchange. Submit it or press Esc to discard."),
+			color: "warning",
+		});
+		return false;
 	}
 	context._saveAndClearInFlight = true;
 
