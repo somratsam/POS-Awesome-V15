@@ -10,6 +10,16 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 HOOKS_PATH = REPO_ROOT / "posawesome" / "hooks.py"
 INVOICE_API_PATH = REPO_ROOT / "posawesome" / "posawesome" / "api" / "invoice.py"
 INVOICES_API_PATH = REPO_ROOT / "posawesome" / "posawesome" / "api" / "invoices.py"
+_ORIGINAL_MODULES = dict(sys.modules)
+
+
+def tearDownModule():
+    for name in list(sys.modules):
+        if name.startswith(("frappe", "posawesome")) and name not in _ORIGINAL_MODULES:
+            sys.modules.pop(name, None)
+    for name, module in _ORIGINAL_MODULES.items():
+        if name.startswith(("frappe", "posawesome")):
+            sys.modules[name] = module
 
 
 def _install_invoice_api_stubs():
@@ -52,6 +62,7 @@ def _install_invoice_api_stubs():
     )
 
     frappe_utils_module.add_days = lambda date, days: date
+    frappe_utils_module.cint = lambda value: int(value or 0)
     frappe_utils_module.flt = lambda value, precision=None: float(value or 0)
     frappe_utils_module.get_url_to_form = lambda doctype, name: f"/app/{doctype}/{name}"
     frappe_module.utils = frappe_utils_module
@@ -72,6 +83,21 @@ def _install_invoice_api_stubs():
         "posawesome.posawesome.doctype.delivery_charges.delivery_charges"
     ] = delivery_charges_module
     sys.modules["posawesome.posawesome.doctype.pos_coupon.pos_coupon"] = pos_coupon_module
+
+    # invoice.py's validate-time helpers; not used by the cancel hook.
+    for module_name, attrs in {
+        "posawesome.posawesome.api.discount_reasons": ("apply_discount_reasons",),
+        "posawesome.posawesome.api.invoice_reporting_fields": ("set_invoice_reporting_fields",),
+        "posawesome.posawesome.api.sales_credit": ("set_credited_user",),
+        "posawesome.posawesome.api.item_sale_controls": (
+            "validate_pos_invoice_item_sale_controls",
+        ),
+        "posawesome.posawesome.api.tax_contracts": ("apply_pos_tax_inclusion_contract",),
+    }.items():
+        stub = types.ModuleType(module_name)
+        for attr in attrs:
+            setattr(stub, attr, lambda *args, **kwargs: None)
+        sys.modules[module_name] = stub
 
     return state
 
@@ -107,7 +133,14 @@ class TestInvoiceCancelHooks(unittest.TestCase):
         invoice_api.cancel_posawesome_credit_journal_entries = lambda doc: called.update(credit=True)
         invoice_api.restore_posawesome_gift_card_redemptions = lambda doc: called.update(gift_cards=True)
 
-        invoice_api.on_cancel(SimpleNamespace(doctype="Sales Invoice", name="SINV-0001"), None)
+        invoice_api.on_cancel(
+            SimpleNamespace(
+                doctype="Sales Invoice",
+                name="SINV-0001",
+                get=lambda key, default=None: None,
+            ),
+            None,
+        )
 
         self.assertTrue(called["credit"])
         self.assertTrue(called["gift_cards"])
