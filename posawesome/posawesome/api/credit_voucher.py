@@ -227,6 +227,36 @@ def credit_voucher_balance_use(credit_note, sale):
     return flt(used[0][0]) if used and used[0][0] else 0
 
 
+def credit_note_used_in_exchange(credit_note):
+    """The exchange sale(s) that used this credit note: sales paid with it
+    (its credit redemption Journal Entries) in the credit note's own shift.
+    "" when none. Jinja method; the voucher's USED banner names them."""
+    if not credit_note:
+        return ""
+    shift = frappe.db.get_value("Sales Invoice", cstr(credit_note), "posa_pos_opening_shift")
+    if not shift:
+        return ""
+    rows = frappe.db.sql(
+        """
+        select distinct credit_row.reference_name as sale
+        from `tabJournal Entry Account` debit_row
+        inner join `tabJournal Entry Account` credit_row on credit_row.parent = debit_row.parent
+        inner join `tabJournal Entry` je on je.name = debit_row.parent
+        inner join `tabSales Invoice` sale on sale.name = credit_row.reference_name
+        where je.docstatus = 1
+            and debit_row.reference_type = 'Sales Invoice' and debit_row.reference_name = %(credit_note)s
+            and debit_row.debit_in_account_currency > 0
+            and credit_row.reference_type = 'Sales Invoice' and credit_row.reference_name != %(credit_note)s
+            and credit_row.credit_in_account_currency > 0
+            and sale.docstatus = 1 and sale.is_return = 0 and sale.posa_pos_opening_shift = %(shift)s
+        order by sale.name
+        """,
+        {"credit_note": cstr(credit_note), "shift": shift},
+        as_dict=True,
+    )
+    return ", ".join(row.sale for row in rows)
+
+
 @frappe.whitelist()
 def record_credit_note_reprint(doctype=None, name=None, pos_profile=None, balance_for=None):
     """Called by the POS before it reprints an invoice. For a credit note
@@ -496,6 +526,8 @@ def authorize_customer_credit(invoice_doc, requested_rows):
     one line per credit row, or throws naming what is missing."""
     if not requested_rows:
         return
+    if _authorize_exchange_credit(invoice_doc, requested_rows):
+        return
     customer = invoice_doc.get("customer")
     if is_generic_customer(customer):
         _authorize_bearer_credit(invoice_doc, requested_rows)
@@ -544,6 +576,23 @@ def authorize_customer_credit(invoice_doc, requested_rows):
     meta = frappe.get_meta(invoice_doc.doctype)
     if meta.has_field("posa_credit_authorized_by"):
         invoice_doc.set("posa_credit_authorized_by", "\n".join(lines))
+
+
+def _authorize_exchange_credit(invoice_doc, requested_rows):
+    """One-screen exchange: the sale spends only the return the same request
+    has just created (one_screen_exchange.exchange_credit_origin, set by the
+    server, never from the request). True when that authorizes every row."""
+    from posawesome.posawesome.api.one_screen_exchange import exchange_credit_origin
+
+    origin = exchange_credit_origin()
+    if not origin:
+        return False
+    if any(r.get("type") != "Invoice" or cstr(r.get("credit_origin")) != origin for r in requested_rows):
+        frappe.throw(_("An exchange is paid with its own return's credit only."))
+    meta = frappe.get_meta(invoice_doc.doctype)
+    if meta.has_field("posa_credit_authorized_by"):
+        invoice_doc.set("posa_credit_authorized_by", _("{0}: exchange").format(origin))
+    return True
 
 
 def lost_bearer_voucher_message(customer):

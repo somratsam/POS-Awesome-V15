@@ -1997,3 +1997,81 @@ Print it now so the customer can use it later.,اطبعها الآن ليتمك�
 Not now,ليس الآن
 Print credit note voucher,طباعة قسيمة الإشعار الدائن
 The credit note voucher couldn't be printed. Reprint it from Invoice Management.,تعذّرت طباعة قسيمة الإشعار الدائن. أعد طباعتها من إدارة الفواتير.
+One-screen exchange,استبدال في شاشة واحدة
+Return / Exchange,إرجاع / استبدال
+Return / Exchange needs the server connection.,الإرجاع / الاستبدال يحتاج إلى الاتصال بالخادم.
+Receipt {0} was not found.,لم يتم العثور على الإيصال {0}.
+One receipt per exchange. Finish or discard this exchange first.,إيصال واحد لكل استبدال. أكمل هذا الاستبدال أو ألغه أولاً.
+Finish or clear the return in the cart first.,أكمل المرتجع الموجود في السلة أو امسحه أولاً.
+The exchange was saved but didn't print. Reprint {0} from Invoice Management.,تم حفظ الاستبدال لكن لم تتم الطباعة. أعد طباعة {0} من إدارة الفواتير.
+The exchange could not be checked.,تعذّر التحقق من الاستبدال.
+Totals changed: the customer pays {0}. Press Pay.,تغيّرت المبالغ: يدفع العميل {0}. اضغط دفع.
+Totals changed. Go back to the cart and check it.,تغيّرت المبالغ. ارجع إلى السلة وتحقق منها.
+Remaining {0} to pay.,المتبقي للدفع {0}.
+The exchange was not saved.,لم يتم حفظ الاستبدال.
+No hold or draft during an exchange. Submit it or press Esc to discard.,لا تعليق ولا مسودة أثناء الاستبدال. أتممه أو اضغط Esc للإلغاء.
+Exchange for receipt {0} — the customer stays {1}.,استبدال للإيصال {0} — يبقى العميل {1}.
+Items on receipt,أصناف الإيصال
+returnable until {0},قابل للإرجاع حتى {0}
+Scan an item to tick it,امسح صنفاً لتحديده
+Sold {0},المباع {0}
+Disc {0}%,خصم {0}%
+One less,واحد أقل
+One more,واحد أكثر
+Done,تم
+Nothing ticked,لم يتم تحديد شيء
+{0} back · {1},{0} مرتجع · {1}
+This item isn't on this receipt,هذا الصنف ليس في هذا الإيصال
+Nothing more of {0} can be returned,لا يمكن إرجاع المزيد من {0}
+returned {0} on {1},أُرجع {0} في {1}
+0 left,لم يتبقَّ شيء
+RETURN,مرتجع
+Receipt {0},الإيصال {0}
+"Original price and discount, locked",السعر والخصم الأصليان، مقفلان
+Returned,المرتجع
+New items,الأصناف الجديدة
+Customer pays,يدفع العميل
+Credit note issued,إشعار دائن صادر
+Even exchange,استبدال متساوٍ
+Pay {0},ادفع {0}
+Submit exchange,إتمام الاستبدال
+Submit exchange & Print,إتمام الاستبدال والطباعة
+{0} back · {1} new,{0} مرتجع · {1} جديد
+{0} back,{0} مرتجع
+Add a return from this receipt?,إضافة مرتجع من هذا الإيصال؟
+The customer changes to {0}.,سيتغيّر العميل إلى {0}.
+Add return,إضافة مرتجع
+Discard? Nothing saved.,إلغاء؟ لن يُحفظ شيء.
+Discard,إلغاء
+{0} back ({1}),{0} مرتجع ({1})
+credit note issued {0},إشعار دائن صادر {0}
+{0} new ({1}),{0} جديد ({1})
+customer pays {0},يدفع العميل {0}
+even exchange,استبدال متساوٍ
+Submit this exchange?,إتمام هذا الاستبدال؟
+Exchange credit,رصيد الاستبدال
+return of {0},مرتجع {0}
+This receipt was cancelled,تم إلغاء هذا الإيصال
+"This is a return receipt, not a sale",هذا إيصال مرتجع وليس بيعاً
+Return period ended on {0},انتهت فترة الإرجاع في {0}
+"Totals changed: the {0} is {1}, the till showed {2}. Nothing was saved; check the cart.",تغيّرت المبالغ: {0} هو {1}، وأظهرت نقطة البيع {2}. لم يُحفظ شيء؛ تحقق من السلة.
+An exchange needs the original receipt. Use Return Without Invoice instead.,يحتاج الاستبدال إلى الإيصال الأصلي. استخدم الإرجاع بدون فاتورة بدلاً من ذلك.
+Only {0} of {1} can still be returned.,يمكن إرجاع {0} فقط من {1}.
+One-screen exchange is not switched on for this POS Profile.,الاستبدال في شاشة واحدة غير مفعّل لملف نقطة البيع هذا.
+The new sale isn't fully paid ({0} outstanding). Nothing was saved.,البيع الجديد غير مدفوع بالكامل (المتبقي {0}). لم يُحفظ شيء.
+{0} can't be used in an exchange: only Cash or Card.,لا يمكن استخدام {0} في الاستبدال: نقداً أو بطاقة فقط.
+Loyalty points can't be redeemed in an exchange. Redeem them on a separate sale.,لا يمكن استبدال نقاط الولاء في الاستبدال. استبدلها في بيع منفصل.
+The new items must be sold to the same customer as the return.,يجب بيع الأصناف الجديدة لنفس عميل المرتجع.
+An exchange gives no money back: the return becomes credit.,الاستبدال لا يردّ نقوداً: يصبح المرتجع رصيداً.
+The exchange credit wasn't applied to the new sale. Nothing was saved.,لم يُطبَّق رصيد الاستبدال على البيع الجديد. لم يُحفظ شيء.
+An exchange is paid with its own return's credit only.,يُدفع الاستبدال برصيد مرتجعه فقط.
+{0}: exchange,{0}: استبدال
+returned value,قيمة المرتجع
+new items total,إجمالي الأصناف الجديدة
+amount to pay,المبلغ المطلوب دفعه
+Used in exchange {0},استُخدمت في الاستبدال {0}
+Price and discount from the receipt,السعر والخصم من الإيصال
+Invoice discount on the receipt: -{0} (included in Returned),خصم الفاتورة في الإيصال: -{0} (مشمول في المرتجع)
+Checking…,جارٍ التحقق…
+Saving…,جارٍ الحفظ…
+The exchange could not be discarded.,تعذّر إلغاء الاستبدال.

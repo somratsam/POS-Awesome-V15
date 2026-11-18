@@ -5,6 +5,7 @@ import {
 	loadDocumentSourceRecord,
 } from "../../../utils/documentSources";
 import { resolvePosDocumentDoctype } from "../../../utils/posDocumentMode";
+import { runExchangeMainAction } from "./exchange";
 import {
 	findLinesMissingDiscountReason,
 	isDiscountReasonRequired,
@@ -71,6 +72,15 @@ export async function show_payment(context: any) {
 	// invoice server-side.
 	if (context._paymentInFlight) {
 		return;
+	}
+	// One-screen exchange: credit left, even or no new items submit from
+	// the cart; the customer paying more continues to Payments below.
+	if (context._exchangeInFlight) return;
+	context._exchangeInFlight = true;
+	try {
+		if (await runExchangeMainAction(context, ensureDiscountReasons)) return;
+	} finally {
+		context._exchangeInFlight = false;
 	}
 	context._paymentInFlight = true;
 	context.eventBus?.emit?.("payment_processing", true);

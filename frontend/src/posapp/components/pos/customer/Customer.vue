@@ -123,8 +123,10 @@
 				</span>
 				<span class="customer-load-status__percent"> {{ customerLoadPercent }}% </span>
 			</div>
+			<!-- Hidden while the customer is locked (exchange, Anonymous voucher):
+			     the lock note below says why; it comes back when the lock ends. -->
 			<v-btn
-				v-if="pos_profile?.posa_walkin_customer"
+				v-if="pos_profile?.posa_walkin_customer && !sharedCustomerLockNote"
 				class="walkin-customer-btn"
 				variant="text"
 				size="small"
@@ -300,6 +302,7 @@ import { useOnlineStatus } from "../../../composables/core/useOnlineStatus";
 import { useToastStore } from "../../../stores/toastStore.js";
 import { useUIStore } from "../../../stores/uiStore.js";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
+import { useExchangeStore } from "../../../stores/exchangeStore";
 import { ensureCustomersReady } from "../../../modules/customers/customerLoadingCoordinator";
 
 export default {
@@ -313,6 +316,7 @@ export default {
 		const { proxy } = getCurrentInstance();
 		const eventBus = proxy?.eventBus;
 		const customersStore = useCustomersStore();
+		const exchangeStore = useExchangeStore();
 		const toastStore = useToastStore();
 		const uiStore = useUIStore();
 		const invoiceStore = useInvoiceStore();
@@ -345,6 +349,14 @@ export default {
 		// customer: its credit is a bearer voucher. So does a sale paid with
 		// such a voucher (its credit can only go to a sale to that customer).
 		const sharedCustomerLockNote = computed(() => {
+			// One-screen exchange: the return must be to the receipt's customer.
+			const exchangeReceipt = exchangeStore.receipt;
+			if (exchangeReceipt) {
+				return __("Exchange for receipt {0} — the customer stays {1}.", [
+					exchangeReceipt.name,
+					exchangeReceipt.customer_name || exchangeReceipt.customer,
+				]);
+			}
 			const doc = invoiceStore.invoiceDoc || {};
 			const customer = doc.customer || selectedCustomer.value;
 			if (!customer || !customersStore.isSharedCustomer(customer)) return "";

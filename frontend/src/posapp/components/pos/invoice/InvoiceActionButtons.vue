@@ -1,6 +1,7 @@
 <template>
 	<div v-if="isCounterGrid" class="counter-grid-actions" data-testid="counter-grid-actions">
 		<v-btn
+			v-if="!exchangeActive"
 			variant="tonal"
 			prepend-icon="mdi-content-save-outline"
 			class="counter-grid-action"
@@ -13,6 +14,7 @@
 			{{ __("Save & Clear") }}
 		</v-btn>
 		<v-btn
+			v-if="!exchangeActive"
 			variant="tonal"
 			prepend-icon="mdi-tray-full"
 			class="counter-grid-action"
@@ -44,7 +46,7 @@
 			:loading="returnsLoading"
 			@click="$emit('open-returns')"
 		>
-			{{ __("Return") }}
+			{{ exchangeEnabled ? __("Return / Exchange") : __("Return") }}
 		</v-btn>
 		<v-menu v-if="showMoreActions" location="top end">
 			<template #activator="{ props: menuProps }">
@@ -124,16 +126,16 @@
 			class="counter-grid-action counter-grid-action--pay"
 			data-pos-keyboard-target="pay"
 			data-testid="invoice-action-pay"
-			:loading="paymentLoading"
-			:disabled="paymentLoading"
+			:loading="paymentLoading && !exchangeChecking"
+			:disabled="paymentLoading || exchangeChecking"
 			@click="$emit('show-payment')"
 		>
-			{{ __("Pay") }}
+			{{ exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : __("Pay") }}
 		</v-btn>
 	</div>
 
 	<v-row v-else dense>
-		<v-col cols="12" sm="6">
+		<v-col v-if="!exchangeActive" cols="12" sm="6">
 			<v-btn
 				block
 				color="accent"
@@ -149,7 +151,7 @@
 				{{ __("Save & Clear") }}
 			</v-btn>
 		</v-col>
-		<v-col cols="12" sm="6">
+		<v-col v-if="!exchangeActive" cols="12" sm="6">
 			<v-btn
 				block
 				color="warning"
@@ -221,10 +223,10 @@
 				data-testid="invoice-action-returns"
 				:loading="returnsLoading"
 			>
-				{{ __("Sales Return") }}
+				{{ exchangeEnabled ? __("Return / Exchange") : __("Sales Return") }}
 			</v-btn>
 		</v-col>
-		<v-col cols="12" sm="6" v-if="pos_profile.posa_allow_print_draft_invoices">
+		<v-col cols="12" sm="6" v-if="pos_profile.posa_allow_print_draft_invoices && !exchangeActive">
 			<v-btn
 				block
 				color="primary"
@@ -265,10 +267,10 @@
 				class="summary-btn pay-btn"
 				data-pos-keyboard-target="pay"
 				data-testid="invoice-action-pay"
-				:loading="paymentLoading"
-				:disabled="paymentLoading"
+				:loading="paymentLoading && !exchangeChecking"
+				:disabled="paymentLoading || exchangeChecking"
 			>
-				{{ __("PAY") }}
+				{{ exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : __("PAY") }}
 			</v-btn>
 		</v-col>
 	</v-row>
@@ -297,6 +299,14 @@ const props = defineProps({
 	printLoading: Boolean,
 	paymentLoading: Boolean,
 	customerDisplayLoading: Boolean,
+	// One-screen exchange: no Save & Clear / Drafts (no hold in this mode);
+	// the main button reads "Pay 59.100", "Submit exchange" or
+	// "Submit return → Credit note".
+	exchangeActive: Boolean,
+	exchangeEnabled: Boolean,
+	exchangeButtonLabel: { type: String, default: "" },
+	// The exchange's figures are being checked before its confirmation.
+	exchangeChecking: Boolean,
 });
 
 defineEmits([

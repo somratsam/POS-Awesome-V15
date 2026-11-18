@@ -335,6 +335,7 @@
 <script>
 import format, { formatUtils } from "../../../format";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
+import { useExchangeStore } from "../../../stores/exchangeStore";
 import { useUIStore } from "../../../stores/uiStore.js";
 import { useToastStore } from "../../../stores/toastStore";
 import { useCustomersStore } from "../../../stores/customersStore";
@@ -349,6 +350,7 @@ export default {
 	components: { ReturnItemsPicker },
 	setup() {
 		const invoiceStore = useInvoiceStore();
+		const exchangeStore = useExchangeStore();
 		const uiStore = useUIStore();
 		const toastStore = useToastStore();
 		const customersStore = useCustomersStore();
@@ -363,6 +365,7 @@ export default {
 		);
 		return {
 			invoiceStore,
+			exchangeStore,
 			uiStore,
 			toastStore,
 			customersStore,
@@ -742,6 +745,12 @@ export default {
 		async submit_dialog() {
 			if (this.selected.length > 0) {
 				const selectedInvoice = this.selected[0];
+				// One-screen exchange: the chosen receipt opens "Items on receipt".
+				if (this.exchangeStore.enabled) {
+					this.invoicesDialog = false;
+					await this.exchangeStore.openReceipt(selectedInvoice.name, { fromSearch: true });
+					return;
+				}
 				const doctype =
 					this.pos_profile && this.pos_profile.create_pos_invoice_instead_of_sales_invoice
 						? "POS Invoice"

@@ -10,6 +10,7 @@
 		<ZReportHistoryDialog></ZReportHistoryDialog>
 		<SalesByCashierDialog></SalesByCashierDialog>
 		<Returns></Returns>
+		<ExchangeHost />
 		<NewAddress></NewAddress>
 		<MpesaPayments></MpesaPayments>
 		<Variants></Variants>
@@ -322,6 +323,8 @@ import Variants from "../items/Variants.vue";
 import StockLookupDialog from "../items/StockLookupDialog.vue";
 import DiscountReasonDialog from "../invoice/DiscountReasonDialog.vue";
 import Returns from "../flows/Returns.vue";
+import ExchangeHost from "../flows/ExchangeHost.vue";
+import { useExchangeStore } from "../../../stores/exchangeStore";
 import MpesaPayments from "../payments/Mpesa-Payments.vue";
 import { inject, ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from "vue";
 import { usePosShift } from "../../../composables/pos/shared/usePosShift";
@@ -370,6 +373,7 @@ export default {
 		const offers = useOffers();
 		const uiStore = useUIStore();
 		const invoiceStore = useInvoiceStore();
+		const exchangeStore = useExchangeStore();
 		const toastStore = useToastStore();
 		const __ = window.__;
 		const { activeView, posProfile, paymentDialogOpen, stockSettings } = storeToRefs(uiStore);
@@ -634,6 +638,11 @@ export default {
 			const query = typeof payload === "string" ? payload : payload?.query;
 			const normalizedQuery = String(query || "").trim();
 			if (!normalizedQuery || counterDirectEntryPending.value) return;
+			// One-screen exchange: a receipt number opens its picker.
+			if (exchangeStore.enabled && (await exchangeStore.openReceipt(normalizedQuery))) {
+				invoicePanel.value?.clearCounterGridEntry?.();
+				return;
+			}
 
 			counterDirectEntryPending.value = true;
 			try {
@@ -987,6 +996,7 @@ export default {
 		InvoiceManagement,
 
 		Returns,
+		ExchangeHost,
 		PosOffers,
 		PosCoupons,
 		NewAddress,

@@ -324,6 +324,8 @@ import { storeToRefs } from "pinia";
 import stockCoordinator from "../../utils/stockCoordinator";
 import { getCurrentInstance, ref } from "vue";
 import { save_and_clear_invoice as saveAndClearInvoiceAction } from "./invoice_utils/actions";
+import { buildExchangeSale, exchangeCartSignature } from "./invoice_utils/exchange";
+import { useExchangeStore } from "../../stores/exchangeStore";
 import { fetchDraftInvoices } from "../../utils/draftInvoices";
 import { getQuickCashTenderSuggestions } from "../../utils/cashTender";
 
@@ -1277,6 +1279,18 @@ export default {
 		this.loadColumnPreferences();
 		this.loadInvoiceHeight();
 
+		// One-screen exchange: the server checks the whole cart in the
+		// background, 0.4 s after its last change (each change restarts the
+		// wait), so "Submit this exchange?" opens without waiting.
+		const exchangeStore = useExchangeStore();
+		this._unregisterExchangeSale = exchangeStore.setSaleProvider(() => buildExchangeSale(this));
+		this.$watch(
+			() => (exchangeStore.active ? exchangeCartSignature(this) : ""),
+			(signature) => {
+				if (signature) exchangeStore.refreshQuote(400);
+			},
+		);
+
 		this.$watch(
 			() => this.uiStore.posProfile,
 			(profile) => {
@@ -1396,6 +1410,7 @@ export default {
 		});
 	},
 	beforeUnmount() {
+		this._unregisterExchangeSale?.();
 		if (typeof this.price_list_rate_dialog_resolver === "function") {
 			this.price_list_rate_dialog_resolver(null);
 			this.price_list_rate_dialog_resolver = null;

@@ -31,8 +31,18 @@
 			:search="counterGrid ? '' : itemSearch"
 			:custom-filter="customItemFilter"
 		>
+			<!-- One-screen exchange: the RETURN lines, above the new items. -->
+			<template #body.prepend>
+				<ExchangeReturnRows
+					:visible-columns="finalVisibleColumns"
+					:format-currency="memoizedFormatCurrency"
+					:currency-symbol="currencySymbol"
+					:display-currency="displayCurrency"
+				/>
+			</template>
+
 			<template #no-data>
-				<div class="posa-cart-empty-state">
+				<div v-if="!exchangeStore.active" class="posa-cart-empty-state">
 					<div class="posa-cart-empty-state__icon-wrap">
 						<v-icon :icon="emptyStateIcon" size="42" class="posa-cart-empty-state__icon" />
 					</div>
@@ -198,6 +208,8 @@ import BatchSerialSelectionDialog from "./BatchSerialSelectionDialog.vue";
 import { loadItemSelectorSettings } from "../../../utils/itemSelectorSettings";
 import { logComponentRender } from "../../../utils/perf";
 import CartItemRow from "./CartItemRow.vue";
+import ExchangeReturnRows from "./ExchangeReturnRows.vue";
+import { useExchangeStore } from "../../../stores/exchangeStore";
 import DiscountOfferRates from "./DiscountOfferRates.vue";
 import CounterGridEntryRow from "./CounterGridEntryRow.vue";
 import ItemSalesHistoryModal from "./ItemSalesHistoryModal.vue";
@@ -285,6 +297,7 @@ const { proxy } = getCurrentInstance() as any;
 const eventBus = proxy?.eventBus;
 const invoiceStore = useInvoiceStore();
 const uiStore = useUIStore();
+const exchangeStore = useExchangeStore();
 const tableContainer = ref<HTMLElement | null>(null);
 const virtualTable = ref<any>(null);
 type CartGridMode = "inactive" | "row" | "cell";

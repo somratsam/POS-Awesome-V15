@@ -387,6 +387,8 @@ import { useToastStore } from "../../../stores/toastStore";
 import { useUIStore } from "../../../stores/uiStore";
 import { useInvoiceStore } from "../../../stores/invoiceStore";
 import { useEmployeeStore } from "../../../stores/employeeStore";
+import { useExchangeStore } from "../../../stores/exchangeStore";
+import { looksLikeReceipt } from "../../../utils/oneScreenExchange";
 
 import { parseBooleanSetting, shouldBlockSaleForStock } from "../../../utils/stock";
 import { shouldFocusCartQtyAfterItemAdd } from "../../../utils/cartFocusSettings";
@@ -433,6 +435,7 @@ const toastStore = useToastStore();
 const uiStore = useUIStore();
 const invoiceStore = useInvoiceStore();
 const employeeStore = useEmployeeStore();
+const exchangeStore = useExchangeStore();
 const { selectedCustomer } = storeToRefs(customersStore);
 const {
 	posProfile: uiPosProfile,
@@ -1930,6 +1933,16 @@ const onEnter = (e) => {
 	// instead. Route it through the same fixed clearSearch() instead.
 	if (!String(search_input.value || "").trim()) {
 		clearSearch();
+		return;
+	}
+	// One-screen exchange: a typed receipt number opens its picker.
+	const typed = String(search_input.value || "").trim();
+	if (exchangeStore.enabled && looksLikeReceipt(typed)) {
+		e?.preventDefault?.();
+		void exchangeStore.openReceipt(typed).then((handled) => {
+			if (handled) clearSearch();
+			else itemsSelectorSearch.onEnter(e);
+		});
 		return;
 	}
 	itemsSelectorSearch.onEnter(e);
