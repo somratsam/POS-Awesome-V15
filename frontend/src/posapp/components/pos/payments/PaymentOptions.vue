@@ -37,23 +37,21 @@
 							@update:model-value="$emit('update:isCashback', $event)"
 						></v-switch>
 					</v-col>
-					<v-col cols="12" v-if="invoiceDoc.is_return">
+					<v-col cols="12" v-if="invoiceDoc.is_return && creditOnlyPolicy">
+						<!-- Credit-only returns: nothing to choose, so one line, no switch. -->
+						<p class="payment-options-panel__helper mx-1" data-testid="return-credit-note-line">
+							{{ $frappe._("The return's value is issued as a credit note.") }}
+						</p>
+					</v-col>
+					<v-col cols="12" v-if="invoiceDoc.is_return && !creditOnlyPolicy">
 						<v-switch
 							:model-value="isCreditReturn"
 							color="primary"
 							flat
-							:disabled="creditOnlyPolicy"
 							:label="$frappe._('Store as Credit?')"
 							class="my-0 pa-1"
 							@update:model-value="$emit('update:isCreditReturn', $event)"
 						></v-switch>
-						<p v-if="creditOnlyPolicy" class="payment-options-panel__helper mx-1">
-							{{
-								$frappe._(
-									"Required by this POS Profile's return policy -- refunds are disabled, every return is recorded as store credit.",
-								)
-							}}
-						</p>
 					</v-col>
 					<v-col cols="12" v-if="!invoiceDoc.is_return && posProfile.use_customer_credit">
 						<v-switch
@@ -198,9 +196,9 @@
 				</div>
 
 				<div v-else-if="invoiceDoc.is_return && isCreditReturn" class="payment-options-panel__note">
-					<h4>{{ $frappe._("Customer Credit Return Active") }}</h4>
+					<h4>{{ $frappe._("Credit note") }}</h4>
 					<p>
-						{{ $frappe._("This return will be saved as customer credit instead of cashback.") }}
+						{{ $frappe._("The return's value is issued as a credit note.") }}
 					</p>
 				</div>
 

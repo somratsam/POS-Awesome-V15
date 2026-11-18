@@ -9,9 +9,9 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing import c
 
 
 def _resolve_opening_shift(mock_exchange_frappe, returning_customers=()):
-    """Point credit_exchange.get_customers_with_same_shift_return() -- called by
-    the overview's "Exchanges Today" figure -- at the same opening shift this
-    test's get_doc returns, instead of a real database lookup."""
+    """No exchanges: credit_exchange.get_exchange_credit_by_sale() (the
+    overview's and the closing's "Exchanges Today") is patched to {} by
+    the test, so nothing reads the database."""
     mock_exchange_frappe.db.get_value.return_value = ("POS-PROFILE-1", "My Co")
     mock_exchange_frappe.get_all.return_value = list(returning_customers)
 
@@ -259,8 +259,8 @@ def _overview_and_reconciliation(balance, invoices, movements=()):
         # frappe.get_doc replaced above, a real query could load (and cache)
         # this test's fake document as System Settings.
         f"{OVERVIEW}._shift_z_summary", return_value={}
-    ), patch("posawesome.posawesome.api.credit_exchange.get_authorized_pos_profile"), patch(
-        "posawesome.posawesome.api.credit_exchange.frappe"
+    ), patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.get_exchange_credit_by_sale", return_value={}), patch(
+        "posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data.get_exchange_credit_by_sale", return_value={}
     ) as exchange_frappe, patch(f"{CREATION}.frappe") as creation_frappe, patch(
         f"{CREATION}.fetch_shift_invoices", return_value=invoices
     ), patch(f"{CREATION}.fetch_shift_payment_entries", return_value=[]):

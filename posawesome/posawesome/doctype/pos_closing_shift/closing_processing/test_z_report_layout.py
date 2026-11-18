@@ -18,9 +18,10 @@ def _invoice_rows(rows):
                          base_total_taxes_and_charges=0, discount_amount=0, base_discount_amount=0) for r in rows]
 
 
-def printed(rows, returning=(), origin_shifts=None, payments=None):
-    """The Z Report as printed (text only) for these invoices."""
-    b = breakdown(rows, returning, origin_shifts)
+def printed(rows, exchange=None, origin_shifts=None, payments=None):
+    """The Z Report as printed (text only) for these invoices. exchange:
+    {sale: credit used from same-shift returns} (the credit Journal Entries)."""
+    b = breakdown(rows, exchange, origin_shifts)
     with patch.object(z_report.frappe, "get_doc", return_value=_shift()), patch.object(
         z_report, "get_authorized_pos_profile"
     ), patch.object(z_report, "_sales_breakdown", return_value=b), patch.object(
@@ -65,21 +66,23 @@ class TestZReportLayout(unittest.TestCase):
     def test_exchange(self):
         text = printed(
             [inv("S1", 72.97), inv("R1", -72.97, is_return=1, paid=0, return_against="S1"), inv("S2", 72.97, paid=0, redeemed=72.97)],
-            ["CUST-1"], {"S1": SHIFT}, VISA(72.97),
+            {"S2": 72.97}, {"S1": SHIFT}, VISA(72.97),
         )
-        for line in ("Gross Sales 145.940 OMR", "↳ of which exchanges (1) 72.970 OMR", "Returns -72.970 OMR",
-                     "Net Sales 72.970 OMR", "Sales Count 1 + 1 exch.", "↳ used in exchanges today 72.970 OMR",
-                     "Left as Store Credit 0.000 OMR", "= Takings 72.970 OMR", "Number of Receipts 1 + 1 exch.",
+        for line in ("Gross Sales 145.940 OMR", "↳ of which exchanges (1) 72.970 OMR", "Returned -72.970 OMR",
+                     "Net Sales 72.970 OMR", "Sales Count 1 + 1 exch.", "↳ Exchanges Today 72.970 OMR",
+                     "Left on credit notes 0.000 OMR", "= Takings 72.970 OMR", "Number of Receipts 1 + 1 exch.",
                      "Sales Figure/Receipt 72.970 OMR", "Gross Sales Receipts 2 / 145.940"):
             self.assertIn(line, text)
         self.assertNotIn("Total Sales", text)
         self.assertNotIn("of earlier sales", text)
+        # "Exchanges Today" is the sub-line under Credit notes issued, as in the Overview.
+        self.assertRegex(text, r"Credit notes issued [0-9.]+ OMR\n↳ Exchanges Today 72\.970 OMR\nCredit notes used ")
 
     def test_credit_note_not_used(self):
         text = printed([inv("S1", 72.97), inv("R1", -72.97, is_return=1, paid=0, return_against="S1")],
-                       ["CUST-1"], {"S1": SHIFT}, VISA(72.97))
-        for line in ("Net Sales 0.000 OMR", "+ Credit Issued 72.970 OMR", "- Credit Redeemed 0.000 OMR",
-                     "= Takings 72.970 OMR", "Left as Store Credit 72.970 OMR", "Sales Figure/Item -"):
+                       {}, {"S1": SHIFT}, VISA(72.97))
+        for line in ("Net Sales 0.000 OMR", "+ Credit notes issued 72.970 OMR", "- Credit notes used 0.000 OMR",
+                     "= Takings 72.970 OMR", "Left on credit notes 72.970 OMR", "Sales Figure/Item -"):
             self.assertIn(line, text)
         self.assertNotIn("exch.", text)
 

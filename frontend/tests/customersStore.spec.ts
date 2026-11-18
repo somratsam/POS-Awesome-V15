@@ -347,6 +347,22 @@ describe("customersStore credit note vouchers", () => {
 		store.setSelectedCustomer(null);
 		expect(store.creditVouchers).toEqual({});
 	});
+
+	it("credit on the sale locks the customer: a scanned voucher or Use Customer Balance", () => {
+		const store = useCustomersStore();
+		store.setSelectedCustomer("CUST-B");
+		expect(store.creditOnSaleFor("CUST-B")).toBeNull();
+		store.addCreditVoucher({ ...voucher("CN-1", "CUST-B"), customer_name: "Ali" });
+		expect(store.creditOnSaleFor("CUST-B")).toEqual({ vouchers: ["CN-1"], customerName: "Ali" });
+		expect(store.creditOnSaleFor("CUST-C")).toBeNull();
+		// Switched off: every voucher goes, the lock with it.
+		store.dropCreditVouchers();
+		expect(store.creditOnSaleFor("CUST-B")).toBeNull();
+		store.setCreditOn("CUST-B", true);
+		expect(store.creditOnSaleFor("CUST-B")).toEqual({ vouchers: [], customerName: "" });
+		store.setCreditOn("CUST-B", false);
+		expect(store.creditOnSaleFor("CUST-B")).toBeNull();
+	});
 });
 
 describe("customersStore bearer vouchers and shared customers", () => {

@@ -31,7 +31,7 @@
 							:invoice_doc="invoice_doc"
 							:total_payments_display="total_payments_display"
 							:diff_payment_display="diff_payment_display"
-							:diff_label="diff_label"
+							:diff_label="paymentDiffLabel"
 							:diff-payment="diff_payment"
 							:change_due="change_due"
 							:uncovered-overpayment="uncovered_overpayment"
@@ -149,7 +149,7 @@
 							:invoice_doc="invoice_doc"
 							:displayCurrency="displayCurrency"
 							:diff_payment="diff_payment"
-							:diff_label="diff_label"
+							:diff_label="paymentDiffLabel"
 							:item-discount-total="paymentItemDiscountTotal"
 							:currencySymbol="currencySymbol"
 							:formatCurrency="formatCurrency"
@@ -817,6 +817,16 @@ const redeemCreditVoucher = async (code) => {
 
 	const current = invoice_doc.value?.customer || "";
 	if (current !== voucher.customer) {
+		// Credit of another customer is already on this sale: the customer
+		// stays, as in an exchange.
+		if (current && customersStore.creditOnSaleFor(current)) {
+			showVoucherError(
+				__("This sale is paid with {0}'s credit — the customer stays {0}. Switch off Use Customer Balance to change it.", [
+					invoice_doc.value?.customer_name || current,
+				]),
+			);
+			return;
+		}
 		const isDefaultCustomer = !current || current === pos_profile.value?.customer;
 		if (!isDefaultCustomer && !(await askVoucherCustomer(voucher))) return;
 		customersStore.setSelectedCustomer(voucher.customer);
@@ -900,9 +910,9 @@ const setRedeemCustomerCredit = (value) => {
 	redeem_customer_credit.value = Boolean(value);
 	if (!invoice_doc.value?.is_return) {
 		customersStore.setCreditOn(invoice_doc.value?.customer || null, Boolean(value));
-		// Switched off: a bearer voucher is dropped too, which frees the
-		// customer box (locked while one is on the sale).
-		if (!value) customersStore.dropBearerVouchers();
+		// Switched off: the scanned vouchers are dropped too, which frees the
+		// customer box (locked while credit is on the sale).
+		if (!value) customersStore.dropCreditVouchers();
 	}
 };
 const creditRemainderDialog = ref(false);
@@ -1164,6 +1174,16 @@ const creditChangeOnSalesAllowed = computed(() =>
 const returnsCreditOnlyPolicy = computed(() =>
 	parseBooleanSetting(pos_profile.value?.posa_returns_credit_only),
 );
+
+// A return whose value goes to store credit: what is left is the credit note
+// it issues, not a refund still to pay out ("Remaining Refund").
+const paymentDiffLabel = computed(() => {
+	const doc = invoice_doc.value;
+	if (doc?.is_return && (is_credit_return.value || returnsCreditOnlyPolicy.value)) {
+		return `${__("Credit note issued")} (${doc.currency || ""})`;
+	}
+	return diff_label.value;
+});
 
 const giftCardAppliedAmount = computed(() =>
 	(Array.isArray(giftCardRedemptions.value) ? giftCardRedemptions.value : []).reduce(

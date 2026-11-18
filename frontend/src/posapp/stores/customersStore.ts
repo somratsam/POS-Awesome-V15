@@ -292,6 +292,24 @@ export const useCustomersStore = defineStore("customers", () => {
 		}
 	}
 
+	/** Credit on the current sale for this customer: the credit note vouchers
+	 * scanned for it, or "Use Customer Balance" switched on. The customer box is
+	 * locked while there is any (Customer.vue), like an exchange. */
+	function creditOnSaleFor(customer: string | null | undefined): { vouchers: string[]; customerName: string } | null {
+		if (!customer) return null;
+		const vouchers = Object.values(creditVouchers.value).filter((voucher) => voucher?.customer === customer);
+		if (!vouchers.length && !isCreditOn(customer)) return null;
+		return {
+			vouchers: vouchers.map((voucher) => String(voucher.voucher || voucher.credit_origin)),
+			customerName: String(vouchers.find((voucher) => voucher?.customer_name)?.customer_name || ""),
+		};
+	}
+
+	/** Every scanned voucher off the sale ("Use Customer Balance" switched off). */
+	function dropCreditVouchers() {
+		if (Object.keys(creditVouchers.value).length) creditVouchers.value = {};
+	}
+
 	function hasBearerVoucherFor(customer: string | null | undefined) {
 		return (
 			Boolean(customer) &&
@@ -1245,6 +1263,8 @@ export const useCustomersStore = defineStore("customers", () => {
 		addCreditVoucher,
 		keepCreditVouchersFor,
 		dropBearerVouchers,
+		dropCreditVouchers,
+		creditOnSaleFor,
 		hasBearerVoucherFor,
 		sharedCustomers,
 		markSharedCustomer,

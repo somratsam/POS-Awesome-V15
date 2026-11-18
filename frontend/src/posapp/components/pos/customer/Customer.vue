@@ -359,14 +359,27 @@ export default {
 			}
 			const doc = invoiceStore.invoiceDoc || {};
 			const customer = doc.customer || selectedCustomer.value;
-			if (!customer || !customersStore.isSharedCustomer(customer)) return "";
-			if (doc.is_return && doc.return_against) {
-				return __("This sale was to {0} — the credit is given as a voucher.", [customer]);
+			if (!customer) return "";
+			if (customersStore.isSharedCustomer(customer)) {
+				if (doc.is_return && doc.return_against) {
+					return __("This sale was to {0} — the credit is given as a voucher.", [customer]);
+				}
+				if (!doc.is_return && customersStore.hasBearerVoucherFor(customer)) {
+					return __("Paid with a voucher from a sale to {0} — the customer stays {0}.", [customer]);
+				}
+				return "";
 			}
-			if (!doc.is_return && customersStore.hasBearerVoucherFor(customer)) {
-				return __("Paid with a voucher from a sale to {0} — the customer stays {0}.", [customer]);
+			// A named customer's credit on the sale (a scanned credit note or
+			// "Use Customer Balance"): the customer stays, as in an exchange,
+			// until the credit is switched off in Payments.
+			if (doc.is_return) return "";
+			const credit = customersStore.creditOnSaleFor(customer);
+			if (!credit) return "";
+			const name = doc.customer_name || credit.customerName || customer;
+			if (credit.vouchers.length) {
+				return __("Paid with credit note {0} — the customer stays {1}.", [credit.vouchers.join(", "), name]);
 			}
-			return "";
+			return __("Paid with the customer's credit notes — the customer stays {0}.", [name]);
 		});
 		const showCustomerLoadProgress = computed(
 			() => loadingCustomers.value || isCustomerBackgroundLoading.value,

@@ -6,70 +6,31 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
 
 
 class TestSameShiftExchangeTotal(unittest.TestCase):
-    """Exercises only get_same_shift_exchange_total()'s own summing logic,
-    with `returning_customers` passed in directly so no live database is
-    needed -- the "which customers had a same-shift return" question
-    itself is now delegated to get_customers_with_same_shift_return()
-    (posawesome/posawesome/api/credit_exchange.py), covered separately by
-    api/test_credit_exchange.py's real-database tests (run via
-    `bench execute ...run_site_assertions`, same pattern as the
-    submission-ledger tests) since it needs a real Sales Invoice/POS
-    Opening Shift to query against."""
+    """The Closing Shift's "Exchanges Today": the summing over the
+    shift's sales, with the credit each one used from same-shift returns
+    passed in. The link itself (credit Journal Entries, same shift) is
+    credit_exchange.get_exchange_credit_by_sale, tested on real invoices in
+    api/test_exchange_links_db."""
 
-    def test_sums_redemptions_from_customers_who_also_returned_this_shift(self):
-        rows = [
-            {"name": "SINV-1", "customer": "Anonymous", "is_return": 1, "posa_redeemed_customer_credit": 0},
-            {"name": "SINV-2", "customer": "Anonymous", "is_return": 0, "posa_redeemed_customer_credit": 139.3},
-            {"name": "SINV-3", "customer": "SomeoneElse", "is_return": 0, "posa_redeemed_customer_credit": 50},
-        ]
+    rows = [
+        {"name": "SINV-1", "customer": "Anonymous", "is_return": 1},
+        {"name": "SINV-2", "customer": "Anonymous", "is_return": 0, "posa_redeemed_customer_credit": 139.3},
+        {"name": "SINV-3", "customer": "Anonymous", "is_return": 0, "posa_redeemed_customer_credit": 50},
+    ]
 
-        self.assertEqual(
-            get_same_shift_exchange_total(rows, "SHIFT-1", returning_customers=["Anonymous"]),
-            139.3,
-        )
+    def test_counts_only_credit_from_same_shift_returns(self):
+        # SINV-3 used an older credit note (no exchange link): not counted,
+        # although the same shared customer returned something this shift.
+        self.assertEqual(get_same_shift_exchange_total(self.rows, "SHIFT-1", {"SINV-2": 139.3}), 139.3)
 
-    def test_zero_when_no_returns_in_shift(self):
-        rows = [
-            {"name": "SINV-1", "customer": "A", "is_return": 0, "posa_redeemed_customer_credit": 40},
-        ]
+    def test_part_of_a_sales_credit_from_an_older_credit_note(self):
+        self.assertEqual(get_same_shift_exchange_total(self.rows, "SHIFT-1", {"SINV-2": 60.0}), 60.0)
 
-        self.assertEqual(
-            get_same_shift_exchange_total(rows, "SHIFT-1", returning_customers=[]), 0.0
-        )
+    def test_no_exchange(self):
+        self.assertEqual(get_same_shift_exchange_total(self.rows, "SHIFT-1", {}), 0)
 
-    def test_zero_when_return_belongs_to_a_different_customer(self):
-        rows = [
-            {"name": "SINV-1", "customer": "A", "is_return": 1, "posa_redeemed_customer_credit": 0},
-            {"name": "SINV-2", "customer": "B", "is_return": 0, "posa_redeemed_customer_credit": 40},
-        ]
+    def test_return_rows_are_never_summed(self):
+        self.assertEqual(get_same_shift_exchange_total(self.rows, "SHIFT-1", {"SINV-1": 10.0}), 0)
 
-        self.assertEqual(
-            get_same_shift_exchange_total(rows, "SHIFT-1", returning_customers=["A"]), 0.0
-        )
-
-    def test_sums_across_multiple_customers_independently(self):
-        rows = [
-            {"name": "SINV-1", "customer": "A", "is_return": 1, "posa_redeemed_customer_credit": 0},
-            {"name": "SINV-2", "customer": "A", "is_return": 0, "posa_redeemed_customer_credit": 139.3},
-            {"name": "SINV-3", "customer": "B", "is_return": 1, "posa_redeemed_customer_credit": 0},
-            {"name": "SINV-4", "customer": "B", "is_return": 0, "posa_redeemed_customer_credit": 172.5},
-        ]
-
-        self.assertEqual(
-            get_same_shift_exchange_total(rows, "SHIFT-1", returning_customers=["A", "B"]),
-            311.8,
-        )
-
-    def test_ignores_returning_customer_invoice_with_no_redemption(self):
-        rows = [
-            {"name": "SINV-1", "customer": "A", "is_return": 1, "posa_redeemed_customer_credit": 0},
-            {"name": "SINV-2", "customer": "A", "is_return": 0, "posa_redeemed_customer_credit": 0},
-        ]
-
-        self.assertEqual(
-            get_same_shift_exchange_total(rows, "SHIFT-1", returning_customers=["A"]), 0.0
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_no_shift_reads_nothing(self):
+        self.assertEqual(get_same_shift_exchange_total(self.rows, None), 0)

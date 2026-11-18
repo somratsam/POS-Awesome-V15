@@ -25,10 +25,42 @@ vi.mock("../src/posapp/services/qzTray", () => ({
 	printDocumentViaQz: vi.fn(),
 }));
 
+// One-screen exchange: off for the old-flow tests below, on for the routing tests.
+const exchangeStore = { enabled: false, openReceipt: vi.fn(async () => true) };
+vi.mock("../src/posapp/stores/exchangeStore", () => ({ useExchangeStore: () => exchangeStore }));
+
 import InvoiceManagement from "../src/posapp/components/pos/flows/InvoiceManagement.vue";
+
+describe("InvoiceManagement.vue createReturn with one-screen exchange on", () => {
+	beforeEach(() => {
+		exchangeStore.enabled = true;
+		exchangeStore.openReceipt.mockClear();
+		(globalThis as any).frappe = { call: vi.fn() };
+	});
+
+	for (const customer of ["Named Customer", "Anonymous"]) {
+		it(`opens "Items on receipt" for a receipt of ${customer}, never the old return screen`, async () => {
+			const context = {
+				uiStore: { closeInvoiceManagement: vi.fn() },
+				eventBus: { emit: vi.fn() },
+				toastStore: { show: vi.fn() },
+			};
+			await (InvoiceManagement as any).methods.createReturn.call(context, {
+				name: "SINV-0009",
+				doctype: "Sales Invoice",
+				customer,
+			});
+			expect(context.uiStore.closeInvoiceManagement).toHaveBeenCalled();
+			expect(exchangeStore.openReceipt).toHaveBeenCalledWith("SINV-0009", { fromSearch: true });
+			expect((globalThis as any).frappe.call).not.toHaveBeenCalled();
+			expect(context.eventBus.emit).not.toHaveBeenCalledWith("load_return_invoice", expect.anything());
+		});
+	}
+});
 
 describe("InvoiceManagement.vue createReturn: return of a sale to a shared (generic) customer", () => {
 	beforeEach(() => {
+		exchangeStore.enabled = false;
 		(globalThis as any).__ = (text: string, args?: any[]) => {
 			if (!args) return text;
 			return args.reduce((str: string, arg: any, i: number) => str.replaceAll(`{${i}}`, String(arg)), text);

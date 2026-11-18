@@ -177,6 +177,8 @@ doc_events = {
             "posawesome.posawesome.api.stock_transit.validate_no_stock_out_of_transit",
         ],
         "before_submit": "posawesome.posawesome.api.invoice.before_submit",
+        # A return refreshes its original sale's status (Credit Note Issued / Paid).
+        "on_submit": "posawesome.posawesome.api.invoice.on_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
         "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
         # Sales Team after submit: System Manager only; "Sales credited to" follows it.

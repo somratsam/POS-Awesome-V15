@@ -38,7 +38,7 @@
 				</div>
 				<div class="payment-method-card__badges">
 					<span
-						v-if="isReturn"
+						v-if="isReturn && !creditOnlyReturn"
 						class="payment-method-card__badge payment-method-card__badge--refund"
 					>
 						{{ __("Refund") }}

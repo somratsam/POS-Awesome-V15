@@ -176,6 +176,20 @@
 								</v-btn>
 							</div>
 
+							<div class="status-strip mb-4" data-testid="history-credit-filters">
+								<v-btn
+									v-for="chip in historyCreditFilters"
+									:key="chip.key"
+									:variant="historyCreditFilter === chip.key ? 'flat' : 'outlined'"
+									:color="historyCreditFilter === chip.key ? 'primary' : undefined"
+									size="small"
+									:data-filter="chip.key"
+									@click="historyCreditFilter = chip.key"
+								>
+									{{ __(chip.label) }} ({{ historyCreditFilterCounts[chip.key] || 0 }})
+								</v-btn>
+							</div>
+
 							<div class="summary-grid mb-4">
 								<div class="summary-tile summary-tile--history">
 									<div class="summary-tile__label">{{ __("Invoices") }}</div>
@@ -277,10 +291,11 @@
 									<div class="d-flex flex-wrap ga-1">
 										<v-chip
 											size="small"
-											:color="statusColor(item.status)"
+											:color="statusColor(invoiceStatus(item))"
 											variant="tonal"
-											>{{ __(item.status || "Draft") }}</v-chip
+											>{{ __(invoiceStatus(item) || "Draft") }}</v-chip
 										>
+										<InvoiceCreditTags :invoice="item" part="badge" />
 										<v-chip
 											v-if="modificationCount(item)"
 											size="small"
@@ -297,15 +312,14 @@
 										>
 											{{ repairStateLabel(changeAllocationRepairState(item)) }}
 										</v-chip>
-										<v-chip
-											v-if="item.exchange_credit_badge"
-											size="small"
-											:color="exchangeCreditBadgeColor(item.exchange_credit_badge)"
-											variant="tonal"
-										>
-											{{ __(item.exchange_credit_badge) }}
-										</v-chip>
 									</div>
+									<InvoiceCreditTags
+										:invoice="item"
+										part="lines"
+										:money="creditMoney"
+										:date="formatDateForDisplay"
+										@open="openLinkedInvoice"
+									/>
 								</template>
 								<template #item.actions="{ item }">
 									<div class="d-flex justify-end ga-1">
@@ -365,7 +379,7 @@
 									:key="invoice.name"
 									:class="[
 										'invoice-record-card',
-										`invoice-record-card--${toneFromStatus(invoice.status)}`,
+										`invoice-record-card--${toneFromStatus(invoiceStatus(invoice))}`,
 									]"
 									variant="flat"
 								>
@@ -377,10 +391,10 @@
 												</div>
 												<v-chip
 													size="small"
-													:color="statusColor(invoice.status)"
+													:color="statusColor(invoiceStatus(invoice))"
 													variant="flat"
 												>
-													{{ __(invoice.status || "Draft") }}
+													{{ __(invoiceStatus(invoice) || "Draft") }}
 												</v-chip>
 												<v-chip
 													v-if="modificationCount(invoice)"
@@ -402,14 +416,7 @@
 														repairStateLabel(changeAllocationRepairState(invoice))
 													}}
 												</v-chip>
-												<v-chip
-													v-if="invoice.exchange_credit_badge"
-													size="small"
-													:color="exchangeCreditBadgeColor(invoice.exchange_credit_badge)"
-													variant="tonal"
-												>
-													{{ __(invoice.exchange_credit_badge) }}
-												</v-chip>
+												<InvoiceCreditTags :invoice="invoice" part="badge" />
 											</div>
 											<div class="invoice-record-card__subtitle">
 												{{
@@ -418,6 +425,13 @@
 													__("Walk-in Customer")
 												}}
 											</div>
+											<InvoiceCreditTags
+												:invoice="invoice"
+												part="lines"
+												:money="creditMoney"
+												:date="formatDateForDisplay"
+												@open="openLinkedInvoice"
+											/>
 										</div>
 										<div class="invoice-record-card__amount-block">
 											<div class="invoice-record-card__amount-label">
@@ -473,7 +487,7 @@
 											<div class="meta-pair">
 												<div class="meta-pair__label">{{ __("Payment State") }}</div>
 												<div class="meta-pair__value">
-													{{ __(invoice.status || "Draft") }}
+													{{ __(invoiceStatus(invoice) || "Draft") }}
 												</div>
 											</div>
 										</div>
@@ -715,7 +729,7 @@
 									><div class="d-flex flex-wrap ga-1">
 										<v-chip
 											size="small"
-											:color="statusColor(item.status)"
+											:color="statusColor(invoiceStatus(item))"
 											variant="tonal"
 											>{{ __(item.status || "Unpaid") }}</v-chip
 										>
@@ -788,7 +802,7 @@
 									:class="[
 										'invoice-record-card',
 										'invoice-record-card--unpaid',
-										`invoice-record-card--${toneFromStatus(invoice.status)}`,
+										`invoice-record-card--${toneFromStatus(invoiceStatus(invoice))}`,
 									]"
 									variant="flat"
 								>
@@ -800,7 +814,7 @@
 												</div>
 												<v-chip
 													size="small"
-													:color="statusColor(invoice.status)"
+													:color="statusColor(invoiceStatus(invoice))"
 													variant="flat"
 												>
 													{{ __(invoice.status || "Unpaid") }}
@@ -1198,6 +1212,20 @@
 								/>
 							</div>
 
+							<div class="status-strip mb-4" data-testid="return-credit-filters">
+								<v-btn
+									v-for="chip in returnCreditFilters"
+									:key="chip.key"
+									:variant="returnCreditFilter === chip.key ? 'flat' : 'outlined'"
+									:color="returnCreditFilter === chip.key ? 'error' : undefined"
+									size="small"
+									:data-filter="chip.key"
+									@click="returnCreditFilter = chip.key"
+								>
+									{{ __(chip.label) }} ({{ returnCreditFilterCounts[chip.key] || 0 }})
+								</v-btn>
+							</div>
+
 							<div v-if="loading && activeTab === 'returns'" class="tab-loader">
 								<v-progress-circular indeterminate color="error" size="28" width="3" />
 								<span>{{ __("Loading return invoices...") }}</span>
@@ -1230,6 +1258,19 @@
 								<template #item.return_against="{ item }">{{
 									item.return_against || "-"
 								}}</template>
+								<template #item.credit_status="{ item }">
+									<div class="d-flex flex-wrap ga-1">
+										<v-chip size="small" color="error" variant="tonal">{{ __("Return") }}</v-chip>
+										<InvoiceCreditTags :invoice="item" part="badge" />
+									</div>
+									<InvoiceCreditTags
+										:invoice="item"
+										part="lines"
+										:money="creditMoney"
+										:date="formatDateForDisplay"
+										@open="openLinkedInvoice"
+									/>
+								</template>
 								<template #item.actions="{ item }">
 									<div class="d-flex justify-end ga-1">
 										<v-btn
@@ -1277,6 +1318,7 @@
 												<v-chip size="small" color="error" variant="flat">{{
 													__("Return")
 												}}</v-chip>
+												<InvoiceCreditTags :invoice="invoice" part="badge" />
 											</div>
 											<div class="invoice-record-card__subtitle">
 												{{
@@ -1285,6 +1327,13 @@
 													__("Walk-in Customer")
 												}}
 											</div>
+											<InvoiceCreditTags
+												:invoice="invoice"
+												part="lines"
+												:money="creditMoney"
+												:date="formatDateForDisplay"
+												@open="openLinkedInvoice"
+											/>
 										</div>
 										<div class="invoice-record-card__amount-block">
 											<div class="invoice-record-card__amount-label">
@@ -1392,12 +1441,13 @@
 				</div>
 				<div class="d-flex align-center ga-2">
 					<v-chip
-						v-if="selectedInvoiceDetail?.status"
+						v-if="invoiceStatus(selectedInvoiceDetail)"
 						size="small"
-						:color="statusColor(selectedInvoiceDetail.status)"
+						:color="statusColor(invoiceStatus(selectedInvoiceDetail))"
 						variant="tonal"
-						>{{ __(selectedInvoiceDetail.status) }}</v-chip
+						>{{ __(invoiceStatus(selectedInvoiceDetail)) }}</v-chip
 					>
+					<InvoiceCreditTags :invoice="selectedInvoiceCredit" part="badge" />
 					<v-chip
 						v-if="selectedInvoiceDetail && changeAllocationRepairState(selectedInvoiceDetail)"
 						size="small"
@@ -1416,6 +1466,15 @@
 			</v-card-title>
 			<v-divider />
 			<v-card-text v-if="selectedInvoiceDetail">
+				<InvoiceCreditTags
+					class="mb-3"
+					:invoice="selectedInvoiceCredit"
+					part="lines"
+					detail
+					:money="creditMoney"
+					:date="formatDateForDisplay"
+					@open="openLinkedInvoice"
+				/>
 				<div class="summary-grid mb-4">
 					<div class="summary-tile">
 						<div class="summary-tile__label">{{ __("Posting") }}</div>
@@ -1451,13 +1510,16 @@
 				</div>
 				<div class="detail-section__title">{{ __("Items") }}</div>
 				<v-data-table
-					:headers="detailHeaders"
+					:headers="detailItemHeaders"
 					:items="selectedInvoiceDetail.items || []"
 					item-value="item_code"
 					:items-per-page="10"
 					class="elevation-1"
 				>
 					<template #item.qty="{ item }">{{ formatFloat(item.qty || 0) }}</template>
+					<template #item.returned_qty="{ item }">{{
+						returnedQtyForLine(item) ? formatFloat(returnedQtyForLine(item)) : ""
+					}}</template>
 					<template #item.rate="{ item }"
 						>{{ currencySymbol(selectedInvoiceDetail.currency) }}
 						{{ formatCurrency(item.rate) }}</template
@@ -1936,6 +1998,7 @@ import { useUIStore } from "../../../stores/uiStore";
 import { useInvoiceStore } from "../../../stores/invoiceStore";
 import { useCustomersStore } from "../../../stores/customersStore";
 import { useEmployeeStore } from "../../../stores/employeeStore";
+import { useExchangeStore } from "../../../stores/exchangeStore";
 import {
 	appendDebugPrintParam,
 	isDebugPrintEnabled,
@@ -1955,6 +2018,13 @@ import { recordCreditNoteReprint, REPRINT_SETTINGS } from "../../../utils/credit
 import { voucherErrorToast } from "../../../utils/voucherMessages";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
 import ReturnItemsPicker from "./ReturnItemsPicker.vue";
+import InvoiceCreditTags from "./InvoiceCreditTags.vue";
+import {
+	HISTORY_CREDIT_FILTERS,
+	RETURN_CREDIT_FILTERS,
+	matchesCreditFilter,
+	displayInvoiceStatus,
+} from "../../../utils/invoiceCreditLabels";
 import { buildPickedReturnTotal, linesWithoutPicking } from "../../../utils/returnItemSelection";
 import {
 	canDeleteDocumentSourceRecord,
@@ -1977,6 +2047,7 @@ export default {
 	components: {
 		DocumentSourceSelector,
 		ReturnItemsPicker,
+		InvoiceCreditTags,
 	},
 	setup() {
 		const uiStore = useUIStore();
@@ -2052,6 +2123,13 @@ export default {
 		draftDateTo: "",
 		draftSource: "invoice",
 		returnSearch: "",
+		historyCreditFilter: "all",
+		returnCreditFilter: "all",
+		historyCreditFilters: HISTORY_CREDIT_FILTERS,
+		returnCreditFilters: RETURN_CREDIT_FILTERS,
+		// Credit details of the invoice open in the detail popup
+		// (credit_exchange.get_invoice_credit_details).
+		selectedInvoiceCredit: null,
 		returnDateFrom: "",
 		returnDateTo: "",
 		unpaidInvoices: [],
@@ -2093,7 +2171,8 @@ export default {
 			rate: 0,
 		},
 		partialStatusItems: ["All", "Partly Paid", "Unpaid", "Overdue"],
-		historyStatusItems: ["All", "Paid", "Partly Paid", "Unpaid", "Overdue", "Credit Note Issued"],
+		// "Credit Note Issued" is shown as Paid; the "Returned" chip finds those sales.
+		historyStatusItems: ["All", "Paid", "Partly Paid", "Unpaid", "Overdue"],
 		partialHeaders: [
 			{ title: __("Invoice"), key: "name" },
 			{ title: __("Customer"), key: "customer_name" },
@@ -2121,6 +2200,7 @@ export default {
 			{ title: __("Customer"), key: "customer_name" },
 			{ title: __("Posting"), key: "posting_date" },
 			{ title: __("Against"), key: "return_against" },
+			{ title: __("Status"), key: "credit_status", sortable: false },
 			{ title: __("Total"), key: "grand_total", align: "end" },
 			{ title: __("Actions"), key: "actions", align: "end", sortable: false },
 		],
@@ -2210,20 +2290,28 @@ export default {
 				),
 			);
 		},
-		filteredHistoryInvoices() {
+		historyInvoicesBeforeCreditFilter() {
 			const visibleInvoices = this.historyInvoices.filter((invoice) => !invoice.is_return);
 			const candidateScopedInvoices = this.historyShowRepairCandidatesOnly
 				? visibleInvoices.filter((invoice) => this.changeAllocationRepairState(invoice) !== null)
 				: visibleInvoices;
+			return this.filterCollection(
+				candidateScopedInvoices,
+				this.historySearch,
+				this.historyStatus,
+				this.historyDateFrom,
+				this.historyDateTo,
+			);
+		},
+		filteredHistoryInvoices() {
 			return this.sortInvoicesByLatest(
-				this.filterCollection(
-					candidateScopedInvoices,
-					this.historySearch,
-					this.historyStatus,
-					this.historyDateFrom,
-					this.historyDateTo,
+				this.historyInvoicesBeforeCreditFilter.filter((invoice) =>
+					matchesCreditFilter(invoice, this.historyCreditFilter),
 				),
 			);
+		},
+		historyCreditFilterCounts() {
+			return this.countCreditFilters(this.historyInvoicesBeforeCreditFilter, this.historyCreditFilters);
 		},
 		historyRepairCandidateCount() {
 			return this.filterCollection(
@@ -2247,16 +2335,34 @@ export default {
 				),
 			);
 		},
+		returnInvoicesBeforeCreditFilter() {
+			return this.filterCollection(
+				this.historyInvoices.filter((d) => d.is_return),
+				this.returnSearch,
+				"All",
+				this.returnDateFrom,
+				this.returnDateTo,
+			);
+		},
 		filteredReturnInvoices() {
 			return this.sortInvoicesByLatest(
-				this.filterCollection(
-					this.historyInvoices.filter((d) => d.is_return),
-					this.returnSearch,
-					"All",
-					this.returnDateFrom,
-					this.returnDateTo,
+				this.returnInvoicesBeforeCreditFilter.filter((invoice) =>
+					matchesCreditFilter(invoice, this.returnCreditFilter),
 				),
 			);
+		},
+		returnCreditFilterCounts() {
+			return this.countCreditFilters(this.returnInvoicesBeforeCreditFilter, this.returnCreditFilters);
+		},
+		// The detail popup's items table: a "Returned" column when part or all
+		// of this sale has been returned.
+		detailItemHeaders() {
+			const returned = this.selectedInvoiceCredit?.returned_qty_by_line || {};
+			if (!Object.keys(returned).length) return this.detailHeaders;
+			const headers = [...this.detailHeaders];
+			const qtyIndex = headers.findIndex((header) => header.key === "qty");
+			headers.splice(qtyIndex + 1, 0, { title: __("Returned"), key: "returned_qty", align: "end" });
+			return headers;
 		},
 		filteredUnpaidSummary() {
 			return this.filteredUnpaidInvoices.reduce(
@@ -2570,7 +2676,7 @@ export default {
 						.map((entry) => String(entry).toLowerCase());
 					if (!haystack.some((entry) => entry.includes(needle))) return false;
 				}
-				if (status && status !== "All" && String(item.status || "") !== status) return false;
+				if (status && status !== "All" && displayInvoiceStatus(item) !== status) return false;
 				return this.inRange(
 					item.posting_date,
 					this.normalizeDate(fromDate),
@@ -2862,16 +2968,41 @@ export default {
 			if (state === "candidate") return "warning";
 			return "primary";
 		},
-		exchangeCreditBadgeColor(badge) {
-			// "Exchange" (a same-shift return+redemption pairing) vs "Credit
-			// Note" (credit-note activity with no same-shift pairing) -- the
-			// same two labels and the same canonical same-shift check used
-			// by the receipt, the Z Report, and the Closing Shift Overview
-			// (see get_customers_with_same_shift_return() in
-			// posawesome/posawesome/api/credit_exchange.py).
-			if (badge === "Exchange") return "info";
-			if (badge === "Credit Note") return "warning";
-			return "secondary";
+		invoiceStatus(invoice) {
+			return displayInvoiceStatus(invoice);
+		},
+		countCreditFilters(rows, chips) {
+			const counts = {};
+			for (const chip of chips) {
+				counts[chip.key] = rows.filter((row) => matchesCreditFilter(row, chip.key)).length;
+			}
+			return counts;
+		},
+		creditMoney(value) {
+			return this.formatCurrency(value);
+		},
+		returnedQtyForLine(item) {
+			return Number(this.selectedInvoiceCredit?.returned_qty_by_line?.[item?.name] || 0);
+		},
+		// A linked invoice ("Exchange for return X", "Returned: part — X")
+		// opens in the detail popup.
+		openLinkedInvoice(name) {
+			if (!name) return;
+			this.viewInvoice({ name, doctype: "Sales Invoice" });
+		},
+		async loadInvoiceCredit(doc) {
+			this.selectedInvoiceCredit = null;
+			if (!doc?.name || doc.doctype !== "Sales Invoice" || Number(doc.docstatus) !== 1) return;
+			try {
+				const { message } = await frappe.call({
+					method: "posawesome.posawesome.api.credit_exchange.get_invoice_credit_details",
+					args: { name: doc.name },
+				});
+				// The popup may have moved on to another invoice meanwhile.
+				if (this.selectedInvoiceDetail?.name === doc.name) this.selectedInvoiceCredit = message || null;
+			} catch (error) {
+				console.warn("Credit details not loaded", error);
+			}
 		},
 		isRepairCandidate(invoice) {
 			const repairState =
@@ -3177,6 +3308,7 @@ export default {
 				});
 				this.selectedInvoiceDetail = message || null;
 				this.detailDialog = !!message;
+				await this.loadInvoiceCredit(message);
 			} catch (error) {
 				console.error("Error loading invoice details:", error);
 				this.toastStore.show({ title: __("Unable to load invoice details"), color: "error" });
@@ -3924,6 +4056,15 @@ export default {
 			}
 		},
 		async createReturn(invoice) {
+			// One-screen exchange on: the receipt opens "Items on receipt", the
+			// same as a scan or the Return / Exchange search -- for every
+			// customer, Anonymous included (its credit stays a bearer voucher).
+			const exchangeStore = useExchangeStore();
+			if (exchangeStore.enabled && invoice?.name) {
+				this.uiStore.closeInvoiceManagement();
+				await exchangeStore.openReceipt(invoice.name, { fromSearch: true });
+				return;
+			}
 			try {
 				const { message } = await frappe.call({
 					method: "posawesome.posawesome.api.invoices.get_invoice_for_return",

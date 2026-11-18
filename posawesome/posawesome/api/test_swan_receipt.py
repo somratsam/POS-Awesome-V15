@@ -141,7 +141,7 @@ class TestSaleReceipt(_ReceiptCase):
         # never posa_remaining_customer_credit_balance (pooled for Anonymous).
         doc = _doc(posa_redeemed_customer_credit=50, payments=[{"mode_of_payment": "Visa", "amount": 90.07}])
         text = _text(self.render(doc, _sources(other_credit=50)))
-        self.assertIn("Credit Applied رصيد مستخدم -50.000 OMR", text)
+        self.assertIn("Credit note used إشعار دائن مستخدم -50.000 OMR", text)
         self.assertNotIn("Remaining Credit", text)
         self.assertNotIn("409.150", text)
         self.assertNotIn("Exchange Value", text)
@@ -229,23 +229,31 @@ class TestExchangeReceipt(_ReceiptCase):
 
 
 class TestExchangeCreditSources(unittest.TestCase):
-    def _run(self, sale, rows, docs):
-        with patch.object(credit_voucher.frappe.db, "sql", return_value=[frappe._dict(r) for r in rows]) as sql, \
+    # The link itself (Journal Entries, same shift) is credit_exchange.get_credit_links,
+    # tested on real invoices in test_exchange_links_db.
+    def _run(self, sale, links, docs):
+        from posawesome.posawesome.api import credit_exchange
+
+        with patch.object(credit_exchange, "get_credit_links", return_value=[frappe._dict(r) for r in links]) as get_links, \
              patch.object(credit_voucher.frappe, "get_doc", side_effect=lambda dt, name: docs[name]):
-            return credit_voucher.exchange_credit_sources(sale), sql
+            return credit_voucher.exchange_credit_sources(sale), get_links
 
     def test_same_shift_return_is_an_exchange_older_credit_is_not(self):
         sale = _doc(name="S-1", posa_redeemed_customer_credit=100)
         same = _return(name="R-1", grand_total=-77.28)
-        older = _return(name="R-0", grand_total=-40, posa_pos_opening_shift="SHIFT-0")
-        result, sql = self._run(sale, [{"credit_note": "R-0", "used": 22.72}, {"credit_note": "R-1", "used": 77.28}],
-                                {"R-1": same, "R-0": older})
+        result, get_links = self._run(
+            sale,
+            [
+                {"sale": "S-1", "credit_note": "R-0", "used": 22.72, "exchange": False},
+                {"sale": "S-1", "credit_note": "R-1", "used": 77.28, "exchange": True},
+            ],
+            {"R-1": same},
+        )
         self.assertEqual([d.name for d in result.returns], ["R-1"])
         self.assertAlmostEqual(result.used, 77.28)
         self.assertAlmostEqual(result.returned, 77.28)
         self.assertAlmostEqual(result.other_credit, 22.72)
-        # The sale's name is passed as a query parameter, never formatted in.
-        self.assertEqual(sql.call_args.args[1], {"sale": "S-1"})
+        self.assertEqual(get_links.call_args.kwargs, {"sales": ["S-1"]})
 
     def test_credit_with_no_entries_yet_counts_as_other_credit(self):
         result, _sql = self._run(_doc(name="S-2", posa_redeemed_customer_credit=30), [], {})
@@ -254,9 +262,11 @@ class TestExchangeCreditSources(unittest.TestCase):
 
     def test_returns_sales_and_sales_without_credit_are_skipped(self):
         for doc in (_doc(posa_redeemed_customer_credit=0), _return(), None):
-            with patch.object(credit_voucher.frappe.db, "sql") as sql:
+            from posawesome.posawesome.api import credit_exchange
+
+            with patch.object(credit_exchange, "get_credit_links") as get_links:
                 result = credit_voucher.exchange_credit_sources(doc)
-            sql.assert_not_called()
+            get_links.assert_not_called()
             self.assertEqual(result.returns, [])
             self.assertEqual(result.other_credit, 0)
 

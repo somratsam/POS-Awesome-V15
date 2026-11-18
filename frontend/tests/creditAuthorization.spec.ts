@@ -320,8 +320,10 @@ describe("CreditVoucherCustomerDialog", () => {
 				components: { VDialog: DialogStub, VCard: Box, VCardTitle: Box, VCardText: Box, VCardActions: Box, VBtn: BtnStub },
 			},
 		});
-		expect(wrapper.text()).toContain("Voucher C26-00100-ABCD belongs to Sanju (99887766).");
-		expect(wrapper.text()).toContain("This sale is for Aziz.");
+		// Worded like the exchange: "Use credit note X? The customer changes to Y."
+		expect(wrapper.text()).toContain("Use credit note C26-00100-ABCD?");
+		expect(wrapper.text()).toContain("The customer changes to Sanju (99887766).");
+		expect(wrapper.find('[data-testid="credit-voucher-switch"]').text()).toBe("Use credit note");
 		await wrapper.find('[data-testid="credit-voucher-switch"]').trigger("click");
 		await wrapper.find('[data-testid="credit-voucher-cancel"]').trigger("click");
 		expect(onConfirm).toHaveBeenCalledTimes(1);
@@ -338,6 +340,14 @@ describe("Payments.vue voucher wiring", () => {
 		expect(script).toMatch(
 			/getAuthorizationContext: \(\) => \(\{\s*shift: invoiceStore\.invoiceDoc\?\.posa_pos_opening_shift \|\| null,\s*supervisor: Boolean\(currentCashier\.value\?\.is_supervisor\),/,
 		);
+	});
+
+	it("refuses another customer's voucher while credit is already on the sale", () => {
+		const fn = script.slice(script.indexOf("const redeemCreditVoucher"), script.indexOf("addCreditVoucher(voucher);"));
+		const refuse = fn.indexOf("if (current && customersStore.creditOnSaleFor(current))");
+		expect(refuse).toBeGreaterThan(0);
+		expect(refuse).toBeLessThan(fn.indexOf("askVoucherCustomer(voucher)"));
+		expect(fn).toContain("Switch off Use Customer Balance to change it.");
 	});
 
 	it("checks the voucher with the server, asks before replacing a named customer, then applies it", () => {

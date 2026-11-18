@@ -30,8 +30,8 @@
 							</div>
 							<div class="insight-body">
 								<div class="insight-label">{{ card.label }}</div>
-								<div class="insight-value">{{ card.value }}</div>
-								<div class="insight-caption">{{ card.caption }}</div>
+								<div class="insight-value" :style="insightValueStyle(card.value)">{{ card.value }}</div>
+								<div class="insight-caption" :title="card.caption">{{ card.caption }}</div>
 							</div>
 						</div>
 					</v-col>
@@ -51,8 +51,8 @@
 							</div>
 							<div class="insight-body">
 								<div class="insight-label">{{ card.label }}</div>
-								<div class="insight-value">{{ card.value }}</div>
-								<div class="insight-caption">{{ card.caption }}</div>
+								<div class="insight-value" :style="insightValueStyle(card.value)">{{ card.value }}</div>
+								<div class="insight-caption" :title="card.caption">{{ card.caption }}</div>
 							</div>
 						</div>
 					</v-col>
@@ -215,10 +215,10 @@
 					<div class="table-section">
 						<div class="table-header mb-2">
 							<h5 class="text-subtitle-1 text-high-emphasis mb-1">
-								{{ __("Returns by Currency") }}
+								{{ __("Returned by currency") }}
 							</h5>
 							<p class="text-body-2 text-medium-emphasis">
-								{{ __("Processed returns impacting the shift totals") }}
+								{{ __("Returns in this shift") }}
 							</p>
 						</div>
 						<div v-if="returnsByCurrency.length" class="overview-table-wrapper">
@@ -625,7 +625,7 @@
 							<tr>
 								<th>{{ __("Currency") }}</th>
 								<th class="text-end">
-									{{ __("Redeemed Amount") }}
+									{{ __("Used") }}
 								</th>
 								<th class="text-end">
 									{{ __("Points") }}
@@ -718,10 +718,10 @@
 			>
 				<div class="table-header mb-2">
 					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
-						{{ __("Customer Credit Redeemed") }}
+						{{ __("Credit notes used") }}
 					</h5>
 					<p class="text-body-2 text-medium-emphasis">
-						{{ __("Invoice value settled from customer credit, not cash collection") }}
+						{{ __("Sales paid with credit notes, not money") }}
 					</p>
 				</div>
 
@@ -731,7 +731,7 @@
 							<tr>
 								<th>{{ __("Currency") }}</th>
 								<th class="text-end">
-									{{ __("Redeemed Amount") }}
+									{{ __("Used") }}
 								</th>
 								<th class="text-end">
 									{{ __("Invoices") }}
@@ -817,10 +817,10 @@
 			>
 				<div class="table-header mb-2">
 					<h5 class="text-subtitle-1 text-high-emphasis mb-1">
-						{{ __("Customer Credit Issued") }}
+						{{ __("Credit notes issued") }}
 					</h5>
 					<p class="text-body-2 text-medium-emphasis">
-						{{ __("Store credit issued today via return invoices") }}
+						{{ __("Credit notes issued in this shift") }}
 					</p>
 				</div>
 
@@ -830,7 +830,7 @@
 							<tr>
 								<th>{{ __("Currency") }}</th>
 								<th class="text-end">
-									{{ __("Issued Amount") }}
+									{{ __("Issued") }}
 								</th>
 								<th class="text-end">
 									{{ __("Invoices") }}
@@ -934,7 +934,7 @@
 								</td>
 							</tr>
 							<tr data-test="left-as-store-credit">
-								<td>{{ __("Left as Store Credit") }}</td>
+								<td>{{ __("Left on credit notes") }}</td>
 								<td class="text-end">
 									{{ formatCurrencyWithSymbol(leftAsStoreCredit, overviewCompanyCurrency) }}
 								</td>
@@ -1055,6 +1055,10 @@ defineProps({
 
 const __ = window.__ || ((t) => t);
 
+// The card's amount stays on one line: its font follows the card's width and
+// the amount's length (CSS below), never below 0.8rem (the labels are 0.75rem).
+const insightValueStyle = (value) => ({ "--insight-chars": String(Math.max(String(value ?? "").trim().length, 6)) });
+
 const hasRedemptionSummary = (summary, rows = [], extraKeys = []) => {
 	if (!summary) return false;
 	if (Number(summary.company_currency_total || 0) !== 0) return true;
@@ -1096,7 +1100,7 @@ const hasLoyaltyRedemption = (summary, rows = []) => hasRedemptionSummary(summar
 	padding: 16px;
 	display: flex;
 	align-items: flex-start;
-	gap: 16px;
+	gap: 12px;
 	border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 	width: 100%;
@@ -1152,6 +1156,8 @@ const hasLoyaltyRedemption = (summary, rows = []) => hasRedemptionSummary(summar
 .insight-body {
 	flex: 1;
 	min-width: 0;
+	/* lets the amount size itself to this box (cqi below) */
+	container-type: inline-size;
 }
 
 .insight-label {
@@ -1163,23 +1169,29 @@ const hasLoyaltyRedemption = (summary, rows = []) => hasRedemptionSummary(summar
 	margin-bottom: 4px;
 }
 
+/* The amount stays on one line ("OMR" never above the number); a long
+   amount is set a little smaller instead of wrapping. */
 .insight-value {
-	font-size: 1.25rem;
+	/* ~0.62em per character of a bold amount ("OMR 686.150") */
+	font-size: clamp(0.8rem, calc(100cqi / (var(--insight-chars, 8) * 0.62)), 1.25rem);
 	font-weight: 700;
 	line-height: 1.2;
+	white-space: nowrap;
 }
 
 .insight-card.compact .insight-value {
-	font-size: 1.1rem;
+	font-size: clamp(0.8rem, calc(100cqi / (var(--insight-chars, 8) * 0.62)), 1.1rem);
 }
 
+/* The hint shows in full, wrapping (tills are touch screens, so no
+   hover-only text); cards in a row keep one height. */
 .insight-caption {
 	font-size: 0.75rem;
 	opacity: 0.6;
 	margin-top: 4px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+	line-height: 1.35;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 
 .table-section {

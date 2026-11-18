@@ -6,21 +6,22 @@ from their names, so an open shift and a closed one give the same answer,
 and every reprint of an old closing is recalculated the same way.
 
 - Gross Sales: every sale in the shift, exchange sales included (so it still
-  matches ERPNext's Sales Register). "Of which exchanges" names the part that
-  came from customers who returned something and used that credit in the same
-  shift -- the same rule as the receipt, the overview badge and Invoice
-  Management (credit_exchange.get_customers_with_same_shift_return).
+  matches ERPNext's Sales Register). "Of which exchanges" names the sales paid
+  with credit from a return made in this shift, found through the credit
+  Journal Entry -- the same rule as the receipt and Invoice Management
+  (credit_exchange.get_exchange_credit_by_sale). "Exchanges Today" under
+  Credit notes used counts only that credit, not older credit notes.
 - Returns are split into returns of sales made in this shift and returns of
   earlier sales (a return can make Net Sales go below zero).
 - Receipts and the per-receipt / per-item averages leave exchange sales out
   and are based on Net Sales and net items (sold minus returned), the usual
   retail measure; None when there is nothing to divide by.
-- Takings bridge: Net Sales + Credit Issued - Credit Redeemed, less refunds,
+- Takings bridge: Net Sales + Credit notes issued - Credit notes used, less refunds,
   loyalty points, write-offs, rounding and amounts left unpaid, equals the
   money taken (Today's Payments). Each sale's unpaid part is worked out from
   the invoice's own figures, not today's outstanding amount, so a reprint
   gives the same bridge after the customer pays later.
-- Left as Store Credit: credit issued minus credit used in same-shift
+- Left on credit notes: credit issued minus credit used in this shift's
   exchanges -- what the shop owes customers because of this shift.
 
 Credit Issued keeps its existing meaning: the total of the shift's returns.
@@ -29,7 +30,7 @@ Credit Issued keeps its existing meaning: the total of the shift's returns.
 import frappe
 from frappe.utils import flt
 
-from posawesome.posawesome.api.credit_exchange import get_customers_with_same_shift_return
+from posawesome.posawesome.api.credit_exchange import get_exchange_credit_by_sale
 
 from .utils import get_base_value
 
@@ -80,11 +81,8 @@ def get_sales_breakdown(pos_opening_shift, names_by_doctype):
     The caller has already checked the user may see this shift."""
     rows = _rows(names_by_doctype)
 
-    customers = list({row.get("customer") for row in rows if row.get("customer")})
-    returning_customers = (
-        set(get_customers_with_same_shift_return(customers, pos_opening_shift))
-        if customers and pos_opening_shift
-        else set()
+    exchange_credit_by_sale = get_exchange_credit_by_sale(
+        [row.get("name") for row in rows if row["doctype"] == "Sales Invoice" and not row.get("is_return")]
     )
 
     # Shift of each returned invoice, to split returns of this shift's sales
@@ -143,10 +141,11 @@ def get_sales_breakdown(pos_opening_shift, names_by_doctype):
         takings += paid_net
         unpaid += max(grand - rounding_diff - paid_net - redeemed - row_loyalty - row_write_off, 0.0)
 
-        if row.get("customer") in returning_customers and redeemed > 0:
+        used_in_exchange = flt(exchange_credit_by_sale.get(row.get("name")))
+        if used_in_exchange > 0:
             exchange_count += 1
             exchange_sales += grand
-            exchange_credit += redeemed
+            exchange_credit += used_in_exchange
 
     returns = returns_this_shift + returns_earlier
     net_sales = gross_sales - returns

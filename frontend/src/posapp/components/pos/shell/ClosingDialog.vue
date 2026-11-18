@@ -169,7 +169,8 @@ export default {
 				: null;
 			confirmSubmit();
 		};
-		const translate = (t) => window.__(t);
+		// Arguments too: "of which exchanges ({0})" showed "{0}" without them.
+		const translate = (t, args) => window.__(t, args);
 
 		const summaryFormatters = {
 			formatCurrencyWithSymbol: (amount, currency) => {

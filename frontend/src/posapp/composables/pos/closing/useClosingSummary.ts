@@ -314,15 +314,11 @@ export function useClosingSummary(
 			: [];
 	});
 
-	// "Exchanges Today": a subset of the two credit figures above, not a
-	// third additive amount -- how much of today's credit activity was a
-	// customer returning an item and redeeming that same-shift credit in
-	// one visit. Computed server-side via the same canonical check used by
-	// the Z Report, the receipt, and Invoice Management (see
-	// get_customers_with_same_shift_return() in
-	// posawesome/posawesome/api/credit_exchange.py), so this live pre-close
-	// figure agrees with the post-close Z Report's own "Exchanges Today"
-	// line, unlike before.
+	// "Exchanges Today": a part of the two credit figures above, not a
+	// third amount -- credit the shift's sales used from returns made in the
+	// same shift, found through the credit Journal Entries
+	// (credit_exchange.get_exchange_credit_by_sale), the same figure as the
+	// Z Report and the Closing Shift form.
 	const sameShiftExchangeTotal = computed(() => {
 		const ov = unref(overview);
 		return Number(ov?.same_shift_exchange_total || 0);
@@ -345,8 +341,8 @@ export function useClosingSummary(
 		const z = zSummary.value;
 		const rows = [
 			{ key: "net", label: __("Net Sales"), amount: Number(z.net_sales || 0) },
-			{ key: "issued", label: __("+ Credit Issued"), amount: Number(z.credit_issued || 0) },
-			{ key: "redeemed", label: __("- Credit Redeemed"), amount: Number(z.credit_redeemed || 0) },
+			{ key: "issued", label: __("+ Credit notes issued"), amount: Number(z.credit_issued || 0) },
+			{ key: "redeemed", label: __("- Credit notes used"), amount: Number(z.credit_redeemed || 0) },
 		];
 		const optional: Array<[string, string]> = [
 			["refunds", __("- Refunds")],
@@ -396,7 +392,7 @@ export function useClosingSummary(
 				label: __("Total Invoices"),
 				value: formatCount(unref(overview)?.total_invoices || 0),
 				caption: `${__("Sales processed")}: ${formatCount(salesSummary.value.sale_invoices_count || 0)}`,
-				icon: "mdi-receipt-text-multiple",
+				icon: "mdi-receipt-text-outline", // in the bundled @mdi/font 7.4 ("-multiple" is not)
 				color: "accent-primary",
 			},
 			{
@@ -479,11 +475,11 @@ export function useClosingSummary(
 			},
 			{
 				key: "returns",
-				label: __("Returns"),
+				label: __("Returned"),
 				value: returnsValue,
 				caption: zSummary.value.returns_earlier
-					? `${__("Return count")}: ${formatCount(returnsSummary.value.count || 0)} · ${__("of earlier sales")}: ${formatCurrency(zSummary.value.returns_earlier)}`
-					: `${__("Return count")}: ${formatCount(returnsSummary.value.count || 0)}`,
+					? `${__("Credit notes")}: ${formatCount(returnsSummary.value.count || 0)} · ${__("of earlier sales")}: ${formatCurrency(zSummary.value.returns_earlier)}`
+					: `${__("Credit notes")}: ${formatCount(returnsSummary.value.count || 0)}`,
 				icon: "mdi-undo-variant",
 				color: "accent-secondary",
 			},
@@ -513,17 +509,17 @@ export function useClosingSummary(
 			},
 			{
 				key: "customer-credit-redeemed",
-				label: __("Customer Credit Used"),
+				label: __("Credit notes used"),
 				value: customerCreditValue,
-				caption: `${__("Invoices")}: ${formatCount(customerCreditRedeemedSummary.value.count || 0)}`,
+				caption: `${__("Sales")}: ${formatCount(customerCreditRedeemedSummary.value.count || 0)}`,
 				icon: "mdi-account-credit-card-outline",
 				color: "accent-info",
 			},
 			{
 				key: "customer-credit-issued",
-				label: __("Customer Credit Issued"),
+				label: __("Credit notes issued"),
 				value: customerCreditIssuedValue,
-				caption: `${__("Return invoices")}: ${formatCount(customerCreditIssuedSummary.value.count || 0)}`,
+				caption: `${__("Credit notes")}: ${formatCount(customerCreditIssuedSummary.value.count || 0)}`,
 				icon: "mdi-account-cash-outline",
 				color: "accent-warning",
 			},
@@ -531,7 +527,7 @@ export function useClosingSummary(
 				key: "same-shift-exchange",
 				label: __("Exchanges Today"),
 				value: sameShiftExchangeValue,
-				caption: __("Included in Customer Credit Used & Issued above"),
+				caption: __("Credit note issued and used in the same exchange"),
 				icon: "mdi-swap-horizontal",
 				color: "accent-info",
 			},

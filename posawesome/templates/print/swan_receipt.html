@@ -295,7 +295,7 @@
 </div>
 <div class="payment-row"><span>Returned total المرتجع</span><span>-{{ "%.3f"|format(ex.returned) }} OMR</span></div>
 <div class="payment-row"><span>New items total الجديد</span><span>{{ "%.3f"|format(doc.grand_total) }} OMR</span></div>
-{% if ex.other_credit %}<div class="payment-row"><span>Credit Applied رصيد مستخدم</span><span>-{{ "%.3f"|format(ex.other_credit) }} OMR</span></div>{% endif %}
+{% if ex.other_credit %}<div class="payment-row"><span>Credit note used إشعار دائن مستخدم</span><span>-{{ "%.3f"|format(ex.other_credit) }} OMR</span></div>{% endif %}
 <div class="payment-row" style="font-weight:bold;"><span>Difference paid الفرق</span><span>{{ "%.3f"|format(doc.grand_total - ex.used - ex.other_credit) }} OMR</span></div>
 {% for payment in doc.payments %}
 {% if payment.amount != 0 %}
@@ -361,7 +361,7 @@
 {% endif %}
 {% if not is_exchange and ex.other_credit > 0 %}
 <div class="payment-row" style="font-weight:bold;">
-  <span>Credit Applied رصيد مستخدم</span>
+  <span>Credit note used إشعار دائن مستخدم</span>
   <span>-{{ "%.3f"|format(ex.other_credit) }} OMR</span>
 </div>
 {% endif %}

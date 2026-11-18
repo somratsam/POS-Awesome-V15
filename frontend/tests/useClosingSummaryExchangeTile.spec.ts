@@ -25,7 +25,7 @@ describe("useClosingSummary Exchanges Today tile", () => {
 		expect(tile).toBeDefined();
 		expect(tile.label).toBe("Exchanges Today");
 		expect(tile.value).toBe("40 OMR");
-		expect(tile.caption).toBe("Included in Customer Credit Used & Issued above");
+		expect(tile.caption).toBe("Credit note issued and used in the same exchange");
 	});
 
 	it("shows zero, not a crash, when the overview payload doesn't include the field yet", () => {

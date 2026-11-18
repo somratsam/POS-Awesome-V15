@@ -166,41 +166,15 @@ def exchange_credit_sources(sale):
     if redeemed <= 0:
         return result
 
-    rows = frappe.db.sql(
-        """
-        select debit_row.reference_name as credit_note,
-            sum(debit_row.debit_in_account_currency) as used
-        from `tabJournal Entry Account` debit_row
-        inner join `tabJournal Entry` je on je.name = debit_row.parent
-        where je.docstatus = 1
-            and debit_row.reference_type = 'Sales Invoice'
-            and debit_row.reference_name != %(sale)s
-            and debit_row.debit_in_account_currency > 0
-            and exists (
-                select 1 from `tabJournal Entry Account` credit_row
-                where credit_row.parent = debit_row.parent
-                    and credit_row.reference_type = 'Sales Invoice'
-                    and credit_row.reference_name = %(sale)s
-                    and credit_row.credit_in_account_currency > 0
-            )
-        group by debit_row.reference_name
-        order by debit_row.reference_name
-        """,
-        {"sale": cstr(sale.get("name"))},
-        as_dict=True,
-    )
-    shift = sale.get("posa_pos_opening_shift")
-    for row in rows:
-        credit_note = frappe.get_doc("Sales Invoice", row.credit_note)
-        if (
-            shift
-            and int(credit_note.is_return or 0)
-            and credit_note.docstatus == 1
-            and credit_note.get("posa_pos_opening_shift") == shift
-        ):
-            result.returns.append(credit_note)
-            result.used += flt(row.used)
-            result.returned += abs(flt(credit_note.grand_total))
+    from posawesome.posawesome.api.credit_exchange import get_credit_links
+
+    for link in get_credit_links(sales=[cstr(sale.get("name"))]):
+        if not link.exchange:
+            continue
+        credit_note = frappe.get_doc("Sales Invoice", link.credit_note)
+        result.returns.append(credit_note)
+        result.used += flt(link.used)
+        result.returned += abs(flt(credit_note.grand_total))
     result.other_credit = max(redeemed - result.used, 0.0)
     return result
 
@@ -233,28 +207,10 @@ def credit_note_used_in_exchange(credit_note):
     "" when none. Jinja method; the voucher's USED banner names them."""
     if not credit_note:
         return ""
-    shift = frappe.db.get_value("Sales Invoice", cstr(credit_note), "posa_pos_opening_shift")
-    if not shift:
-        return ""
-    rows = frappe.db.sql(
-        """
-        select distinct credit_row.reference_name as sale
-        from `tabJournal Entry Account` debit_row
-        inner join `tabJournal Entry Account` credit_row on credit_row.parent = debit_row.parent
-        inner join `tabJournal Entry` je on je.name = debit_row.parent
-        inner join `tabSales Invoice` sale on sale.name = credit_row.reference_name
-        where je.docstatus = 1
-            and debit_row.reference_type = 'Sales Invoice' and debit_row.reference_name = %(credit_note)s
-            and debit_row.debit_in_account_currency > 0
-            and credit_row.reference_type = 'Sales Invoice' and credit_row.reference_name != %(credit_note)s
-            and credit_row.credit_in_account_currency > 0
-            and sale.docstatus = 1 and sale.is_return = 0 and sale.posa_pos_opening_shift = %(shift)s
-        order by sale.name
-        """,
-        {"credit_note": cstr(credit_note), "shift": shift},
-        as_dict=True,
-    )
-    return ", ".join(row.sale for row in rows)
+    from posawesome.posawesome.api.credit_exchange import get_credit_links
+
+    sales = [link.sale for link in get_credit_links(credit_notes=[cstr(credit_note)]) if link.exchange]
+    return ", ".join(sorted(set(sales)))
 
 
 @frappe.whitelist()

@@ -36,12 +36,12 @@ describe("Anonymous bearer voucher: wiring", () => {
 		}
 	});
 
-	it("cancel and park drop a bearer voucher; switching credit off does too", () => {
+	it("cancel and park drop a bearer voucher; switching credit off drops every voucher", () => {
 		const actions = read("src/posapp/components/pos/invoice_utils/actions.ts");
 		expect(actions.match(/customersStore\?\.dropBearerVouchers\?\.\(\)/g)?.length).toBe(2);
 		const payments = read("src/posapp/components/pos/Payments.vue");
 		const toggle = payments.slice(payments.indexOf("const setRedeemCustomerCredit"), payments.indexOf("};", payments.indexOf("const setRedeemCustomerCredit")));
-		expect(toggle).toContain("if (!value) customersStore.dropBearerVouchers();");
+		expect(toggle).toContain("if (!value) customersStore.dropCreditVouchers();");
 		expect(payments).toContain("if (voucher.bearer) customersStore.markSharedCustomer(voucher.customer);");
 	});
 });
