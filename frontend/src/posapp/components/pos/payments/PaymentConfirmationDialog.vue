@@ -63,6 +63,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { joinMoney } from "../../../format";
 
 // @ts-ignore
 const __ = window.__ || ((s: string) => s);
@@ -127,7 +128,7 @@ const formatTenderAmount = (amount: number) => {
 	if (typeof props.formatCurrency === "function") {
 		return props.formatCurrency(Number(amount));
 	}
-	return `${props.currencySymbol || ""}${Number(amount)}`;
+	return joinMoney(props.currencySymbol, Number(amount));
 };
 
 const setTenderAmount = (amount: number) => {

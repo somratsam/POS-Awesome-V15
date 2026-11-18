@@ -10,7 +10,7 @@
 					</span>
 					<div class="text-end">
 						<div class="text-subtitle-1 font-weight-bold text-primary">
-							{{ currencySymbol(invoiceTotalCurrency) }}{{ formatCurrency(totalSelectedInvoices) }}
+							{{ currencySymbol(invoiceTotalCurrency) }} {{ formatCurrency(totalSelectedInvoices) }}
 						</div>
 						<div v-if="selectedInvoicesCount" class="text-caption text-medium-emphasis">
 							{{ selectedInvoicesCount }} invoice(s)
@@ -51,7 +51,7 @@
 							<div class="payment-detail-row">
 								<span class="text-medium-emphasis">{{ __("Paid (orig):") }}</span>
 								<span class="font-weight-medium">
-									{{ currencySymbol(pay.currency) }}{{ formatCurrency(pay.paid_amount) }}
+									{{ currencySymbol(pay.currency) }} {{ formatCurrency(pay.paid_amount) }}
 								</span>
 							</div>
 							<div class="payment-detail-row">
@@ -61,13 +61,13 @@
 							<div class="payment-detail-row">
 								<span class="text-medium-emphasis">{{ __("Unallocated:") }}</span>
 								<span class="font-weight-medium">
-									{{ currencySymbol(pay.currency) }}{{ formatCurrency(pay.unallocated_amount) }}
+									{{ currencySymbol(pay.currency) }} {{ formatCurrency(pay.unallocated_amount) }}
 								</span>
 							</div>
 							<div class="payment-detail-row">
 								<span class="text-medium-emphasis">{{ __("Received:") }}</span>
 								<span class="font-weight-medium">
-									{{ currencySymbol(companyCurrency) }}{{ formatCurrency(pay.received_amount) }}
+									{{ currencySymbol(companyCurrency) }} {{ formatCurrency(pay.received_amount) }}
 								</span>
 							</div>
 							<div class="payment-detail-row">
@@ -84,7 +84,7 @@
 			<div class="d-flex justify-space-between align-center font-weight-bold text-body-2">
 				<span>{{ __("Total") }}</span>
 				<span>
-					{{ currencySymbol(paymentTotalCurrency) }}{{ formatCurrency(totalSelectedPayments) }}
+					{{ currencySymbol(paymentTotalCurrency) }} {{ formatCurrency(totalSelectedPayments) }}
 				</span>
 			</div>
 			</v-card-text>
@@ -100,7 +100,7 @@
 					{{ __("Total Payments") }}
 				</span>
 				<span class="text-h6 font-weight-bold text-primary">
-					{{ currencySymbol(paymentTotalCurrency) }}{{ formatCurrency(totalSelectedPayments) }}
+					{{ currencySymbol(paymentTotalCurrency) }} {{ formatCurrency(totalSelectedPayments) }}
 				</span>
 			</v-card-text>
 		</v-card>
@@ -116,7 +116,7 @@
 					{{ __("Total Mpesa") }}
 				</span>
 				<span class="text-subtitle-1 font-weight-bold text-primary">
-					{{ currencySymbol(mpesaTotalCurrency) }}{{ formatCurrency(totalSelectedMpesa) }}
+					{{ currencySymbol(mpesaTotalCurrency) }} {{ formatCurrency(totalSelectedMpesa) }}
 				</span>
 			</v-card-text>
 		</v-card>
@@ -182,7 +182,7 @@
 								v-if="flt(selectedMop.amount) > 0"
 								class="text-caption text-medium-emphasis mt-2"
 							>
-								{{ __("Base:") }} {{ currencySymbol(companyCurrency) }}{{ formatCurrency(flt(selectedMop.amount) * flt(selectedMopRate)) }}
+								{{ __("Base:") }} {{ currencySymbol(companyCurrency) }} {{ formatCurrency(flt(selectedMop.amount) * flt(selectedMopRate)) }}
 								<span v-if="flt(selectedMopRate) !== 1">
 									&nbsp;@ {{ formatCurrency(selectedMopRate) }}
 								</span>
@@ -314,7 +314,7 @@
 									<div class="d-flex justify-space-between pl-1">
 										<span class="text-medium-emphasis">{{ __("Base Recv:") }}</span>
 										<span class="font-weight-medium">
-											{{ currencySymbol(companyCurrency) }}{{ formatCurrency(newPaymentFields[selectedMop.row_id].baseReceivedAmount) }}
+											{{ currencySymbol(companyCurrency) }} {{ formatCurrency(newPaymentFields[selectedMop.row_id].baseReceivedAmount) }}
 										</span>
 									</div>
 								</v-col>
@@ -334,10 +334,10 @@
 					>
 						<span class="font-weight-medium" style="min-width: 40%">{{ __(entry.mode_of_payment) }}</span>
 						<span class="text-end" style="min-width: 30%">
-							{{ currencySymbol(getPaymentMethodCurrency(entry.mode_of_payment)) }}{{ formatCurrency(entry.amount) }}
+							{{ currencySymbol(getPaymentMethodCurrency(entry.mode_of_payment)) }} {{ formatCurrency(entry.amount) }}
 						</span>
 						<span class="text-medium-emphasis text-end" style="min-width: 30%">
-							({{ currencySymbol(companyCurrency) }}{{ formatCurrency(entry.baseAmount) }})
+							({{ currencySymbol(companyCurrency) }} {{ formatCurrency(entry.baseAmount) }})
 						</span>
 					</div>
 				</div>
@@ -345,10 +345,10 @@
 				<div class="d-flex justify-space-between align-center font-weight-bold text-caption">
 					<span style="min-width: 40%">{{ __("Total") }}</span>
 					<span class="text-end" style="min-width: 30%">
-						{{ currencySymbol(invoiceTotalCurrency) }}{{ formatCurrency(totalNewPayments) }}
+						{{ currencySymbol(invoiceTotalCurrency) }} {{ formatCurrency(totalNewPayments) }}
 					</span>
 					<span class="text-end" style="min-width: 30%">
-						({{ currencySymbol(companyCurrency) }}{{ formatCurrency(totalNewPaymentsBase) }})
+						({{ currencySymbol(companyCurrency) }} {{ formatCurrency(totalNewPaymentsBase) }})
 					</span>
 				</div>
 			</div>
@@ -406,7 +406,7 @@
 			<v-card-text class="d-flex justify-space-between align-center py-2">
 				<span class="font-weight-bold">{{ __("Difference") }}</span>
 				<span class="text-subtitle-1 font-weight-bold">
-					{{ currencySymbol(invoiceTotalCurrency) }}{{ formatCurrency(totalOfDiff) }}
+					{{ currencySymbol(invoiceTotalCurrency) }} {{ formatCurrency(totalOfDiff) }}
 				</span>
 			</v-card-text>
 		</v-card>

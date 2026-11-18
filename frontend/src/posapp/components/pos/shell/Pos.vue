@@ -478,15 +478,15 @@ export default {
 			if (typeof resolver === "function") {
 				return resolver(currency || activeCurrency.value || "") || "";
 			}
-			return currency ? `${currency} ` : "";
+			return currency || "";
 		};
 		const formattedCartTotal = computed(() => {
 			const symbol = getCurrencySymbol(activeCurrency.value);
-			return `${symbol}${formatCompactNumber(invoiceTotal.value)}`.trim();
+			return `${symbol} ${formatCompactNumber(invoiceTotal.value)}`.trim();
 		});
 		const formattedDiscountTotal = computed(() => {
 			const symbol = getCurrencySymbol(activeCurrency.value);
-			return `${symbol}${formatCompactNumber(discountTotal.value || 0)} ${__("discount")}`.trim();
+			return `${symbol} ${formatCompactNumber(discountTotal.value || 0)} ${__("discount")}`.trim();
 		});
 		const cartMetaLabel = computed(() => {
 			const qty = formatCompactNumber(totalQty.value || 0);
@@ -1411,6 +1411,12 @@ export default {
 	.mobile-pos-dock__item {
 		min-height: 52px;
 		font-size: 0.65rem;
+	}
+}
+/* Medium and small size tiers: less empty space under the bottom bar. */
+@media (min-width: 1100px) and (max-width: 1599px), (min-width: 1100px) and (max-height: 959px) {
+	.dynamic-container:not(.pos-main-container--counter-grid) {
+		padding-bottom: 6px;
 	}
 }
 </style>

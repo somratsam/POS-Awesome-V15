@@ -223,7 +223,7 @@
 				data-testid="invoice-action-returns"
 				:loading="returnsLoading"
 			>
-				{{ exchangeEnabled ? __("Return / Exchange") : __("Sales Return") }}
+				{{ exchangeEnabled ? __("Return / Exchange") : __("Return") }}
 			</v-btn>
 		</v-col>
 		<v-col cols="12" sm="6" v-if="pos_profile.posa_allow_print_draft_invoices && !exchangeActive">
@@ -470,5 +470,52 @@ const showMoreActions = computed(
 :deep([data-theme="dark"]) .summary-btn:hover,
 :deep(.v-theme--dark) .summary-btn:hover {
 	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+/* Size tiers for the normal POS screen's buttons (see InvoiceSummary.vue).
+   Same buttons, places and order; PAY stays the biggest. */
+@media (min-width: 1100px) and (max-width: 1599px), (min-width: 1100px) and (max-height: 959px) {
+	.v-row--dense > [class*="v-col"] {
+		padding: 3px;
+	}
+
+	.summary-btn {
+		height: 36px !important;
+		min-height: 36px !important;
+		font-size: 0.82rem !important;
+		letter-spacing: 0.01em;
+	}
+
+	.summary-btn :deep(.v-icon) {
+		font-size: 18px;
+	}
+
+	.pay-btn {
+		height: 40px !important;
+		min-height: 40px !important;
+		font-size: 1rem !important;
+	}
+}
+
+@media (min-width: 1100px) and (max-width: 1365px), (min-width: 1100px) and (max-height: 767px) {
+	.v-row--dense > [class*="v-col"] {
+		padding: 2px;
+	}
+
+	.summary-btn {
+		height: 32px !important;
+		min-height: 32px !important;
+		padding: 0 8px !important;
+		font-size: 0.78rem !important;
+	}
+
+	.summary-btn :deep(.v-icon) {
+		font-size: 16px;
+	}
+
+	.pay-btn {
+		height: 36px !important;
+		min-height: 36px !important;
+		font-size: 0.95rem !important;
+	}
 }
 </style>

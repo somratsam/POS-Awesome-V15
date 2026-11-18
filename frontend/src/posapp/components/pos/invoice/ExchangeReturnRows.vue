@@ -118,7 +118,7 @@ const LOCKED_MONEY = {
 
 const __ = window.__ || ((text, args) => (args || []).reduce((s, a, i) => s.replace(`{${i}}`, a), text));
 const exchange = useExchangeStore();
-const money = (value) => `${props.currencySymbol(props.displayCurrency)}${props.formatCurrency(Math.abs(value))}`;
+const money = (value) => `${props.currencySymbol(props.displayCurrency)} ${props.formatCurrency(Math.abs(value))}`;
 
 // A receipt with an invoice-level discount: the server's "Returned" includes
 // its share, so the rows (rate x qty) add up to more. Shown once quoted.

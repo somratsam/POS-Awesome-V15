@@ -49,7 +49,7 @@
 				<div class="drafts-list__card-top">
 					<strong>{{ draft.customer_name || __("Walk-in Customer") }}</strong>
 					<span class="drafts-list__amount">
-						{{ currencySymbol(draft.currency) }}{{ formatCurrency(draft.grand_total) }}
+						{{ currencySymbol(draft.currency) }} {{ formatCurrency(draft.grand_total) }}
 					</span>
 				</div>
 				<div class="drafts-list__meta">

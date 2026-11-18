@@ -239,4 +239,31 @@ describe("InvoiceActionButtons", () => {
 			wrapper.get('[data-testid="invoice-action-save-clear"]').attributes("disabled"),
 		).toBeUndefined();
 	});
+	it.each([
+		["classic", false, "Return"],
+		["classic", true, "Return / Exchange"],
+		["counter-grid", false, "Return"],
+		["counter-grid", true, "Return / Exchange"],
+	])("return button reads the same on both layouts (%s, exchange %s)", async (presentation, exchangeEnabled, label) => {
+		vi.stubGlobal("__", (value: string) => value);
+		const { default: InvoiceActionButtons } = await import(
+			"../src/posapp/components/pos/invoice/InvoiceActionButtons.vue"
+		);
+		const wrapper = mount(InvoiceActionButtons, {
+			props: { presentation, exchangeEnabled, pos_profile: { posa_allow_return: 1 } },
+			global: {
+				components: {
+					VBtn: { template: '<button v-bind="$attrs"><slot /></button>' },
+					VMenu: { template: '<div><slot name="activator" :props="{}" /><slot /></div>' },
+					VList: { template: "<div><slot /></div>" },
+					VListItem: { template: '<div v-bind="$attrs"><slot /></div>' },
+					VListItemTitle: { template: "<span><slot /></span>" },
+					VRow: { template: "<div><slot /></div>" },
+					VCol: { template: "<div><slot /></div>" },
+				},
+			},
+		});
+		expect(wrapper.get('[data-testid="invoice-action-returns"]').text().trim()).toBe(label);
+		expect(wrapper.text()).not.toContain("Sales Return");
+	});
 });

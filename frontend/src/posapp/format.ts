@@ -123,6 +123,17 @@ export function getNumberLocale(): string {
 /**
  * Compatibility object for legacy formatUtils.
  */
+/**
+ * Joins a currency symbol and an already formatted amount the way Frappe's
+ * own format_currency does: "OMR 0.000" (a space between them). An empty
+ * symbol (hidden currency symbol) leaves just the amount.
+ */
+export function joinMoney(symbol: string | null | undefined, amount: string | number): string {
+	const sym = String(symbol ?? "").trim();
+	const value = String(amount ?? "");
+	return sym ? `${sym} ${value}` : value;
+}
+
 export const formatUtils = {
 	isRtl,
 	useWestern,
@@ -279,7 +290,7 @@ export function useFormat() {
 		formatted = toArabicNumerals(formatted);
 
 		if (currency) {
-			formatted = `${currencySymbol(currency)}${formatted}`;
+			formatted = joinMoney(currencySymbol(currency), formatted);
 		}
 
 		return formatted;
@@ -441,7 +452,7 @@ export default {
 			formatted = toArabicNumerals(formatted);
 
 			if (currency) {
-				formatted = `${this.currencySymbol(currency)}${formatted}`;
+				formatted = joinMoney(this.currencySymbol(currency), formatted);
 			}
 
 			return formatted;

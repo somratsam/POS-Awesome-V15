@@ -45,6 +45,7 @@ import ExchangePicker from "./ExchangePicker.vue";
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import { useUIStore } from "../../../stores/uiStore";
 import { exchangeConfirmText } from "../../../utils/oneScreenExchangeText";
+import { joinMoney } from "../../../format";
 
 const __ = window.__ || ((text, args) => (args || []).reduce((s, a, i) => s.replace(`{${i}}`, a), text));
 const exchange = useExchangeStore();
@@ -55,9 +56,9 @@ const precision = computed(() => Number(useUIStore().posProfile?.currency_precis
 const formatMoney = (value) => Number(value || 0).toFixed(precision.value);
 const currencySymbol = (currency) => {
 	const code = currency || useUIStore().posProfile?.currency;
-	return window.get_currency_symbol ? `${window.get_currency_symbol(code)} ` : "";
+	return window.get_currency_symbol ? window.get_currency_symbol(code) : "";
 };
-const money = (value) => `${currencySymbol()}${formatMoney(value)}`;
+const money = (value) => joinMoney(currencySymbol(), formatMoney(value));
 
 const text = computed(() => (prompt.value ? exchangeConfirmText(prompt.value, money, __) : null));
 const title = computed(() => text.value?.title || "");
