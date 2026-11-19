@@ -2135,3 +2135,17 @@ Customer pays: {0},يدفع العميل: {0}
 Credit note to issue: {0},إشعار دائن سيصدر: {0}
 Totals not checked,لم يتم التحقق من المبالغ
 The exchange check took too long.,استغرق التحقق من الاستبدال وقتاً طويلاً.
+Customer from credit note,العميل من إشعار الدائن
+{0} credit notes,{0} إشعارات دائن
+{0} available,المتاح {0}
+until {0},حتى {0}
+From {0},صادر من {0}
+Now scan the new items,امسح الأصناف الجديدة الآن
+After this sale:,بعد هذه العملية:
+Credit used,الرصيد المستخدم
+Customer pays {0},يدفع العميل {0}
+Balance voucher {0},قسيمة الرصيد المتبقي {0}
+Credit covers it,الرصيد يغطي المبلغ
+Expires today,تنتهي اليوم
+Expires in 1 day,تنتهي خلال يوم واحد
+Expires in {0} days,تنتهي خلال {0} أيام

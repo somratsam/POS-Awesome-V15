@@ -24,6 +24,7 @@ import { classifyClipboardScanText } from "./scannerInput/clipboardScan";
 import { dispatchStockLookupScan } from "./stockLookupScanRoute";
 import { dispatchExchangeScan, receiptRouteAvailable } from "./exchangeScanRoute";
 import { dispatchVoucherScan } from "./voucherScanRoute";
+import { playFallbackSound, playToneOn } from "../../../utils/scanTone";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -111,6 +112,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	// isLikelyKeyboardScan's maxGapObserved: an average-only check can be
 	// fooled by a fast-typed prefix followed by one human pause.
 	const keyboardScanMaxGapObserved = ref(0);
+	// Keystrokes in the current unbroken fast run (every gap <= the scan
+	// interval). The input event overwrites keyboardScanBuffer with the whole
+	// box, so claimEnter checks this instead: the run must cover every
+	// character in the box.
+	let keyboardScanRunKeys = 0;
 
 	// Config
 	// 7, not a rounder-looking number: it's the real observed minimum
@@ -153,32 +159,13 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		try {
 			const ctx = ensureScanAudioContext();
 			if (!ctx) {
-				if (typeof frappe !== "undefined" && frappe.utils?.play_sound) {
-					frappe.utils.play_sound(
-						type === "success" ? "submit" : "error",
-					);
-				}
+				playFallbackSound(type);
 				return;
 			}
-			const now = ctx.currentTime;
-			const duration = type === "success" ? 0.16 : 0.35;
-			const oscillator = ctx.createOscillator();
-			const gainNode = ctx.createGain();
-			oscillator.type = "sine";
-			oscillator.frequency.value = type === "success" ? 880 : 220;
-			gainNode.gain.setValueAtTime(type === "success" ? 0.18 : 0.28, now);
-			gainNode.gain.exponentialRampToValueAtTime(0.001, now + duration);
-			oscillator.connect(gainNode);
-			gainNode.connect(ctx.destination);
-			oscillator.start(now);
-			oscillator.stop(now + duration);
+			playToneOn(ctx, type);
 		} catch (error) {
 			console.warn("Scan tone playback failed:", error);
-			if (typeof frappe !== "undefined" && frappe.utils?.play_sound) {
-				frappe.utils.play_sound(
-					type === "success" ? "submit" : "error",
-				);
-			}
+			playFallbackSound(type);
 		}
 	};
 
@@ -442,6 +429,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		keyboardScanStartTime.value = -1;
 		keyboardScanPendingValue.value = "";
 		keyboardScanMaxGapObserved.value = 0;
+		keyboardScanRunKeys = 0;
 	};
 
 	const evaluateKeyboardScan = (currentInput: string) => {
@@ -509,6 +497,39 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		return false;
 	};
 
+	/**
+	 * Enter in the item scan box (ItemsSelector.onEnter; Enter there never
+	 * reaches handleSearchKeydown). Enter ends the sequence, so it takes over
+	 * from both pending timers: the receipt settle (250 ms) would otherwise
+	 * open the same receipt a second time, the keyboard-scan evaluation
+	 * (100 ms) would scan the code again. Returns true when the box's text
+	 * arrived at scanner speed (the same timing rule as without Enter,
+	 * isLikelyKeyboardScan): a hardware scan, high confidence, so a miss
+	 * shows "Item not found".
+	 */
+	const claimEnter = (currentValue: string): boolean => {
+		clearReceiptSettle();
+		const code = String(currentValue || "").trim();
+		const span =
+			keyboardScanStartTime.value >= 0 && keyboardScanLastTime.value >= 0
+				? keyboardScanLastTime.value - keyboardScanStartTime.value
+				: -1;
+		const fast =
+			Boolean(code) &&
+			keyboardScanRunKeys >= code.length &&
+			span > 0 &&
+			isLikelyKeyboardScan({
+				code,
+				duration: span,
+				minLength: keyboardScanMinLength,
+				maxDuration: keyboardScanMaxDuration,
+				maxInterval: keyboardScanMaxInterval,
+				maxGapObserved: keyboardScanMaxGapObserved.value,
+			});
+		resetKeyboardScanDetection();
+		return fast;
+	};
+
 	const handleSearchKeydown = (event: KeyboardEvent) => {
 		if (!event) return;
 		const key = event.key || "";
@@ -558,6 +579,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			keyboardScanBuffer.value = "";
 			keyboardScanStartTime.value = now;
 			keyboardScanMaxGapObserved.value = 0;
+			keyboardScanRunKeys = 0;
 		} else if (keyboardScanLastTime.value >= 0) {
 			// Track the worst single gap in this sequence, not just the
 			// eventual average -- see isLikelyKeyboardScan's maxGapObserved.
@@ -573,6 +595,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 
 		keyboardScanBuffer.value += key;
 		keyboardScanLastTime.value = now;
+		keyboardScanRunKeys += 1;
 
 		if (keyboardScanTimer.value) clearTimeout(keyboardScanTimer.value);
 
@@ -775,6 +798,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		handleSearchPaste,
 		handleScanPipelineError,
 		resetKeyboardScanDetection,
+		claimEnter,
 
 		// Utils exposed
 		getScaleBarcodePrefix: () =>

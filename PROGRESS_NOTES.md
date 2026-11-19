@@ -10920,3 +10920,63 @@ Asia/Muscat, `doc.precision` 3). `bench build` exit 0. Migrate N/A.
 `useScannerInput.handleSearchKeydown`); an unknown 12+ digit barcode + Enter
 is re-tagged low confidence by `_performSearch`, so no "Item not found";
 Counter Grid + Limit Search needs a second Enter (not used, skipped).
+
+## 112. Enter-terminated scans (receipt once, unknown barcode -> "Item not found"); credit note voucher card (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+Store scanners (Symbol LS2208) now send Enter after each scan.
+
+**1. Receipt + Enter opened twice.** Enter in the item box goes ItemHeader ->
+`emit("enter")` -> `ItemsSelector.onEnter`, never `useScannerInput.handleSearchKeydown`,
+so the 250 ms receipt settle timer fired a second `openReceipt`. Now
+`onEnter` first calls `scannerInput.claimEnter(value)`: cancels the receipt
+timer and the 100 ms keyboard-scan timer (Enter ends the sequence, every
+branch: receipt, voucher, counter grid, search). Live: one
+`get_exchange_receipt` (was two).
+
+**2. Unknown barcode + Enter showed nothing.** `_performSearch` re-tagged a
+12+ digit code "low" (silent miss). `claimEnter` returns true when the box's
+whole text arrived at scanner speed: same `isLikelyKeyboardScan` thresholds as
+without Enter (>= 7 chars, <= 45 ms gaps, <= 250 ms), plus a keystroke-run
+count that must cover every character (the input event overwrites the
+keyboard buffer with the whole box, so hand-typed text ending in a fast pair
+looked fast). Then `onEnter` sends it to the scan pipeline as "high" ->
+"Item not found" dialog + error tone (220 Hz). Hand typing, paste, short
+codes, receipts and vouchers keep their old routes. Live: "Item not found:
+99999999999991", one error tone.
+
+**3. Voucher card (approved proposal).** `SaleCreditCard.vue` (text from
+`utils/saleCreditCard.ts`, model `useSaleCreditCard.ts`):
+- large screens (>= 1600 x 960): full card on its own row across the Active
+  sale box: CREDIT NOTE + code (or "2 credit notes") + amber chip from 7 days
+  before the earliest expiry ("Expires in N days" / "Expires today") +
+  [Remove]; "OMR X available · Valid until · From <till>"; "After this sale:"
+  Customer pays / Balance voucher / Credit covers it (one line each, the full
+  sentence incl. "Credit used" as tooltip -- in Arabic the long form needed
+  5 lines and was cut off);
+- medium/small: two lines in the box ("OMR 80.850 · until 18-02-2027" + ✕ /
+  result); under 1100 px also in the sale dock (Pos.vue) and the Cart view;
+- Counter Grid: same two-line shape as the other figures ("Credit note ·
+  Balance voucher OMR 64.250" / −OMR 16.600, ✕), strip goes to 6 columns
+  while a voucher is on (it wrapped Net total onto a second row before).
+- success: item-scan beep (`utils/scanTone.ts`, shared with useScannerInput)
+  + 1 s green flash (`appliedCount` / `appliedAt`: the first voucher mounts
+  the card after the count went up, so it flashes if that was < 1 s ago;
+  a timer, not an animation frame, which headless/hidden windows hold back).
+- PAY keeps its last amount, dimmed (`creditPayPending`), while re-checking.
+- "Balance voucher" = what stays on the SCANNED vouchers' own rows after
+  allocation (`figures.left`), never the customer's other credit.
+- Customer box: "Customer from credit note" (Remove moved to the card).
+- Server: `lookup_credit_voucher` returns `store` (the credit note's POS
+  Profile, "" for a Desk return); `expires_on` was already there.
+- Arabic for the 14 new strings (ar.csv).
+Live (headless, T108 Cashier re-enabled with a temporary PIN, then put back
+exactly: disabled, no PIN row, no profile row, modified unchanged;
+Administrator language ar for the RTL check then NULL again): voucher 80.850
++ 16.600 item -> Balance voucher 64.250, Pay OMR 0.000; + 139.300 jacket ->
+Customer pays 75.050; Remove; two Anonymous vouchers -> 2 credit notes,
+153.820; 1024x768 dock; Counter Grid; Arabic. Expiry chip: unit tests only
+(no near-expiry voucher on staging). Found, not changed: Arabic 1600x1000
+PAY bottom 7 px past the window with or without a voucher.
+
+**Checks.** Vitest 306/306 files, 2074/2074 tests. test_credit_voucher 78
+OK. `bench build` exit 0. Migrate N/A. System Settings unchanged.

@@ -1926,6 +1926,10 @@ const esc_event = () => {
 	clearSearch();
 };
 const onEnter = (e) => {
+	// Enter ends what the scanner was typing: cancel its pending timers (a
+	// receipt opened twice otherwise) and learn whether the text came at
+	// scanner speed (useScannerInput.claimEnter).
+	const hardwareScan = scannerInput.claimEnter ? scannerInput.claimEnter(search_input.value) : false;
 	if (props.presentation === "counter-grid-dialog") {
 		void handleCounterResultEnter(e);
 		return;
@@ -1964,6 +1968,14 @@ const onEnter = (e) => {
 				if (result === "not_voucher") itemsSelectorSearch.onEnter(e);
 				else clearSearch();
 			});
+		return;
+	}
+	// A barcode scanned at scanner speed with Enter after it: a real scan
+	// (high confidence) -- an unknown code shows "Item not found" with the
+	// error sound instead of turning into a silent search.
+	if (hardwareScan) {
+		e?.preventDefault?.();
+		onBarcodeScannedFromScannerInput(typed, "high");
 		return;
 	}
 	itemsSelectorSearch.onEnter(e);
