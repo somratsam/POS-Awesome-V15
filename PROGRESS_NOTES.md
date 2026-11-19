@@ -1,6 +1,6 @@
 # POS Awesome — develop-swan Fork Progress Notes
 
-Last updated: 2026-08-20
+Last updated: 2026-08-25
 
 This file exists so a future session (mine or another Claude Code session) can pick up
 context on this fork quickly without re-deriving it from scratch. If you're starting
@@ -9,31 +9,179 @@ related to POS Closing Shift / Z Report — section 2 below is written to be
 self-sufficient. **See "Current State" just below for an at-a-glance summary before
 diving into the full chronological history.**
 
-## Current State (as of 2026-08-20)
+## Current State (as of 2026-08-25)
 
-No code changed between the latest dated section below (2026-08-18) and this
-documentation audit (2026-08-20) — this section just confirms and summarizes what was
-already true, it doesn't reflect new work.
+**`develop-swan` and `stable` are OUT OF SYNC only in their own docs commits —
+see section 30 for the full payment-screen story.** Everything dated 2026-08-18
+and earlier is content-identical between the two branches (verified via direct
+diff). Most recent fully-proven work through 2026-08-18: the POS Invoice Items
+table layout fix (three rounds — section 28) and the "Deadlock Occurred"
+warning fix (section 26), both live in production, both cherry-picked to
+`stable` the same session they were built.
 
-**posawesome.** `develop-swan` and `stable` are content-identical for every actual
-code file as of today (verified via direct diff, not just commit ancestry — the two
-branches' histories diverge because of cherry-picking, but the resulting trees don't).
-They differ only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits,
-which is expected: each branch narrates its own promotion story. Everything below has
-been cherry-picked to `stable` and deployed to production the same session it was
-built, per this fork's standing "prove it on staging, then promote" workflow. Most
-recent work: the POS Invoice Items table layout fix (three rounds — section 28) and
-the "Deadlock Occurred" warning fix (section 26), both live in production.
+**Payment-screen work, 2026-08-20 through 2026-08-25 (sections 29-30) — DONE,
+deployed, verified.** Bug #1 (payment-box refocus overwriting a
+manually-typed amount) and bug #2 (preferred-box direct-edit rebalance, both
+directions) are both fixed, unit-tested, cherry-picked onto `stable`
+(`9406b79`, `45525cb`), deployed to the production server (pull/build/restart),
+and **confirmed working live on production by the user, both directions of
+bug #2 included.** Bug #2 specifically went through a first promotion that
+turned out to be only half-fixed live (missing a symmetric "deficit" branch
+in `autoBalancePayments()`, caught by the user in production), a corrected
+fix, the user's own live verification of both directions on staging, a
+second promotion, and finally live verification on production itself — see
+section 30 for the full sequence. Bug #3 (multi-"cash"-named-method
+validation gap) and the credit-forced-after-fill gap remain documented-only,
+not built — the only open items from this arc.
+
+**Generic-customer store-credit leakage (section 31) — DONE, deployed,
+verified on production.** A return against an invoice originally billed
+to a shared/anonymous customer (e.g. "Anonymous") could issue real,
+redeemable store credit onto that shared account under this store's
+credit-only return policy — `posa_is_generic_customer`'s protection only
+ever covered loyalty points, never credit. Fixed: a server-side guard
+(`_guard_generic_customer_stored_credit` in `invoice_processing/creation.py`)
+plus matching client-side guards in both `Returns.vue` and
+`InvoiceManagement.vue`, steering staff to the existing "Return without
+Invoice" flow instead — plus an unrelated pre-existing bug found along the
+way (`Returns.vue` never instantiated `toastStore` at all, so every toast
+in that file was silently dead) fixed the same day. Built, tested (8
+backend + 2 frontend, full suite 226/226), cherry-picked to `stable`
+(`0308161`, `41c9a57`), pushed to GitHub, deployed to production, and
+**confirmed working live on production by the user — both return entry
+points correctly block.** The 60 OMR of test credit the user's own
+earlier testing had left pooled on production's real "Anonymous" account
+has been found, cancelled, and confirmed back to 0 — resolved, not an
+ongoing item.
+
+**posawesome, general.** Aside from the above, `develop-swan` and `stable` differ
+only in their own branch-specific `PROGRESS_NOTES.md`/`CLAUDE.md` commits, which is
+expected: each branch narrates its own promotion story.
 
 **swan_rewards** (companion app, separate repo — see `CLAUDE.md`'s "Companion app"
 note for the architecture). Live in production at `rewards.swan-intl.com` (own Frappe
 multi-site, DNS + Let's Encrypt SSL,
-no ERPNext/POS Awesome installed — section 25). The sync bridge
+no ERPNext/POS Awesome installed — section 18). The sync bridge
 (`posawesome/posawesome/api/rewards_sync.py`) is live and configured on production,
 pushing every 15 minutes plus a daily full refresh. Every issue found during the
 initial rollout (store locations, two receipt-PDF bugs, a mobile Chrome View bug, a
-reload-persistence UX gap) is resolved — sections 23-27. No currently-known open
+reload-persistence UX gap) is resolved — sections 16-18, 27. No currently-known open
 issues on either app.
+
+**Loyalty points: no-expiry policy change (section 32) — DONE, deployed, verified on
+production, both repos.** Business decision: loyalty points no longer expire. Caught
+a serious bug before it shipped: the user's original plan (`expiry_duration = 0`)
+does not mean "never expires" in ERPNext core — it means "expires the same day it's
+earned," and would have silently dropped points from customer balances within 24
+hours of being earned. Correct value is a very large duration (`36500`, ~100 years —
+ERPNext has no first-class "unlimited" option). Fixed the config on both staging and
+production. Removed the expiry-warning feature entirely (not hidden conditionally) in
+both `posawesome` (`rewards_sync.py`'s nearest-expiry computation) and `swan_rewards`
+(the `Rewards Customer` fields/columns, `sync.py`, `lookup.py`, and the whole expiry
+card in `www/index.html` — HTML/CSS/JS/both locale strings). Both repos' code
+promoted to `stable`/GitHub main and deployed to production; the user confirmed the
+portal correctly shows no expiry section and points display normally, live.
+
+**Variant sibling scan hint, Phase 1 (section 33) — DONE, deployed, verified
+on production.** New feature: after scanning an item that belongs to a
+variant family, a small dismissible hint offers to show other sizes/colors in
+stock at this store; tapping it reuses the existing `Variants.vue` dialog with
+an on-demand fetch (no fetch on every scan). Found and fixed two real bugs
+during the user's own live testing along the way: an unbounded refetch loop
+that made the dialog blink (root cause: `Variants.vue`'s own deep-watched
+`uiStore.variantsData` re-firing on itself when the new entry point passed an
+empty `items` array; fixed by pre-fetching before opening the dialog, matching
+the pre-existing template-item trigger's contract) and a completely
+non-functional (dead Vuetify-2-class) selected-state indicator on the variant
+filter chips, affecting both the new and the pre-existing template-item dialog
+equally. All three pieces committed together (`f16a89c`), full regression
+green on both `develop-swan` and `stable` (226/226 files, 1130/1130 tests
+each), cherry-picked to `stable` (`6684e78`), pushed to GitHub, deployed to
+production (pull, `bench build` -- frontend-only change, no migrate needed --
+`bench restart`), and **confirmed working live on production by the user**:
+scan, hint, dialog, and selected-state chips all verified with the same real
+barcode (89410444020014).
+
+**Barcode scanning: digits-only assumption + length threshold fixed,
+confidence-based redesign after two real bugs found live (section 34) —
+staging-verified and promoted to `develop-swan`/`stable`, production
+deployment explicitly PENDING a physical scanner test.** Real master-data
+analysis across all 9 brands found scan detection was built entirely for
+pure-numeric barcodes at a hardcoded 12-digit minimum, silently excluding
+Charlotte Wix (alphanumeric, as short as 7 characters, its only format) and
+a handful of GEOX/LIU.JO exceptions. Fixed the charset/length gates, then
+found and fixed two further real bugs during the user's own live staging
+testing: a premature-firing race on human-paced typing (fixed by deferring
+to the timing-verified keydown path when it's already tracking the value —
+though what actually makes a premature fire harmless is the confidence fix
+below, traced precisely rather than assumed) and a classification gap where
+real numeric style codes (confirmed via a real DB example: a style code is a
+literal prefix of its own variant's real registered barcode) can't be
+distinguished from real barcodes by shape alone. Redesigned around scan
+confidence instead of guessing — every trigger source tagged `"high"`
+(verified scanner timing, the hardware scanner library, camera decode, or an
+already-confirmed local match) or `"low"` (idle-settle typing, paste, a bare
+numeric-length heuristic); a match always auto-adds regardless of source, a
+miss only alarms the user for `"high"` confidence. Full regression green
+(227/227 files, 1158/1158 tests), committed as one commit (`bc4f33f`,
+cherry-picked to `stable`), user-retested live on staging across all
+scenarios. **A separate, related gap (search results not clearing when the
+search box is emptied, in Limit Search mode) was investigated the same day,
+then built and promoted the next day (section 35) — see below.** Do not
+deploy either fix to production until the user confirms a physical
+hardware-scanner test at the store; both are planned to deploy together in
+one go once that test passes.
+
+**Search results never reset when the search box was cleared, in Limit
+Search mode (section 35) — DONE, staging-verified, promoted to
+`develop-swan`/`stable`, production deployment bundled with section 34's
+barcode fix, pending the same physical scanner test.** The fix proposed in
+section 34's investigation, built the next session: `useItemsSelectorSearchInput.ts`'s
+`clearSearch()` (the one actually wired to the "X" button) now takes
+optional `isLimitSearchEnabled`/`resetLimitSearchResults` callbacks and
+calls the latter in Limit Search mode, wired to real already-in-scope state
+in `ItemsSelector.vue` (`usesLimitSearch`, `itemsIntegration.clearLimitSearchResults`,
+`resetBarcodeIndex`) rather than resurrecting the dead, vm-proxy-broken
+`clearSearch()` in `useItemsSelectorSearch.ts` (left untouched, as decided).
+Also fixed the identical gap reached via Enter on an emptied search box
+(`onEnter`'s wrapper now routes an empty trimmed query through the same
+fixed `clearSearch()` instead of `_performSearch`'s own empty-query early
+return, which never reset anything either). Full regression: frontend suite
+228/228 files, 1165/1165 tests (7 new, `useItemsSelectorSearchInput.spec.ts`,
+plus the 5 existing component-mount test files for `ItemsSelector.vue` itself
+re-run to confirm the real component still wires correctly, not just
+isolated units). Committed to `develop-swan` (`fb20edc`), cherry-picked to
+`stable`, user-retested live on staging: both the "X" button and
+Enter-on-empty now correctly drop back to the empty-browse prompt instead of
+showing stale results.
+
+**Notification cleanup (section 36) — DONE, staging-verified, promoted to
+`develop-swan`/`stable`, production deployment bundled with sections 34-35,
+pending the same physical scanner test.** Triggered by a real bug: scanning
+a barcode showed two sequential toasts on every scan, and tracing
+`toastStore.ts`'s actual queue mechanics found this wasn't just noise — it
+added 2+ seconds of real delay to scan feedback every time, since
+differently-keyed toasts queue sequentially rather than overlapping.
+Removed both scan toasts entirely (no replacement — matches Square/Clover/
+Toast/Shopify, which show no text confirmation for a scan; the existing
+success tone and visible cart update already confirm it). An app-wide sweep
+of all 216 `toastStore.show()` call sites (delegated, then personally
+verified) found two more real stacking cases fixed the same way — a shared
+key so they merge instead of stacking, the pattern `socketStore.ts` already
+proves works: `Navbar.vue`'s offline-sync pending/synced notifications, and
+`invoice_utils/validation.ts`'s return-invoice validation toasts. A third,
+weaker candidate (`useBarcodePrintOutput.ts`'s fallback-printer toasts) was
+explicitly scoped out at the user's request. Separately, investigated and
+removed the post-sale "Invoice {id} is Submitted" toast (a raw internal
+accounting ID, redundant with the automatic receipt print + screen
+transition) — deliberately kept the *other* branch in the same code path,
+a loading indicator for genuine background payment-entry processing, since
+it's the only signal for that in-progress state. "Select a customer" was
+investigated and confirmed as a correct, necessary, already-well-behaved
+validation gate — left untouched. Full regression green both phases
+(230/230 files, 1169/1169 then 1170/1170 tests), committed as two commits
+(`36d532f`, `6d6d5bf` — no file overlap, separate investigate/approve/build
+cycles), cherry-picked to `stable`, user-retested live on staging.
 
 **Staging** (`staging.local` / `rewards.staging.local`, this dev bench) mirrors
 production for both apps and is where every change above was proven before promotion.
@@ -663,7 +811,7 @@ found.
   risk.
 
   **Follow-up, resolved (2026-08-18):** fixed once staff actually started
-  complaining — see section 19. Both recommended fixes applied, plus a
+  complaining — see section 26. Both recommended fixes applied, plus a
   precise finding the original investigation didn't have: the frontend
   `classifyBusinessCode()` extension turns out to be unreachable for the
   *specific* raw "Deadlock Occurred" dialog reported by staff, since
@@ -698,6 +846,28 @@ found.
   (not just POS cashiers) can get the site's QZ Tray private key to sign an
   arbitrary message — narrow impact (print-trust identity, not financial/
   customer data). Deferred, not urgent.
+- **`_resolve_profile()` (`offline_sync/common.py`) can crash `sync_items()`
+  with `TypeError: Object of type datetime is not JSON serializable`.**
+  Found while verifying the 2026-08-12 `get_delta_items()` NameError fix
+  (section 15). If `sync_items`/`get_delta_items` are ever called with a bare
+  POS Profile *name* string (not the full profile object), `_resolve_profile()`
+  resolves it via `frappe.get_cached_doc("POS Profile", name).as_dict()`,
+  which carries real Python `datetime` objects (`creation`, `modified`), and
+  `sync_items()` then does plain `json.dumps(profile)` on that dict at
+  `offline_sync/items.py:105` instead of `frappe.as_json()`. Currently
+  **dormant** — the live frontend (`resourceRunner.ts:193`) always sends the
+  full serialized profile object, never a bare name, so this branch never
+  fires in production today. Small, low-risk follow-up when convenient: swap
+  `json.dumps` for `frappe.as_json` at that call site.
+- **`offline_sync/pricing_rules.py` has the same unbounded-offset clamp bug
+  fixed in `offline_sync/item_prices.py` (section 16).** `_coerce_int(offset,
+  0)` at `pricing_rules.py:172` also has no `maximum` override, so it
+  inherits the same default `maximum=2000` meant for `limit` — silently
+  clamping the pagination cursor once a profile's pricing-rule sync needs to
+  page past offset 2000. Same class of bug, same fix shape (`maximum=None`
+  on the offset call only), not yet applied — found while fixing the Item
+  Price sibling, deferred since it wasn't the confirmed cause of the
+  production incident being investigated at the time.
 
 (Z Report lookup/reprint, the same-shift exchange distinction, and the VAT
 section are all done now — see section 2 above. Still genuinely open: "Credit
@@ -1650,7 +1820,242 @@ Files: `frontend/src/posapp/components/pos/flows/InvoiceManagement.vue`,
 `frontend/src/posapp/services/qzTray.ts`, plus the DB-only "Swan Sales
 Invoice" Print Format record (not tracked in git).
 
-## 15. Customer rewards portal, foundation phase (Steps 1-3 + generic-customer fix) (2026-08-13, `72fc12e`)
+## 15. URGENT production fix: `get_delta_items()` NameError breaking offline item sync (2026-08-12, `81996e3`)
+
+**Incident.** Live production error: `NameError: name 'profile_json' is not
+defined`, `posawesome/posawesome/api/items.py` inside `get_delta_items()`,
+breaking offline item sync. Direct regression from the 2026-08-12
+`get_authorized_pos_profile()` trust-gap refactor (section 12): that change
+updated two of the three profile-passing call sites in `get_delta_items()`
+to `profile.get("name")` (the `get_items()` call and the `get_item_groups()`
+call), but missed the third — the `get_items_details()` call — which still
+referenced the now-deleted `profile_json` variable. That call only executes
+when `_collect_delta_item_codes()` finds item codes beyond what the base
+fetch already returned, which is why it wasn't caught at the time: none of
+the existing tests exercised that branch.
+
+**Fix.** One-line change: `get_items_details(profile_json, ...)` →
+`get_items_details(profile.get("name"), ...)`, matching the pattern already
+used at the other two call sites. `get_items_details()` re-authorizes
+internally via `get_authorized_pos_profile()`, so only the name is needed.
+
+**Regression test added** (`test_items_delta.py`,
+`test_passes_the_authorized_profile_name_through_to_get_items_details`)
+specifically drives the `extra_codes`/`get_items_details` branch that the
+three pre-existing tests didn't reach, closing the coverage gap that let
+this ship.
+
+**Verified.** Fast targeted check first (given production urgency), then
+the full 6-item regression check before committing. Live, real data on
+`staging.local`: `get_delta_items()` called both with a plain profile name
+and with a serialized profile object (the shape `sync_items()` passes
+internally) — both return rows correctly. `sync_items()` itself — the
+actual offline-sync entry point that was breaking — called exactly the way
+the real frontend (`resourceRunner.ts:193`) calls it (full serialized
+profile object, with and without a watermark): both return correct
+`{changes, deleted, has_more, next_watermark, schema_version}` payloads.
+Full 6-item check: frontend **218/218 files, 1061/1061 tests**. Backend, in
+isolation: `api.test_items_delta` **4/4** (new regression test included),
+`api.test_offline_sync_items` **4/4** (the module's post-test
+`frappe.clear_cache()` teardown crash is the documented pre-existing
+environment issue — see section 6/13 — not related to this fix). `bench
+build`: **N/A** — only `items.py`/`test_items_delta.py` touched, no
+frontend files. `bench migrate`: **N/A** — no doctype/fixture/print-format
+touched. Security review: pure bugfix restoring an already-reviewed pattern
+(`profile.get("name")`, identical to the other two call sites in this same
+function) — no new input, no new authorization surface, no behavior change
+beyond removing the crash. Adjacent flows: the other three call sites in
+`get_delta_items()` (`get_items()`, `get_item_groups()`,
+`_collect_delta_item_codes()`) were untouched and remain covered by the
+pre-existing 3 tests, all still passing.
+
+**Deferred finding from verification, not fixed** (dormant, not the cause
+of this incident): `_resolve_profile()`'s `json.dumps` vs. `frappe.as_json`
+gap in `offline_sync/items.py` — see section 4.
+
+Files: `posawesome/posawesome/api/items.py`,
+`posawesome/posawesome/api/test_items_delta.py`.
+
+## 16. Item Price offline sync: unbounded-offset clamp caused an infinite pagination loop on production (2026-08-12)
+
+**Incident.** Investigated as a possible cause of a 10-15s "Submit & Print"
+delay reported on production but not staging. Browser console on production
+showed repeated `"Item Price sync received an invalid pagination cursor"`
+errors, page numbers climbing indefinitely (66, 67, 68... 81+), `next_offset`
+always reported as `2500` regardless of the actual offset requested.
+
+**Root cause.** `offline_sync/item_prices.py`'s `_coerce_int(value, default,
+minimum=0, maximum=2000)` has a default `maximum=2000` clearly intended as a
+sanity cap on **page size** (`limit`). `resolved_offset = _coerce_int(offset,
+0)` never overrode that default, so the **pagination cursor itself** was
+silently clamped to 2000 too. Once a profile's Item Price sync needed to page
+past offset 2000 (i.e. more than 2500 matching rows: production's ~6,000+
+items across 9 brands, multiple price lists each), every request from then on
+got clamped back down to `start=2000`, always returning the same 500 rows and
+always reporting `next_offset = 2000 + 500 = 2500` — regardless of what
+offset the client actually sent. The frontend
+(`offline/sync/adapters/itemPrices.ts`) has a self-healing fallback for a
+non-advancing `next_offset` (infers `offset + changesCount` and continues
+rather than aborting), which is why the loop never crashed — it just ran
+forever, logging an error and re-fetching the same window on an infinite
+loop, in the same browser tab and JS thread as the rest of the POS UI
+(`SyncCoordinator`, `concurrency: 1`, instantiated in `DefaultLayout.vue`
+which wraps the entire POS interface) — real, continuous network/IndexedDB
+load competing with whatever else the cashier was doing, including invoice
+submission. Staging's Item Price table (1,414 rows at the time of
+investigation) never reaches a 5th page, so it never triggered the clamp —
+this is why the bug was invisible there.
+
+**Fix.** `_coerce_int` now treats `maximum=None` as "no upper bound";
+`resolved_offset` passes `maximum=None` explicitly so the cursor is never
+clamped. `resolved_limit` is untouched — still defaults to the `maximum=2000`
+cap, which is the correct/intended target for that parameter.
+
+**Verified.** Staging's real dataset (1,414 rows) can't naturally reproduce
+the bug (below the 2,500-row trigger), so rather than injecting bulk test
+data into a shared site, `frappe.get_all` was monkey-patched in an isolated
+console process to simulate a 3,200-row dataset and the real
+`sync_item_prices()` function was driven through the exact loop the frontend
+uses: offset correctly progressed 0→500→1000→1500→2000→2500→3000 (page 6 is
+the exact page that previously clamped back to 2000 forever), terminating
+cleanly at `has_more=False` with exactly 3,200/3,200 rows fetched across 7
+pages — no stall, no repeat. Two new permanent regression tests added to
+`test_offline_sync_item_prices.py`: one asserting offset 2500 isn't clamped
+and returns the correct window/`next_offset`, one that paginates a full
+synthetic 3,200-row dataset with a 20-page safety cap so a reintroduced bug
+fails the test suite loudly instead of hanging it.
+
+Full 6-item regression check: frontend **218/218 files, 1061/1061 tests**.
+Backend, in isolation: `api.test_offline_sync_item_prices` **4/4** (2
+pre-existing + 2 new). `bench build`: **N/A** — no frontend files touched.
+`bench migrate`: **N/A** — no doctype/fixture/print-format touched. Security
+review: removing the offset cap lets an authenticated client request an
+arbitrarily large `OFFSET` (mildly more expensive for MariaDB to skip past),
+but this endpoint already requires login, carries the same tradeoff the
+identical unfixed `pricing_rules.py` sibling function already has (see
+section 4), and is a clear net risk reduction versus the unbounded-request
+loop it replaces. Adjacent flows: `resolved_limit`'s cap and behavior are
+byte-for-byte unchanged; the two pre-existing tests in this file (small
+dataset, watermark handling, buying/selling price-list scoping) still pass
+unmodified.
+
+Files: `posawesome/posawesome/api/offline_sync/item_prices.py`,
+`posawesome/posawesome/api/test_offline_sync_item_prices.py`.
+
+## 17. "Submit & Print" slowness on production: unbounded QZ Tray connection (2026-08-12, `bde233a`)
+
+**Incident.** After the Item Price pagination fix (section 16) shipped, the
+user confirmed "Submit & Print" was still slow on production (20-40s,
+variable) — same code as staging, which showed no delay. Given SSH access
+to production (read/investigation only, per explicit boundary: any fix
+still goes through develop-swan → stable → push → deploy, never a direct
+edit on the server) for exactly this kind of live diagnosis.
+
+**Investigation, hard numbers.** Enabled `frappe.recorder` (built-in,
+`profile=True, record_sql=True, explain=True`, no code changes, auto-
+disables after 600s) and captured a real production sale end to end:
+- `submit_invoice`: **729ms** total (191.78ms SQL across 57 queries, no
+  single query above 74ms). Covers validate, stock ledger, GL posting,
+  credit limit — all of it, well under a second.
+- `get_html_and_style` (the print render): **1,059ms** total (125.94ms SQL
+  across 36 queries, slowest 78ms). The same-shift-exchange query didn't
+  even register in the top 8.
+- **A 46-second gap between the two requests** — `submit_invoice` finished
+  at 20:19:25.575, `get_html_and_style` didn't start until 20:20:11.835.
+  Neither backend request is slow; the entire delay is client-side, before
+  the print RPC even fires, which is why the recorder (server-side only)
+  captured nothing there.
+
+Root cause: `connectQzTray()` (`qzTray.ts`) called `await
+qz.websocket.connect()` with no timeout. If the QZ Tray desktop app on the
+till machine isn't reachable (not running, unresponsive, origin not yet
+trusted), the connection attempt can hang for a long, variable,
+browser/OS-dependent time — entirely invisible to server-side logs, and
+blocking the existing catch/fallback-to-browser-print logic from ever
+getting a chance to run.
+
+**Fix.** Wrapped `qz.websocket.connect()` in a 5-second timeout
+(`withTimeout()` helper + `QZ_CONNECT_TIMEOUT_MS`). A QZ Tray hiccup now
+fails fast into the pre-existing fallback path (`silentPrint` after
+`confirmDocumentPrintFallback`) instead of stalling checkout indefinitely.
+
+**Deployment note, corrected.** Deploying this frontend-only fix to
+production initially appeared blocked: `bench build --app posawesome` in
+the restricted SSH session (`command="/bin/bash"` forced command) failed
+with a Node version error (system `node` resolves to 18.19.1, but the
+frontend requires ≥24) — wrongly concluded at the time as "production's
+Node needs an infrastructure upgrade" and worked around by building
+locally (Node 24 via local nvm) and manually transferring the built
+`dist/` over the restricted SSH channel (base64-encoded tarball through
+stdin, since the forced command blocks `rsync`/`scp`'s protocol
+handshakes). **That premise was wrong.** Production does have Node 24.18.0
+correctly installed via nvm and set as the default — the restricted,
+non-interactive `command="/bin/bash"` SSH session simply doesn't source
+`.bashrc`/`.profile` (where nvm's init and `~/.local/bin` on `PATH` live),
+so `node`/`bench` silently fell back to unrelated system-level binaries.
+Confirmed live: `source ~/.nvm/nvm.sh && nvm use 24 && export
+PATH="$HOME/.local/bin:$PATH"` in that same restricted session correctly
+resolves Node 24.18.0 and `bench`, and `bench build --app posawesome` then
+completes natively on production exactly like every other deploy — no
+infrastructure gap, no manual-copy workaround needed. The manually-copied
+`dist/` was superseded by a clean native rebuild and its backup directory
+removed; no drift remains between git and what's served.
+
+**Verified.** Full 6-item regression check before shipping: frontend
+**218/218 files, 1061/1061 tests**; `bench build --app posawesome` clean
+(both the local build used for the initial workaround and, after
+correction, the native production build). `bench migrate`: N/A — no
+doctype/fixture/print-format touched. Security review: no new input
+surface — a client-side connection timeout on an already-existing, already
+browser-local QZ Tray handshake; the existing fallback path this now
+reaches faster was already reviewed. Adjacent flows: `printDocumentViaQz`,
+`ensureQzPrinterReady`, and the raw-printing path are unaffected — only
+the initial `qz.websocket.connect()` call is bounded. Live-verified on
+production: the deployed `qzTray-*.js` bundle contains the new error
+string (`"QZ Tray connection timed out"`), `version.json` correctly
+references matching, present-on-disk hashed filenames.
+
+Files: `frontend/src/posapp/services/qzTray.ts`.
+
+## 18. Production SSH access: granted for tonight's investigation, now revoked (2026-08-12)
+
+The user granted temporary, investigation-scoped SSH access to production
+(`frappe@swan-erpnext-prod`, restricted `command="/bin/bash"` forced
+command in `authorized_keys`) to diagnose and fix the "Submit & Print"
+slowness. Explicit boundary set at the time: any actual code fix still
+goes through the normal workflow (write/test in this repo, show the diff,
+commit → cherry-pick to `stable` → push → deploy) — never a direct
+hand-edit of application source on the server. That boundary held for the
+whole session; confirmed via a full, live-verified accounting after the
+fact (git status clean, no stray source edits, Recorder cache empty, no
+`SET GLOBAL`/service restarts/package installs).
+
+Used for: confirming the Item Price pagination fix (section 16) was
+correctly deployed; live-timing the real "Submit & Print" flow with
+Frappe's built-in Recorder to find the QZ Tray connection fix (section
+17); and diagnosing (not yet fixed) that the *actual* remaining post-sale
+print delay is a `posa_allow_submissions_in_background_job`-gated
+`socketStore.waitForPostSubmitPayments(name, 45000)` wait in
+`runDeferredPrintWorkflow()` (`Payments.vue`) — production has that POS
+Profile setting on, staging doesn't, so production's post-sale flow (for
+any cash sale with change due) waits on a realtime event tied to a queued
+background job before `loadPrintPage()` is ever called; reprint and Z
+Report never touch this path at all, which is why they're unaffected.
+That diagnosis is confirmed precise but the fix itself has not been
+proposed or applied yet.
+
+One process correction from this session, for future reference: after
+building `dist/` manually and swapping it into place as a temporary
+workaround, the pre-existing backup directory was deleted unilaterally
+once superseded by a proper native build — the user's stated preference,
+going forward, is to ask before deleting anything created on production
+(or any of their infrastructure), even routine-looking cleanup, since
+that's their call to make, not something to decide autonomously.
+
+Access has now been revoked by the user. No further production access
+exists as of this entry.
+
+## 19. Customer rewards portal, foundation phase (Steps 1-3 + generic-customer fix) (2026-08-13, `72fc12e`)
 
 Started building a customer-facing loyalty/rewards portal. After a full
 research phase (security options for guest-accessible balance lookup with
@@ -1782,15 +2187,320 @@ built before the separate-site architecture was decided. It's superseded
 by the Step 4-9 plan and slated for removal in Step 9 cleanup, so it's
 left untracked on disk rather than committed and then deleted later.
 
+## 20. Customer rewards portal: full build (Steps 4-9), repo split, and production promotion (2026-08-15)
 
-## 16. Rewards sync bridge live on production: two incomplete sub-features diagnosed (2026-08-17)
+Completed the rewards portal end to end: the separate site, the sync
+job, both guest-facing endpoints, the portal page itself, digital
+receipts, store info, then cleanup and code review split across three
+repos/branches. Section 19 (above) covers Steps 1-3 + the
+generic-customer fix; this entry covers everything after that,
+including those earlier pieces going live on production.
+
+**Where the code actually lives now — three separate places:**
+1. `posawesome`, `develop-swan` branch, commit `3585fbc` — the
+   main-site half: `posawesome/posawesome/api/rewards_sync.py` (the
+   sync job), the new `Rewards Sync Settings` singleton doctype, and
+   the `posa_receipt_synced` Custom Field on Sales Invoice. Not on
+   `stable` — this stays on `develop-swan` only until the whole portal
+   is proven in production, per the standing rollout plan.
+2. `posawesome`, `stable` branch, commit `939edfb` — Steps 1-3 + the
+   generic-customer fix (section 19's `72fc12e`/`113c229`), cherry-picked
+   and pushed. **Now live on production**, deployed by the user directly
+   (outside this session's access — no production SSH this time,
+   reported back rather than independently verified by the agent): git
+   pull, `bench migrate` (verified both new fields exist via direct
+   query before proceeding), `bench build --app posawesome` (required —
+   this promotion touches `UpdateCustomer.vue`), a full service restart,
+   then two manual DB-only steps done in the correct order (fields must
+   exist first): the "Swan Sales Invoice" print format's loyalty-code
+   Jinja block copied over by hand (same DB-only artifact pattern as
+   staging — never git-tracked), and a dedicated walk-in/generic
+   customer created and flagged with `posa_is_generic_customer=1` on
+   production directly in Desk, mirroring staging's "Anonymous" fix
+   proactively rather than waiting for contamination to happen first —
+   production had no pre-existing shared walk-in customer at all when
+   checked, a genuinely clean starting point unlike staging's.
+3. **New repo**: `github.com/somratsam/swan-rewards-portal` (private),
+   `main` branch, commit `9a8c2ac` — the entire `swan_rewards` app
+   (Steps 4-9's separate-site code: doctypes, sync-ingest endpoint,
+   guest lookup/receipt/store-info endpoints, the portal page). This
+   app had **no git repository at all** until this commit — it was
+   scaffolded with `bench new-app --no-git` back in Step 4 and stayed
+   that way through the whole build. Single `main` branch chosen
+   deliberately over posawesome's `develop-swan`/`stable` split: this
+   app has no upstream fork to reconcile against and isn't
+   transaction-critical (a bug here degrades a nice-to-have customer
+   feature, not live checkout) — that risk-profile split doesn't apply,
+   so the ongoing-cherry-pick overhead wasn't worth it. Deployment tags
+   per environment recommended instead, when that's needed.
+
+**Steps 4-9, briefly** (full narrative detail lives in commit messages
+and this session's own record; here's what a future reader needs to
+know they exist):
+- **Step 4**: `rewards.staging.local` — bare Frappe only, deliberately
+  no ERPNext/POS Awesome, same bench as staging via host-header routing.
+- **Step 5**: the sync job. 15-minute incremental (only rows changed
+  since a watermark) + daily full-refresh (every non-generic customer
+  regardless of change, since loyalty-point *expiry* shifts a balance
+  with no corresponding "modified" timestamp for a watermark to ever
+  catch). Generic/walk-in customers excluded at the source query —
+  never computed, never sent, not just hidden from display. Pushes over
+  authenticated HTTP (API key/secret, role-gated, rate-limited,
+  batch-capped), never a live cross-site DB connection.
+- **Step 6**: guest-facing lookup (`swan_rewards.api.lookup.lookup`) —
+  mobile number **and** loyalty portal code required together as one
+  combined match, never accepted on either alone; confirmed live that
+  wrong-code and wrong-mobile responses are byte-identical, no
+  partial-match leak. Rate-limited 10/hr/IP, verified live (10 succeed,
+  11th returns 429).
+- **Step 7**: the portal page itself, `swan_rewards/www/index.html` —
+  single static file, no build step, bilingual EN/AR with RTL, hero
+  balance section, activity timeline, expiry-awareness card. Went
+  through a real design-critique pass after initial review flagged it
+  as "functional but generic" — store cards specifically called out as
+  "a database dump" — reworked into elevated cards with a Google Maps
+  "get directions" link per store, plus a fade-in/count-up reveal on
+  the hero, all guarded to only play on a genuine fresh lookup, never
+  replayed on re-renders (e.g. a language toggle).
+- **Step 8**: digital receipts. PDFs pre-rendered on the main site
+  during incremental sync only, gated by `posa_receipt_synced` so an
+  already-synced receipt is never regenerated. View (inline) and
+  Download modes share the identical two-factor-match-plus-ownership-check
+  security path — view is not a lighter-weight route to the file.
+- **Step 9**: cleanup. Removed the old `loyalty_portal.py` prototype
+  (verified nothing else referenced it first) and staging's "My
+  Account" Web Page (a DB-only record, confirmed by its actual content
+  before deleting). Production's copy was unpublished by the user
+  themselves.
+- **Store info** (built alongside Step 7): "Visit Us" section + website/phone
+  footer, sourced from real ERPNext data (`Address` records with
+  `address_type = "Shop"`, `Company.website`/`.phone_no`) rather than
+  hardcoded — the user entered Swan's actual store/contact data
+  directly in Desk once shown exactly where it needed to live.
+
+**Two real technical blockers hit and solved during Step 8**, worth
+remembering if PDF generation from a background job comes up again in
+this codebase:
+- `frappe.get_print()` raises a bare `AttributeError('request')` when
+  called outside an HTTP request (Werkzeug's context-local proxy has
+  nothing to read) — the scheduler has no request. Fixed with
+  `frappe.utils.set_request()`, Frappe's own official helper for this
+  exact scenario, with an explicit `base_url` built from
+  `frappe.local.site` + `frappe.local.conf.webserver_port` (the default
+  fallback omits the port, which caused wkhtmltopdf's own asset-fetch
+  to connection-refuse against the wrong port).
+- "Swan Sales Invoice" is a genuine 76mm thermal-receipt format, but PDF
+  generation defaults to A4 — silently split every receipt across a
+  mostly-blank 2nd page. Fixed with a custom 76mm×400mm page size plus
+  `pypdf`-based stripping of any trailing page with no extractable text.
+
+**Environment note, not code-related:** partway through Step 5 testing,
+`bench` commands started failing with Redis connection errors and the
+whole `bench start` process stack turned out to be down (unrelated to
+any change made this session — likely stopped earlier in the session
+without being noticed). Restarted cleanly; worth checking `bench doctor`
+/ whether `bench start` is actually running if a fresh session in this
+WSL2 environment hits unexplained connection-refused errors on
+otherwise-working commands.
+
+**Also still true, carried over from section 19:** the
+`bench export-fixtures` corruption caution (see CLAUDE.md) applied
+again for the `posa_is_generic_customer` and `posa_receipt_synced`
+fields — both hand-added to `custom_field.json` rather than exported,
+same as the original catch.
+
+**Not done, explicitly deferred:** production's rewards site itself
+(`rewards.swan-intl.com` or equivalent) — the whole point of tonight's
+promotion was getting Steps 1-3 safely live first; the separate-site
+production deployment (DNS, SSL, dedicated worker pool, the private-first
+staged rollout) is a distinct, later piece of work, not started.
+
+## 21. "Walk-in / No Loyalty" button: build, two real bugs, and same-day promotion to production (2026-08-15)
+
+Built the previously-parked "Walk-in / No Loyalty" button (Option B from
+the earlier design research — a separate, visually muted button, not an
+auto-selected default, not wired to any keyboard shortcut, since both of
+those were assessed to erode the natural "ask every customer about
+loyalty" moment). Unlike everything else in section 20, this feature
+went from build to production the same day, since it's low-risk,
+opt-in, and staff-facing only.
+
+**What was built.** A new `posa_walkin_customer` field on POS Profile
+(Link to Customer, restricted via a native Frappe `link_filters`
+property to only show customers already flagged
+`posa_is_generic_customer` in the picker — an admin can't accidentally
+point it at a real individually-tracked customer). A button in
+`Customer.vue`, rendered below the search field and only visible when
+that POS Profile field is set, selecting the configured customer via
+the same `setSelectedCustomer()` path `selectFirstCustomer()` already
+uses — not a new mechanism.
+
+**Two real bugs found during the user's own manual testing** (not
+caught by the original 6-item regression check — worth remembering both
+for their own sake and for what they say about this component's test
+coverage gaps):
+
+- `pos_profile` was declared and used correctly inside `Customer.vue`,
+  but **no real caller in the app ever actually passed it down** —
+  `InvoiceCustomerSection.vue`'s `<Customer ref="customerComponent" />`
+  omitted the binding entirely (confirmed the *only* other usage,
+  `PayView.vue`, also omits it, but that one is a different flow —
+  selecting a customer as a payment party — where this button wouldn't
+  semantically belong, so left alone deliberately). The prop was
+  `undefined` at runtime in every real session, meaning the button could
+  never have rendered regardless of configuration. Root cause: the
+  original test (`walkinCustomerButton.spec.ts`) only asserted against
+  `Customer.vue`'s own source in isolation, the same way
+  `customerDropdownXss.spec.ts` already did for this same
+  hard-to-fully-mount component — a pattern that verifies a component's
+  *own* logic but is structurally blind to whether any real parent
+  actually wires it up correctly. Fixed by adding `:pos_profile="pos_profile"`
+  to `InvoiceCustomerSection.vue`, and added a new test asserting the
+  forwarding itself — verified the new test actually fails without the
+  fix (reverted it, confirmed red, restored it, confirmed green) before
+  trusting it as a real regression guard.
+- The new field's `insert_after` placed it inside POS Profile's
+  collapsed **"Campaign"** section — a generic ERPNext UTM/marketing
+  section with zero relation to this feature, because the field it was
+  inserted after happened to live there and that wasn't checked at the
+  time. Moved to "Sales and Purchase Flows", an existing,
+  correctly-labeled POS Awesome section. Worth remembering as its own
+  standing caution: `insert_after` on a new Custom Field determines
+  which section it's *placed in*, not just its position — always verify
+  the target section via `frappe.get_meta()` before trusting a
+  plausible-sounding neighbor field name.
+
+**Promotion sequence, same day:**
+1. `develop-swan`, commit `7ef94f4` — build, both bugs, and the new
+   regression test.
+2. Cherry-picked to `stable` as `1958834`. Conflicted in
+   `custom_field.json` — same shape as section 20's `PROGRESS_NOTES.md`
+   conflict: the incoming diff dragged along `posa_receipt_synced` (from
+   the sync-bridge commit, not part of this feature and not on `stable`)
+   because that's what the new field happened to be appended after on
+   `develop-swan`. Resolved by keeping only the actual
+   `posa_walkin_customer` entry; verified the resolved diff against
+   `upstream/stable` was byte-identical in shape to `7ef94f4`'s own diff
+   (same 5 files, same 156 insertions) before pushing.
+3. Deployed to production: pull, `bench migrate`, `bench build --app posawesome`
+   (required — frontend files changed), service restart. No print
+   format copy needed this time (this feature doesn't touch any print
+   format, unlike this morning's promotion).
+4. **Activated on production** — the user configured
+   `posa_walkin_customer` on production's real POS Profile(s), pointing
+   at production's designated walk-in customer (the one created and
+   flagged with `posa_is_generic_customer` during this morning's
+   promotion). The button is live and in use by staff as of today, not
+   just deployed-but-dormant.
+
+Depended on `posa_is_generic_customer` already being on
+`stable`/production (it was, from this morning's `939edfb`) — no other
+dependency; self-contained relative to the still-`develop-swan`-only
+sync bridge and rewards portal work.
+
+**Follow-up, resolved:** the `posa_loyalty_portal_code` backfill gap
+flagged as open/unconfirmed right after this morning's promotion was
+checked directly on production — every pre-existing customer there
+predating today's deployment is test/dummy data, not a real customer.
+No backfill was needed and none was run; this was a deliberate,
+confirmed decision, not an oversight. Every real customer going forward
+gets a code automatically on save, which is what actually matters.
+
+## 22. Rewards sync bridge promoted to `stable`/production (2026-08-17, `375635e`)
+
+The sync-bridge commit (`3585fbc`, section 20 — `rewards_sync.py`, the
+`Rewards Sync Settings` singleton, `posa_receipt_synced`, and the
+scheduler wiring in `hooks.py`) was deliberately held back from `stable`
+in section 20, since the rewards portal itself wasn't deployed to
+production yet at the time. It now is (`rewards.swan-intl.com`), so the
+bridge that feeds it was promoted.
+
+**Promotion sequence:**
+1. Confirmed both `develop-swan` and `stable` were clean and fully synced
+   with `upstream` before touching anything — no uncommitted state on
+   either.
+2. Cherry-picked `3585fbc` onto `stable` in an isolated worktree (same
+   pattern as sections 19 and 21), landing as `375635e`. Conflicted in
+   `custom_field.json` — same recurring shape as the last two
+   promotions: `stable` already had `posa_walkin_customer` (from
+   section 21's `1958834`) sitting at the same append point
+   `posa_receipt_synced` needed. Resolved by keeping both entries, in
+   the same order they already existed in on `develop-swan`
+   (`posa_receipt_synced` immediately before `posa_walkin_customer`);
+   verified the resolved file byte-identical to `develop-swan`'s own
+   copy before committing. `hooks.py` merged cleanly on its own — purely
+   additive in both hunks (a new `scheduler_events["cron"]` block, one
+   new fixture list entry), no existing entry touched.
+3. Full 6-item regression check, run against the actual promoted
+   `375635e` state (checked out live on `staging.local`, not just
+   diffed):
+   - Frontend `vitest run`: **219/219 files, 1069/1069 tests** passing.
+     This commit touches no frontend files, but the rule applies
+     regardless.
+   - Backend: no dedicated test module exists for `rewards_sync.py`
+     (same as when it was first built — verified live, not via
+     automated tests, both then and now). `test_offline_sync_invoices`
+     4/4 passing. `test_offline_sync_customers` hit the pre-existing
+     `run-tests` environment `AttributeError` crash (`frappe` module
+     missing an attribute mid-teardown) documented in section 13/14's
+     era of this file — confirmed identical on unmodified
+     `develop-swan` with none of this change present, so pre-existing
+     and unrelated, not a regression from this promotion.
+   - `bench build --app posawesome`: N/A — no frontend/`.vue`/`.ts`
+     file touched.
+   - `bench --site staging.local migrate`: clean exit 0, run twice for
+     idempotency, no drift on the second run. Confirmed via
+     `frappe.get_meta()` that `posa_receipt_synced` landed on
+     `Sales Invoice` (`insert_after: posa_is_printed`, hidden) and
+     `Rewards Sync Settings` landed as a singleton with all 6 expected
+     fields.
+   - Security review: traced `rewards_sync.py` end to end. Neither
+     `run_incremental_sync` nor `run_full_refresh` carries
+     `@frappe.whitelist` — both are reachable only via
+     `scheduler_events["cron"]`, never as a directly callable API
+     method, so there is no external request surface here at all. All
+     DB access is either `frappe.get_all`/`frappe.db.get_value`
+     (ORM-parameterized) or one raw `frappe.db.sql` call
+     (`_build_customer_payload`'s loyalty-expiry lookup) using `%s`
+     placeholders with a bound params tuple, not string interpolation.
+     The outbound push authenticates with `settings.get_password(
+     "api_secret")` (decrypted only in-process, never logged) against
+     `settings.rewards_site_url`, both admin-configured values, not
+     anything client-supplied.
+   - Confirmed nothing adjacent was disturbed: `hooks.py`'s diff is
+     purely additive (verified via `git diff` against the prior
+     `stable` tip), `custom_field.json`'s resolved merge is
+     byte-identical to `develop-swan`'s, and the new doctype/field are
+     additive-only — no existing doctype, field, or scheduled job was
+     modified.
+4. No secrets present in what was promoted: `api_secret` is
+   schema-only (`Password` fieldtype, no `default`, no stored value in
+   git — same confirmation done before this doctype first shipped in
+   section 20); grepped the full diff for key/secret/password/token
+   patterns, no matches.
+5. Pushed `stable` to `upstream` (`1958834..375635e`).
+
+**Manual configuration still needed on production** (data, not code —
+won't arrive via git): production's own `Rewards Sync Settings` record
+needs its real `rewards_site_url` and `api_key`/`api_secret` filled in
+via the Desk UI before the scheduler jobs will do anything. Until that's
+set, `_run_sync()` logs a `"Rewards sync not configured"` error and
+returns early on every tick — inert, not broken, but won't actually sync
+anything to production's rewards site until configured. Once set, the
+first `run_incremental_sync` tick (within 15 minutes) will push every
+non-generic customer's current state as its baseline.
+
+**Follow-up, resolved:** done as part of tonight's full production
+rollout of the rewards site itself — see section 25.
+
+## 23. Rewards sync bridge live on production: two incomplete sub-features diagnosed (2026-08-17)
 
 Core sync (customers, loyalty points, activity feed) confirmed working
 on production. Two sub-features weren't: Store Locations empty, and
 every receipt PDF failing to generate. No production access this
-session (revoked after an earlier investigation, same as every session
-since) — diagnosed both against `staging.local`/code, with a live
-reproduction for the second.
+session (revoked after section 18's investigation, same as every
+session since) — diagnosed both against `staging.local`/code, with a
+live reproduction for the second.
 
 **Issue 1 — Store Locations empty.** Read `_get_store_locations()` and
 `swan_rewards`'s `_upsert_store_location()` end to end: both are
@@ -1874,10 +2584,8 @@ files, but the rule applies regardless). Backend: new
 `test_rewards_sync.py` **1/1** passing, verified as a genuine regression
 guard (see above). `test_print_assets.py` hit the same pre-existing
 `run-tests` environment `AttributeError`/`ImportError` crash documented
-elsewhere in this file (section 13's era) and confirmed independently
-earlier this session (identical on a clean checkout with none of this
-session's changes present) — confirmed environmental and unrelated to
-any change here, not re-verified a third time.
+in sections 13/14/22 — confirmed that class of crash is environmental
+and unrelated to any change this session, not re-verified a third time.
 `bench build`/`bench migrate`: N/A — no frontend, doctype, fixture, or
 print-format file touched, only one function's internal logic. Security
 review: N/A — `_generate_receipt_pdf()` remains reachable only from the
@@ -1892,9 +2600,9 @@ same as the standing workflow for anything not yet proven in
 production. Production-side application (once approved) is manual, same
 process as every other promotion this session.
 
-## 17. Receipt PDF, round two: a real network fetch the previous fix didn't cover (2026-08-17)
+## 24. Receipt PDF, round two: a real network fetch the previous fix didn't cover (2026-08-17)
 
-After section 16's `127.0.0.1` fix (`261c6f3`) went to production, receipt
+After section 23's `127.0.0.1` fix (`261c6f3`) went to production, receipt
 PDF generation hit a *new*, different error on the same function:
 `OSError: wkhtmltopdf ... ContentNotFoundError`, distinct from the DNS
 `HostNotFoundError` the earlier fix actually resolved (confirmed
@@ -1904,7 +2612,7 @@ resolved, no longer occurring).
 unconditionally injects `<link rel="stylesheet"
 href="/assets/frappe/dist/css/print.bundle.HASH.css">` into every
 `frappe.get_print()` page's `<head>` — outside the print format's own
-content entirely, so the earlier scan (which only checked
+content entirely, so section 22/23's earlier scan (which only checked
 the print format's own HTML for `<img>`/`url()`/`background-image`)
 never covered it. wkhtmltopdf fetches that `<link>` as a real
 self-referencing HTTP request back to this same process. Under batch
@@ -1972,17 +2680,17 @@ where noted:
   Frappe core code it mirrors; `_generate_receipt_pdf()`'s reachability
   (scheduler-only, non-whitelisted) is unchanged by this diff.
 
-Cherry-picked to `stable` as `7237bd4`, same day, after review —
-this fix corrects a genuine production-facing bug (receipt PDFs failing
-under real batch load), low-risk and self-contained to one function.
+**Follow-up, resolved:** reviewed and cherry-picked to `stable` as
+`07fe8f9`, deployed to production the same night as part of the full
+rewards-site rollout — see section 25.
 
-## 18. Rewards portal live on production: full rollout, both PDF fixes deployed, end-to-end verified (2026-08-17)
+## 25. Rewards portal live on production: full rollout, both PDF fixes deployed, end-to-end verified (2026-08-17)
 
-The separate-site production deployment explicitly deferred earlier
-("not started") happened tonight, start to finish: the rewards site is
-now live at `rewards.swan-intl.com`, the sync bridge and both
-receipt-PDF fixes are deployed, and every piece of the portal has been
-confirmed working against real production data.
+The separate-site production deployment explicitly deferred back in
+section 20 ("not started") happened tonight, start to finish: the
+rewards site is now live at `rewards.swan-intl.com`, the sync bridge and
+both receipt-PDF fixes are deployed, and every piece of the portal has
+been confirmed working against real production data.
 
 **Site stood up.** `swan_rewards` deployed to production as its own new
 site (`rewards.swan-intl.com`) on the same bench as `site1.local` —
@@ -2003,15 +2711,15 @@ after a bench-wide nginx regeneration, e.g. `bench setup nginx` /
 on `stable`) pulled and deployed to production: `bench pull`,
 `bench migrate`, service restart. `Rewards Sync Settings` on production
 configured with real credentials (`rewards_site_url`, `api_key`,
-`api_secret`) via the Desk UI — resolving the still-open manual-configuration item from the sync bridge's own promotion.
+`api_secret`) via the Desk UI — resolving section 22's open item.
 
 **Both receipt-PDF fixes deployed same night**, each following the
 established cherry-pick-to-stable-then-deploy sequence used all session:
-- Fix 1 (section 16 → `160db7d`/`261c6f3`): `frappe.local.site` →
+- Fix 1 (section 23 → `160db7d`/`261c6f3`): `frappe.local.site` →
   `127.0.0.1` for wkhtmltopdf's `base_url`. Resolved the DNS
   `HostNotFoundError` completely — confirmed no longer occurring on
   production after deploy.
-- Fix 2 (section 17 → `7237bd4`/`07fe8f9`): eliminated the live
+- Fix 2 (section 24 → `7237bd4`/`07fe8f9`): eliminated the live
   self-referencing fetch of Frappe's own `print.bundle.css` during PDF
   generation, inlining its content from local disk instead. Resolved the
   `ContentNotFoundError` that surfaced under real production batch load
@@ -2019,26 +2727,20 @@ established cherry-pick-to-stable-then-deploy sequence used all session:
 
 **End-to-end verified live on production**, not just deployed-and-hoped:
 customer sync, loyalty points balance, activity feed, store locations
-("Visit Us" section — resolving section 16's Issue 1, confirming it
+("Visit Us" section — resolving section 23's Issue 1, confirming it
 really was the suspected data gap rather than a code bug once real Shop
 `Address` records existed on production), and receipt PDF view/download
 all confirmed working against real production data.
 
 **Known open items for next session** (both real, both non-blocking —
 the portal is fully functional, these are polish):
-- **Mobile UX bug:** the "View" and "Download" receipt buttons both
-  trigger a download on mobile Chrome, instead of "View" opening the PDF
-  inline in-browser. Works correctly on desktop Chrome. Likely cause:
-  `swan_rewards.swan_rewards.api.receipt.get_receipt`'s `mode="view"`
-  path missing a `Content-Disposition: inline` response header (or
-  mobile Chrome ignoring/handling it differently from desktop) —
-  unconfirmed, not yet investigated.
-- **Portal reload UX bug:** reloading the page after a successful
-  lookup resets to an empty login form instead of persisting the last
-  successful lookup. A brief is already drafted (not yet sent) — no
-  root-cause investigation done yet.
+- **Mobile UX bug — resolved, see section 27.** The guessed cause here
+  (a missing `Content-Disposition: inline` header) turned out to be
+  wrong — that header was already being sent correctly; the real cause
+  was that the frontend never let the browser see it at all.
+- **Portal reload UX bug — resolved, see section 27.**
 
-## 19. "Deadlock Occurred" warning fixed: backend retry + frontend defense-in-depth (2026-08-18)
+## 26. "Deadlock Occurred" warning fixed: backend retry + frontend defense-in-depth (2026-08-18)
 
 The rare, intermittent "Deadlock Occurred" message during partial-payment
 sales — investigated and confirmed harmless back in section 4's deferred
@@ -2164,10 +2866,11 @@ exceptions; the frontend change is pure error-message classification
 `fetchSubmittedDocstatus` verification call, scoped to the same
 invoice already in flight for this submission, not a new query surface.
 
-Reviewed and cherry-picked to `stable` the same day — this fix corrects
-a genuine, staff-reported production issue, low-risk (retry-only on the
-happy path, purely additive on the frontend) and fully covered by
-tests that directly simulate the failure condition.
+**Follow-up, resolved:** reviewed and cherry-picked to `stable` as
+`2dd1589`, deployed to production the same day — a genuine,
+staff-reported production issue, low-risk (retry-only on the happy
+path, purely additive on the frontend) and fully covered by tests that
+directly simulate the failure condition.
 
 ## 27. `swan_rewards`: mobile View/Download bug fixed, reload persistence added (2026-08-18)
 
@@ -2333,3 +3036,8206 @@ production and confirmed working live on the original problem store PC.
 
 See `CLAUDE.md`'s "Layout Fixes on Vuetify Tables Need Real Browser
 Measurement" for the reusable lesson.
+
+## 29. Payment box refocus overwrite + preferred-box direct-edit rebalance gap (2026-08-20)
+
+### Background
+
+This continues a 3-bug payment-screen audit (bugs #1-#3 below) done in a prior
+session. That session was lost before its findings were written down anywhere
+in this file or `CLAUDE.md` — only bug #1's already-verified-working fix
+survived, sitting uncommitted in the working tree, confirmed still present at
+the start of this session. Bug #2's description (below) matches exactly what
+this session built from the approved design, carried over in the handoff
+prompt. **Bug #3's description below is reconstructed from reading the
+codebase this session, not from the original audit note — the original
+wording didn't survive, so if it resurfaces, sanity-check this description
+against whatever prompted the original finding.**
+
+**Bug #1 — refocus silently overwrote a manually-typed amount. Fixed.**
+`set_rest_amount()` (called on box focus to helpfully fill in "what's left")
+recomputed and overwrote the amount unconditionally, even when the box
+already held a deliberately-entered value (manually typed, or auto-filled
+and left as-is). Fixed by guarding on the existing `hasMeaningfulAmount()`
+helper (exported from `paymentInitialization.ts`) before recomputing —
+`usePaymentMethods.ts`'s `set_rest_amount` now returns early if the box
+already carries a meaningful amount. Verified live in the browser before
+this session started; this session confirmed the fix was still present,
+uncommitted, in the working tree, with its 3 tests already in
+`usePaymentMethods.spec.ts`.
+
+**Bug #2 — dead `autoBalancePayments()` safety net, never wired into
+checkout. Fixed this session.** `handlePaymentAmountChange()` already trued
+up the preferred payment line when a *non*-preferred box was edited
+(`rebalancePreferredPaymentCoverage()`), but had no counterpart for the
+reverse: directly editing the preferred box itself left the other boxes
+untouched, so the total could silently drift out of sync with the invoice.
+`autoBalancePayments()` existed in `usePaymentMethods.ts` (already used by
+`PurchasePaymentDialog.vue`) precisely to correct this kind of excess, but
+was never wired into the main checkout payment flow — a dead safety net.
+
+Fix: added an optional `sortOthers` comparator param to `autoBalancePayments()`
+(default unchanged — amount-descending); added `Payments.vue` state tracking
+the order in which the cashier has directly edited each payment box
+(`paymentEditSequenceCounter` / `lastEditedPaymentSequence`, bumped only in
+`handlePaymentAmountChange`, i.e. only for genuine UI-driven edits, never for
+programmatic rebalances; reset when a new invoice loads into the dialog via
+the `send_invoice_doc_payment` handler); added
+`rebalanceOtherPaymentsByRecency()`, gated the same way as
+`rebalancePreferredPaymentCoverage()` (skip for returns and credit sales),
+which calls `autoBalancePayments()` with a recency comparator that reduces
+the least-recently-edited/never-touched box first — so a box the cashier
+just typed into elsewhere isn't immediately clobbered by the rebalance.
+Wired into `handlePaymentAmountChange`'s previously-empty
+`payment === preferredPayment` branch. Reuses the same credit-aware
+`getNetInvoiceAmount()` path `autoBalancePayments()` already had, so it
+balances against the net (credit-adjusted) settlement amount, not the gross
+total — covered by a dedicated test. `autoBalancePayments()` is no longer a
+dead safety net: it's live in both `PurchasePaymentDialog.vue` and, as of
+today, the main checkout `Payments.vue` flow.
+
+**Bug #3 — multi-"cash"-named-payment-method validation gap. Still open, not
+fixed.** `isCashLikePaymentLine()` (`frontend/src/posapp/utils/cashTender.ts`,
+lines 21-38) identifies "the" cash line via `mode.includes("cash")` — a plain
+case-insensitive substring match on `mode_of_payment`, with no
+dedup/disambiguation if a POS Profile configures more than one payment method
+whose name contains "cash" (e.g. "Cash" + "Petty Cash" + "Cash on Delivery").
+`resolvePreferredPaymentLine()`, `rebalancePreferredPaymentCoverage()`,
+today's new `rebalanceOtherPaymentsByRecency()`, and the quick-cash-tender
+denomination suggestions (`getQuickCashTenderSuggestions()`, same file) all
+funnel through this one heuristic, so all of them would inherit whatever
+ambiguity multiple matches created — most likely picking whichever line
+happens to be `default: 1` or appears first, silently, rather than validating
+there's exactly one true cash line. No store on this fork is currently
+configured with more than one cash-like-named payment method, so this hasn't
+surfaced in production. Not investigated further or fixed this session — see
+the caveat above about this description's provenance.
+
+### Deferred / open items for next session
+
+- **Bug #3 above** (multi-"cash"-named-method validation gap) — not fixed;
+  needs its own investigation starting from `cashTender.ts`'s
+  `isCashLikePaymentLine()`, plus confirmation of what the original audit
+  actually found, if that can be recovered.
+- **Credit-forced-after-fill gap (explicitly out of scope this session):** a
+  different gap from bug #2, where payment boxes are filled first and
+  customer credit only becomes *newly forced* afterward (via the existing
+  credit-eligibility watcher in `Payments.vue`, a separate code path from
+  `handlePaymentAmountChange`) can leave Cash/other boxes over-target with
+  nothing correcting them. Not built in this session — the credit-eligibility
+  watcher would need its own rebalance call (likely reusing
+  `autoBalancePayments()`/`rebalanceOtherPaymentsByRecency()`), but that
+  watcher's trigger conditions and interaction with
+  `is_credit_sale`/`is_return` need their own investigation before changing
+  it.
+
+  **Verification status (2026-08-24): manually spot-checked on staging by
+  the user, did NOT reproduce — but not fully proven across all variations
+  yet. Treat as still open, revisit later, not urgent.** The user's manual
+  repro: filled Cash=20, Master Card=5, added a second item to push the
+  total up, then toggled "Use Customer Balance" ON (after crossing the
+  credit threshold, never passing through a blocked state first). Result:
+  credit applied (97.20), Cash/Master Card stayed at 20.00/5.00 unchanged,
+  Visa (preferred) correctly absorbed the exact remainder (65.70), total
+  matched the invoice exactly, no change due, submit worked normally — no
+  bug in that run.
+
+  A separate live-repro attempt earlier the same session (via a live
+  Playwright session against staging, using a purpose-built test customer
+  with a real 30 OMR credit balance) independently confirmed bug #2's fix
+  works live through the point where boxes are manually filled while credit
+  is toggled ON but blocked (Cash=10 → Visa auto-drops 25→15; Master
+  Card=15 → Visa auto-drops to 0), but could not reach the actual
+  threshold-crossing step live (blocked by an unrelated finding: the test
+  item showed Available QTY=0 in the POS item search and the frontend
+  clamped any qty increase back to 0, even though the item is a non-stock
+  service item — noted below as a possible separate issue, not chased
+  further). So the "does this actually manifest" question for steps 6-10
+  of that plan was answered by the user's manual test instead, not by that
+  live-repro attempt.
+
+  Why these two don't necessarily contradict each other: the code path
+  (`rebalancePreferredPaymentLine()` in `paymentInitialization.ts`) only
+  ever adjusts the *preferred* box, computed as
+  `invoiceTotal - coveredAmount(credit+loyalty+giftcard) - otherPaymentsTotal`,
+  clamped to a minimum of 0. The gap can only actually produce an
+  over-target total when `otherPaymentsTotal + coveredAmount > invoiceTotal`
+  (i.e. the preferred box would need to go negative to balance, but clamps
+  to 0 instead, leaving the excess on the other boxes). In the user's run,
+  `otherPaymentsTotal (25) + credit (97.20) = 122.20`, well under the
+  invoice total (187.90) — Visa had room to absorb the difference cleanly,
+  so the clamp-to-0 case was never triggered. The scenario most likely
+  still needs the *other* boxes to already be filled close to (or above)
+  what's left once credit is factored in — closer to the original
+  live-repro's numbers (Cash 10 + Master Card 15 = 25 against a
+  credit-reduced remainder of 20) than the user's (25 against a
+  credit-reduced remainder of 90.70). Next attempt should deliberately
+  construct that tighter-margin case rather than an arbitrary second item.
+
+- **Possible separate finding, not investigated:** during the live-repro
+  attempt above, a non-stock service item (`is_stock_item = 0`) showed
+  "Available QTY: 0" in the POS item search UI, and typing a cart qty above
+  0 for it was clamped back to 0 client-side with the toast "Maximum
+  available quantity is 0.00. Quantity adjusted to match stock." — i.e. a
+  stock-availability ceiling was enforced against an item that shouldn't be
+  stock-constrained at all. Could be specific to that one item's setup
+  rather than a general bug; not confirmed either way, not investigated
+  further this session.
+
+### Status
+
+Built, tested, and **committed to `develop-swan`**: docs in `7f4f82b`, code
+(bug #1 fix + bug #2 fix, 6 new/updated tests across `usePaymentMethods.spec.ts`)
+in `6ac45e5`. **Not yet promoted to `stable`** — full regression check passed
+(frontend suite 225/225 files, 1119/1119 tests; `bench build --app posawesome`
+clean) and bug #2's fix has since been partially confirmed live on staging
+(see the verification note above), but this has not gone through this fork's
+full "prove it on staging, then promote" cycle the way other payment changes
+have (see e.g. section 26, section 28) — the credit-forced-after-fill
+follow-up above is still open. Do not assume this is in production.
+
+**Superseded by section 30 — `6ac45e5` was promoted to `stable`/production
+the same day, and a real regression was found there. See below.**
+
+## 30. Bug #2's fix promoted, found broken in production, corrected, reverified live (2026-08-24 → 2026-08-25) — RESOLVED
+
+**Promotion.** `6ac45e5` (bug #1 + bug #2 fixes) cherry-picked cleanly onto
+`stable` as `9406b79` (diff verified byte-identical), full regression check
+re-run on `stable` (225/225 files, 1119/1119 tests; `bench build --app
+posawesome` clean), pushed to GitHub. Both `develop-swan` (`7f4f82b`,
+`6ac45e5`, `83c7b68`) and `stable` (`9406b79`) pushed to `upstream` the same
+session. Production-side steps handed to the user to run themselves (`bench
+pull` / `bench migrate` N/A / `bench build --app posawesome` / `bench
+restart`) — not run by this session.
+
+**Regression found live, by the user, on both staging and production.** After
+deploying, the user tested the exact scenario bug #2 was built for and found
+it **half-broken**: editing a non-preferred box still correctly rebalances
+the preferred box (bug #2's originally-tested direction, still fine), but
+**editing the PREFERRED box directly down** left the other box "stuck at its
+old value," producing an incorrect change-due. Confirmed identically on both
+staging and production, ruling out a caching/service-worker artifact.
+
+**Root cause, confirmed by reading `autoBalancePayments()`
+(`usePaymentMethods.ts`) closely — not by guessing:** the function had
+exactly one branch, `if (excess > 0)`, which shrinks other payment boxes when
+an edit creates an overpayment. **There was no corresponding branch for a
+deficit** (an edit that leaves the invoice short). `rebalanceOtherPaymentsByRecency()`
+(`Payments.vue`) calls this function unconditionally whenever the preferred
+box is edited directly, so decreasing the preferred box's value hit the
+missing branch and did nothing — an asymmetry `rebalancePreferredPaymentCoverage()`
+(the original, pre-existing mechanism for the *other* direction) doesn't
+have, since it always recomputes the preferred box's amount as `total −
+covered − others`, which naturally goes up or down. The new code added this
+session only ever shrank; it never grew.
+
+This session's own live-repro and unit tests never caught it because both
+only exercised the excess (preferred-box-increased) direction — a real gap
+in this session's own test coverage, not just the implementation.
+
+A live-repro attempt to confirm the exact failure mode directly (rather than
+trusting the code read alone) hit the same terminal-lock/browser-automation
+friction as section 29's attempt and was time-boxed and abandoned per the
+user's explicit instruction, in favor of a careful code read plus the user's
+own report. The code-level diagnosis above was later confirmed correct by
+the user ("Confirmed - this matches exactly what I saw").
+
+**Fix (`392add7` on `develop-swan`):** added a symmetric deficit branch to
+`autoBalancePayments()`. On a deficit, it adds the shortfall onto a single
+other payment line (same `sortOthers` priority order as the excess direction
+— e.g. least-recently-edited first via `rebalanceOtherPaymentsByRecency`'s
+comparator), rather than spreading it across several boxes: growth has no
+natural per-box cap the way shrinking toward zero does, so one clear target
+keeps the result predictable. 4 new tests added (`usePaymentMethods.spec.ts`,
+19 tests total in that file now): default-sort growth, custom-comparator
+growth, the exact production scenario (preferred box edited down after
+credit applied, two other boxes filled at different times — the
+least-recently-edited one grows to absorb the shortfall, credit-adjusted net
+total respected), and a no-other-payment-line no-op safety check.
+
+**Live-verified by the user on staging, both directions (increasing and
+decreasing the preferred box) — correct behavior confirmed both ways.**
+Per the user's explicit request, no further automated live-repro attempts
+were made from this session given the repeated browser-automation friction
+(unlock-dialog/terminal-lock flakiness) hit on both this bug and section 29's
+credit-gap investigation — the user verified live themselves instead.
+
+**Promoted.** Cherry-picked onto `stable` as `45525cb` (diff verified
+byte-identical to `392add7`), full regression check re-run on `stable`
+(225/225 files, 1123/1123 tests; `bench build --app posawesome` clean),
+pushed to GitHub (`9406b79..45525cb`). `develop-swan` also pushed
+(`83c7b68..d4ec59a`). **Docs commits (`7f4f82b`, `83c7b68`, `d4ec59a`) were
+deliberately NOT cherry-picked to `stable`**, per this fork's standing
+convention that each branch narrates its own promotion story in its own
+`PROGRESS_NOTES.md`/`CLAUDE.md` — only the code commits (`6ac45e5`→`9406b79`,
+`392add7`→`45525cb`) went to `stable`.
+
+Production-side deployment (pull / `bench build --app posawesome` — required,
+frontend files changed / `bench migrate` — N/A, no doctype/fixture/print-format
+touched / restart) run by the user themselves, same pattern as every other
+promotion this fork.
+
+**Deployed and verified live on production.** The user confirmed both
+directions of bug #2's fix (increasing and decreasing the preferred payment
+box) working correctly on the actual production server, not just staging or
+`stable`/GitHub. Bug #1 and bug #2 are both fully closed as of 2026-08-25 —
+built, tested, promoted, deployed, and live-verified on production. Only
+open items remaining from this whole payment-screen arc are bug #3
+(multi-"cash"-named-method validation gap) and the credit-forced-after-fill
+gap, both still documented-only, not built (see section 29's "Deferred /
+open items" for both).
+
+## 31. Generic-customer store-credit leakage: real gap found and fixed (2026-08-25)
+
+**The concern, raised by the user.** `posa_is_generic_customer` (section 19,
+`72fc12e`) was built to flag shared/anonymous customer records (e.g.
+"Anonymous", used across many unrelated walk-in sales) so loyalty
+points/portal codes don't pool onto them. The user asked, urgently: does
+that protection extend to store credit too? Scenario -- a customer buys
+under "Anonymous", returns it weeks later, staff finds the original
+invoice for the return (auto-populating the return's customer field to
+match -- "Anonymous" again), and under this store's credit-only return
+policy (`posa_returns_credit_only`, section on "Enforce credit-only
+returns"), that return issues store credit to "Anonymous" -- redeemable by
+any future stranger selected as the same shared account. Real money, not
+a cosmetic loyalty gap.
+
+**Verified, not assumed.** Traced the entire `posa_is_generic_customer`
+usage surface (every reference in the codebase): its only effect is
+clearing `loyalty_program`/`posa_loyalty_portal_code` in
+`customer.py`'s `ensure_loyalty_portal_code()`, plus excluding generic
+customers from the rewards-portal sync job. **Zero references anywhere in
+the Sales Invoice/return/credit submission pipeline.**
+`get_available_credit()` (`payments.py`) filters purely by customer name --
+confirmed it treats a generic customer's pooled negative-outstanding
+invoices exactly like a real individual's, no special-casing at all.
+Confirmed live on staging (`bench console`): two customers flagged
+generic ("Anonymous", "anno"), neither currently pooling credit *on
+staging* -- doesn't rule out production, which this session has no direct
+access to check (flagged back to the user as a manual follow-up, see
+below). Confirmed the exact trigger path live in code:
+`Returns.vue:774`, `invoice_doc.customer = return_doc.customer;` --
+unconditional, matching the user's description exactly.
+
+**First proposed fix was wrong -- caught before building, by tracing
+precisely instead of assuming.** Initial idea: block the credit-issuing
+return and have staff swap in a newly-created real customer. Traced
+precisely why this can't work: ERPNext core
+(`erpnext/controllers/sales_and_purchase_return.py`'s
+`validate_return_against()`, called from `AccountsController.validate()`
+on *every* save of a return, not just submission) hard-requires the
+return's `customer` to exactly match `return_against`'s original
+invoice's customer, throwing a "Party Mismatch" error otherwise. There is
+no way to keep the `return_against` link and attribute the return to a
+different customer. Confirmed this app already has a working, built
+escape hatch for exactly this shape of problem -- **"Return without
+Invoice"** (`posa_allow_return_without_invoice`, `Returns.vue`'s
+`return_without_invoice()`), which never sets `return_against` at all.
+The user tested this live and confirmed it works correctly (credit
+issued to the real customer, items/stock handled properly).
+
+**The actual fix, built:**
+1. **Server-side guard (authoritative)** --
+   `_guard_generic_customer_stored_credit()`, a new sibling function next
+   to the existing `_guard_return_cash_refund()` in
+   `invoice_processing/creation.py`, called from the same call site
+   (`_normalize_return_payment_rows`) with the same timing (only at
+   genuine final submission, never during draft-save/cart-building --
+   verified against all 5 call sites of `_normalize_return_payment_rows`
+   in the file). Throws when: `is_return`, `return_against` is set, the
+   return would leave nonzero credit (`abs(paid_amount) < abs(grand_total)`,
+   with a precision-based tolerance), and the customer is
+   `posa_is_generic_customer`. Message points staff at "Return without
+   Invoice" by name.
+2. **`get_invoice_for_return()`** (`invoice_processing/returns.py`) now
+   returns a `posa_customer_is_generic` field so the frontend can steer
+   staff early, before they fill out a whole return.
+3. **Client-side guards (defense-in-depth, matches this codebase's
+   established pattern)** -- added at **both** real entry points that set
+   a return's customer from the original invoice (only one was
+   originally named; grepping found a second, independent one):
+   `Returns.vue`'s `submit_dialog()` (line ~774) and
+   `InvoiceManagement.vue`'s `createReturn()` (line ~3749). Both block
+   immediately and toast the same guidance the moment
+   `posa_customer_is_generic` comes back true, before building the return
+   invoice at all -- deliberately unconditional on the credit-only policy
+   setting (matches what was asked; the authoritative server-side check is
+   the one that's precisely conditioned on whether credit would actually
+   result).
+
+**Tests.** Backend: 8 new tests in
+`test_return_generic_customer_credit_guard.py`, covering both directions
+(blocks / doesn't block) across every branch -- non-return, draft-save
+timing, no-`return_against`, full-cash-refund, non-generic customer,
+zero-refund credit, partial-refund credit, and a precision-boundary case.
+Frontend: `invoiceManagementGenericCustomerCreditGuard.spec.ts` (2 tests,
+real component method invocation via `(InvoiceManagement as any).methods
+.createReturn.call(context, ...)`, same pattern already established by
+`invoiceManagementSupervisor.spec.ts`) -- passing. **`Returns.vue` itself
+could not get the equivalent test** -- see the tooling finding below;
+its guard is the same few lines as `InvoiceManagement.vue`'s (already
+proven working) plus confirmed compiling correctly in the real
+`bench build` output, but has no dedicated automated regression test.
+
+**Tooling finding, worth knowing for any future frontend test work:**
+Vitest bundles its own internal Vite (`node_modules/vitest/node_modules/vite`,
+found at **5.4.21** in this repo) which is a full major version behind
+the root Vite used for the real build (**6.3.5**). The older bundled Vite
+does not resolve an import written with an explicit `.js` extension that
+actually points at a `.ts` file (a deliberate, working TypeScript/bundler
+convention this app uses **pervasively** -- 20+ files including
+`Payments.vue`, `Invoice.vue`, `Pos.vue` import `stores/uiStore.js`/
+`stores/invoiceStore.js` this way, and it resolves correctly in the real
+build every time via the root Vite). Any *new* Vitest spec that tries to
+mount one of those 20+ components for the first time will hit this same
+"Failed to resolve import ... Does the file exist?" error --
+`InvoiceManagement.vue` and a handful of others happen to already use the
+bare-specifier style and so were never affected; `Returns.vue` was simply
+the first of the `.js`-suffixed majority anyone tried to test-import.
+**Not fixed this session** -- the real fix (aligning Vitest's transitive
+Vite version with the root one) is a dependency change with broad blast
+radius across the whole 226-file suite, out of scope for a security fix.
+Normalizing individual files' import style away from the codebase's own
+dominant convention was rejected as the wrong direction to fix it in.
+
+**Full regression check:** backend module 8/8 (isolated,
+`bench --site staging.local run-tests --module
+posawesome.posawesome.api.test_return_generic_customer_credit_guard`);
+frontend suite 226/226 files, 1125/1125 tests; `bench build --app
+posawesome` clean (confirms `Returns.vue`'s real code compiles, despite
+Vitest being unable to import it); `bench migrate` N/A (only `.py`/`.vue`
+files touched). Security review: traced `frappe.db.get_value` usage (Frappe
+ORM, parameterized, same pattern already used identically elsewhere in
+this codebase -- not string-interpolated SQL); confirmed zero `v-html`
+usage anywhere in the entire frontend (grepped), so the new toast messages
+interpolating `customer_name` carry no XSS risk; confirmed the new
+`posa_customer_is_generic` API field discloses nothing the caller doesn't
+already have access to (`customer`/`customer_name` are already in the same
+response); traced that a client attempting to submit a mismatched
+`customer`/`return_against` pair is still safely caught by ERPNext's own
+core `validate_return_against()` regardless of whether this new guard's
+generic-customer condition happens to apply. Live-verified on staging via
+`bench console` against the real "Anonymous" customer record: the guard
+throws for it and does not throw for a real customer, using the actual
+production code path (not mocked).
+
+**Follow-up bug, found by the user's own live testing, fixed same day
+(`2933f33`).** The user tested both client-side entry points live:
+`InvoiceManagement.vue`'s worked correctly (exact guard message shown).
+`Returns.vue`'s blocked the return correctly but instead of the guard
+message, staff saw a raw JS error: "Cannot read properties of undefined
+(reading 'show')". Root cause, confirmed by directly comparing
+`Returns.vue`'s `setup()` against `InvoiceManagement.vue`'s working one
+(not guessed): `Returns.vue` never called `useToastStore()` or returned
+it from `setup()` at all -- unlike every other component in this app that
+uses `this.toastStore`. **Every single `this.toastStore.show()` call in
+this file was already broken before today**, including three pre-existing
+ones (invoice-load error, "no returnable items", search error) -- nobody
+had apparently ever reliably hit any of them before the new guard, which
+staff now exercise routinely. Fixed by adding the same
+`import { useToastStore } from "../../../stores/toastStore"` /
+`useToastStore()` / return wiring `InvoiceManagement.vue` already has.
+Live browser re-verification of this specific fix was attempted but
+hit the same pre-existing terminal-lock/browser-automation friction
+documented earlier in this same section and in `CLAUDE.md` -- stopped
+per that same lesson rather than continuing to fight it; confidence
+instead came from the direct side-by-side code comparison (not a guess)
+plus a clean `bench build` and full frontend suite (226/226, 1125/1125).
+**User spot-checked both entry points live themselves afterward and
+confirmed both now correctly block with the proper guidance message --
+no more JS error.**
+
+**Promoted.** `248b473` and `2933f33` (the two code fixes; docs commits
+`e1c79b2`/`5fe7050` deliberately not cherry-picked, per this fork's
+per-branch-narrates-its-own-story convention) cherry-picked onto `stable`
+as `0308161`/`41c9a57` (diffs verified byte-identical on every touched
+file), full regression re-run on `stable` (backend module 8/8; frontend
+suite 226/226 files, 1125/1125 tests; `bench build --app posawesome`
+clean), pushed to GitHub (`45525cb..41c9a57`). `develop-swan` also pushed
+(`051bfd3..5fe7050`).
+
+**Deployed and verified live on production.** The user ran the
+production-side deploy themselves (pull / `bench build` / restart) and
+confirmed both return paths (Sales Return search, Invoice Management)
+correctly block a credit-issuing return against the shared "Anonymous"
+customer on the real production server, not just staging.
+
+**Production credit-pooling check: done, resolved.** The user's own
+earlier live testing of this exact flow (before today's fix went live)
+had left 60 OMR of real store credit pooled on production's actual
+"Anonymous" account -- confirming this session's staging-only check
+couldn't rule out. The user found it, cancelled the test return invoice
+that created it, and confirmed the balance is back to 0. Test residue
+from verifying the bug, not a real customer's credit and not an ongoing
+incident -- no further tracking needed. Bug #1 and bug #2 (section 30)
+and this generic-customer credit gap (section 31) are all now fully
+closed: built, tested, promoted, deployed, and live-verified on
+production.
+
+## 32. Loyalty points: business policy change to no-expiry, and a real bug caught before it shipped (2026-08-25)
+
+**Business decision:** loyalty points no longer expire, going forward.
+The user planned to set Loyalty Program "Swan Rewards" -> Expiry
+Duration to 0 (or blank) to represent this.
+
+**Caught before the change was made, by tracing the actual code path
+instead of assuming:** `expiry_duration = 0` does **not** mean "never
+expires" in ERPNext core. Traced `add_days(self.posting_date,
+lp_details.expiry_duration)` (`sales_invoice.py:2164`) -- a duration of 0
+sets a newly-earned point's `expiry_date` to the *same day it's earned*.
+Traced further into the balance calculation itself
+(`get_loyalty_details()`, `loyalty_program.py:78-79`, filters
+`expiry_date >= today`): those points would show up in the customer's
+balance for exactly one day and then silently vanish the next -- a real
+loss of value, not a display bug. Blank isn't a legal alternative either
+-- the DB column is `int(11) NOT NULL DEFAULT '0'`, confirmed live, so a
+blank form field just becomes 0 too. Correct value for "effectively
+never expires" (ERPNext has no first-class "unlimited" option): a very
+large duration, **36500** (100 years).
+
+**Downstream impact also traced, not assumed:** the rewards portal's
+"X points expiring on [date]" warning (`swan_rewards`) is driven by a
+live SQL query in `rewards_sync.py` for the nearest `expiry_date >=
+today` across real `Loyalty Point Entry` rows, not by the Loyalty
+Program setting directly. With `expiry_duration=0`, this would have
+shown "points expiring today" continuously. With a large duration, it
+would have shown a real-but-meaningless ~100-years-out date instead of
+hiding cleanly. Since "no expiry" is now the actual business policy
+(not a workaround to be hidden conditionally), the user asked for full
+removal, not a conditional hide.
+
+**Fix, both repos:**
+- `posawesome` (`9d50717`): removed the nearest-expiry SQL query and
+  `expiry_amount`/`expiry_date` fields from `rewards_sync.py`'s
+  `_build_customer_payload()` entirely. Updated the module docstring's
+  stated rationale for the daily full-refresh job (previously cited
+  point expiry specifically; now cites general balance drift, e.g. a
+  Loyalty Program `conversion_factor` change, which still applies).
+- `swan_rewards` (separate repo, `github.com/somratsam/swan-rewards-portal`,
+  `a80da89` on `main`): removed the feature end to end -- the
+  `expiry_amount`/`expiry_date` fields (and their now-orphaned DB
+  columns; confirmed `bench migrate` does not drop columns for fields
+  removed from a DocType JSON, dropped them explicitly via `ALTER
+  TABLE`, then reconfirmed a second `bench migrate` stayed clean/didn't
+  recreate them) on `Rewards Customer`, the storing logic in `sync.py`,
+  the `SELECT`/response fields in `lookup.py`, and the entire expiry
+  card in `www/index.html` -- HTML, CSS (including the `--amber-*`
+  tokens and `.icon-badge--amber`, used nowhere else), both locale
+  strings (en/ar), and the JS show/hide logic. Two test fixtures
+  (`test_lookup.py`, `test_receipt.py`) updated to match.
+
+**Staging state fixed as part of this, not left as a separate TODO:**
+Loyalty Program "Swan Rewards" -> Expiry Duration set to 36500 on
+`staging.local` (was found to already be 0 there -- differs from what
+the user believed production currently has; production's actual value
+was NOT checked or changed by this session, the user is doing that
+separately).
+
+**Full regression check:** posawesome backend module 3/3
+(`test_rewards_sync.py`, unaffected -- confirms no accidental breakage
+of the unrelated PDF-generation tests in the same file); live-called
+`_build_customer_payload()` against a real customer, confirmed no
+expiry keys and no error. `swan_rewards`'s full test suite 39/39 (`python
+-m unittest` against all 4 test files -- this app's tests are fully
+frappe-stubbed, no bench/site context needed, so unaffected by the
+`FrappeTestCase`/ERPNext bootstrap issue noted in section 30's CLAUDE.md
+entry, which requires the `erpnext` app that this bare-Frappe site
+doesn't have installed). `bench --site rewards.staging.local migrate`
+run twice, clean both times, confirmed idempotent (columns stayed
+dropped, weren't recreated). Live-called `match_customer()` against the
+real post-migrate DB, confirmed the trimmed `SELECT` executes without
+error. `bench build`: N/A for both repos -- no `.vue`/`.ts` touched in
+posawesome, and `swan_rewards`'s `www/index.html` is static/server-rendered
+with no separate build step at all.
+
+**Promoted, pushed, deployed, and verified live on production -- DONE.**
+posawesome: committed to `develop-swan` (`9d50717`), cherry-picked onto
+`stable` as `41567ce` (diff verified byte-identical), full regression
+re-run on `stable` (backend 3/3, frontend suite 226/226 files, 1125/1125
+tests), both branches pushed to GitHub. `swan_rewards`: pushed to GitHub
+on `main` (`a80da89`). Staging confirmed working by the user first
+(expiry section gone, points display normally, nothing broken) before
+either production deploy.
+
+**Production.** The user ran both deploys themselves (posawesome:
+`bench pull` + `bench restart`, no build/migrate needed -- pure Python
+change, no doctype/fixture touched; `swan_rewards`: `git pull` +
+`bench --site rewards.swan-intl.com migrate` + `bench restart`, same
+site-on-the-same-bench deployment shape as posawesome's own, confirmed
+against section 18's original rollout record) and fixed production's
+Loyalty Program `expiry_duration` to 36500 (the same value used on
+staging -- production's actual prior value was never confirmed by this
+session, only staging's 0 was). **Confirmed working live on production
+by the user:** portal correctly shows no expiry section, points display
+normally. The orphaned `expiry_amount`/`expiry_date` DB columns on
+production's `Rewards Customer` table were flagged as optional
+`bench migrate`-doesn't-drop-columns cleanup (same as staging), left to
+the user's discretion -- not required for correctness.
+
+## 33. Variant sibling scan hint (Phase 1): new feature, a real blinking-dialog bug, and a dead selected-state chip style fixed the same day (2026-08-25)
+
+**Business context:** Swan International is a multi-brand fashion
+retailer (9 brands, ~6000 items) where size/color variants are the norm,
+not the exception. Staff scanning a barcode had no way to see, at the
+point of scan, that the same style exists in other sizes/colors -- a
+real lost-sale gap (a customer wants Style 123 in Medium but the scanned
+unit is Large; nothing surfaces that Medium is in stock at this store).
+
+**Investigation-only first, per the user's request, before any build.**
+Five questions were answered from the existing codebase before any code
+was written: (1) every barcode scan response already returns
+`variant_of`/`has_variants` free of charge -- no new backend field
+needed; (2) `get_item_variants()` (`posawesome/api/items.py`) already
+implements the exact fetch needed -- sibling list + per-variant
+`actual_qty` (single-warehouse, POS-Profile-scoped) + attribute
+metadata, already used by the pre-existing template-item "choose a
+variant" flow; (3) `Variants.vue` already renders this exact data shape
+and can self-fetch when opened with an empty `items` array; (4) same-store
+data only (no cross-store stock) was the only architecturally clean
+option without new backend work; (5) effort estimate was small given
+items 1-3 -- confirmed correct in practice. The user approved "Option A
+(same-store only)" and asked for the implementation described below,
+explicitly staging-only pending their own visual test of the placement
+before any consideration of production.
+
+**Phase 1 build, three pieces, one shared bug and one shared UI fix
+discovered along the way:**
+
+**Piece 1 -- the hint itself.** After a scan-add of an item with
+`variant_of` set, `useScanProcessor.ts`'s `addScannedItemToInvoice()`
+sets a new `scanVariantHint` ref (added to `useScannerInput.ts`) to
+`{ itemCode, itemName, variantOf }`; a plain (non-variant) scan clears
+any stale hint from a previous scan. This is purely informational --
+never blocks or delays the scan-and-add flow, never fetches anything on
+its own. A new small component, `ScanVariantHint.vue` (a
+non-blocking, dismissible `v-snackbar`, `timeout="-1"`, bottom-anchored)
+renders it in `ItemsSelector.vue`, with "Other sizes/colors of {item}
+may be available" -- deliberately not promising a count, since the count
+is unknown without a fetch. Tapping "View" (`viewScanVariantHint()` in
+`ItemsSelector.vue`) fetches siblings on demand and opens the existing
+`Variants.vue` dialog, reusing it as-is (no changes to that component
+for this piece).
+
+**Bug found during the user's own live testing (real barcode
+89410444020014): the dialog blinked/flickered after opening instead of
+rendering cleanly.** The user correctly hypothesized the bug was in how
+the new entry point *triggers* the dialog, not in `Variants.vue` itself
+(confirmed zero lines changed there at that point). Traced live first,
+per the user's explicit instruction not to guess: a temporary Playwright
+script intercepting `get_item_variants` network calls showed 7+ calls
+firing within ~4 seconds of opening the dialog, still climbing when the
+trace window ended -- an unbounded refetch loop, not a one-off. Root
+cause, confirmed by re-reading `Variants.vue`'s actual watcher code line
+by line: its `"uiStore.variantsData"` watcher (`deep: true`) sets
+`this.parentItem = data.item` -- the *same* reactive object as the
+store's own nested `item`, not a copy (Vue doesn't re-wrap an
+already-reactive value). Its separate `attributes_meta` watcher then
+mutates `this.parentItem.attributes` in place, which -- because
+`parentItem` IS that shared object -- re-fires the deep watcher on
+itself. The original implementation passed `items: []` (relying on
+`Variants.vue`'s own on-demand `fetchVariants()`), and that internal
+fetch only ever reassigns the component-local `this.items` via
+`.concat()`, never the store's own `data.items` -- so every re-fire saw
+an empty stored array again and re-triggered `fetchVariants()` from
+scratch, wiping and reloading the dialog repeatedly. A first attempted
+fix (`toRaw()` on the `pos_profile` object passed into `openVariants`)
+addressed a real but secondary reactive-coupling concern and was
+re-traced and found insufficient -- the loop had nothing to do with
+`pos_profile`. **Actual fix:** `viewScanVariantHint()` now pre-fetches
+variants itself (a newly-exported `fetchItemVariantsMeta`, reused
+verbatim from `useItemCreation.ts`, the same function the pre-existing
+template-item flow already calls) and opens the dialog with a populated
+`items`/`attrsMeta` from the start -- exactly the contract the old,
+already-stable template-item trigger uses, which is why that flow never
+hit this bug. With `items` non-empty from the first run,
+`Variants.vue` never calls its own `fetchVariants()`, so the loop
+cannot start; re-tracing the watcher chain against the fix confirms it
+settles after one harmless extra pass with zero additional network
+calls. `Variants.vue` remains completely unmodified by this fix.
+
+**Second bug found during the user's own visual testing of the fixed
+dialog: the size/color filter chips (e.g. "BLACK", "57") had no visible
+selected state when tapped**, giving staff no confirmation of the
+currently-applied filter. Root cause: `Variants.vue`'s
+`selected-class="green--text text--accent-4"` on the chip group is dead
+Vuetify 2 class naming (double-dash `--text` utility classes) that does
+not exist anywhere in this app's Vuetify 3 (confirmed: zero matches in
+Vuetify's own bundled CSS) -- it has silently never applied any style,
+in *either* the new scan-hint dialog or the pre-existing template-item
+one, since both share this one component and this dead prop predates
+this whole feature. Fixed with an explicit per-chip `:variant`/`:color`
+binding (`outlined` -> `flat` + `primary` when the chip's value matches
+the active filter for its attribute), matching the same
+selected-vs-unselected visual pattern already used elsewhere in this app
+(`DocumentSourceSelector.vue`'s `variant="isActive ? 'flat' : 'tonal'"`)
+rather than introducing a new one. This is a template-only change to the
+one shared chip row -- confirmed to affect both flows identically (both
+had the same silently-broken indicator; both are fixed the same way).
+
+**Full regression check, all three pieces:** frontend suite 226/226
+files, 1130/1130 tests (new coverage: 4 tests in
+`useScanProcessor.spec.ts` for the hint set/clear/replace/non-gating
+behavior, 1 in `useScannerInput.spec.ts` for the hint ref and clear
+function). `bench build --app posawesome` clean (including `vue-tsc`
+type-checking, which caught one real error along the way -- see below).
+Backend: N/A, no Python touched. `bench migrate`: N/A, no
+doctype/fixture/print-format touched. Security review: N/A, no new user
+input, auth, or data-access surface -- purely client-side UI reusing an
+already-permission-scoped, already-existing backend endpoint. Confirmed
+untouched: `Variants.vue`'s own fetch/filter/add-to-cart logic,
+`useItemCreation.ts`'s pre-existing `handleVariantItem`, `uiStore.ts`'s
+`openVariants`/`closeVariants`, and `ItemsTable.vue` (cart rendering) --
+all verified via diff to have zero changes across the whole arc, plus
+the user's own live confirmation that the normal fast scan-and-add flow,
+a plain (non-variant) scan showing no hint, and the existing
+template-item flow all still work exactly as before.
+
+**One real type-error caught by the build, not by testing:**
+`const scanVariantHint = ref(null)` in `useScannerInput.ts` initially
+inferred as `Ref<null>` permanently (TypeScript can't widen a bare
+`ref(null)`'s type from later assignments), causing `vue-tsc` to fail on
+`scanVariantHint.itemName`/`.variantOf` property access in
+`ItemsSelector.vue`. Fixed with an explicit generic:
+`ref<{ itemCode: string; itemName: string; variantOf: string } | null>(null)`.
+
+**Promoted, pushed, deployed, and verified live on production -- DONE.**
+All three pieces committed to `develop-swan` in one commit (`f16a89c`)
+-- the feature, the blinking-dialog fix, and the chip selected-state fix
+were built and verified together in the same session, so they're
+recorded as one story here and in the commit message rather than split.
+User confirmed all three working live on staging first (real barcode
+89410444020014: item adds normally, hint appears, "View" opens the
+dialog cleanly with no blinking, siblings show correct same-store
+stock, and filter chips now show a clear selected state in both the new
+dialog and the existing template-item one) before any promotion.
+Cherry-picked onto `stable` as `6684e78` (diff verified byte-identical
+against `f16a89c` on every touched code file), full regression re-run
+on `stable` itself (clean `bench build`, 226/226 files, 1130/1130
+tests), both branches pushed to GitHub. Production deploy: `git pull` +
+`bench build --app posawesome` (frontend-only change, no
+doctype/fixture/print-format touched, so no `migrate` needed) + `bench
+restart`, run by the user. **Confirmed working live on production by
+the user** with the same real barcode -- scan, hint, dialog, and
+selected-state chips all verified.
+
+## 34. Barcode scanning was digits-only and length-blind to real catalog data; two real bugs found live, redesigned around scan confidence instead of guessing (2026-08-25 → 2026-08-26)
+
+**Original report:** scanning/pasting a 13-digit barcode auto-added the
+item; a 10-digit one fell back to manual search results instead. Traced
+precisely (not guessed) into `keyboardScanMinLength` -- hardcoded to
+`12` in `useScannerInput.ts`, shared by both the paste-classification
+path (`classifyClipboardScanText`) and the real hardware-scanner
+rapid-keystroke path (`isLikelyKeyboardScan`). A 10-digit value failed
+both; a 13-digit value passed both. Confirmed via a real DB query that
+the backend lookup (`get_items_from_barcode()`, a parameterized
+`Item Barcode` exact-match) has zero length restriction at all -- the
+gate was a purely frontend heuristic, disconnected from any real
+registered barcode data.
+
+**Escalation: `isNumericString` (`/^\d+$/`) rejects ANY letter or
+space, at four separate, redundant gates** (`handleSearchKeydown`'s
+per-keystroke check -- the earliest and most fundamental, since it
+decides whether to even start buffering a rapid-keystroke sequence;
+`isSearchFieldPrimedForScan`; the same regex inside
+`isLikelyKeyboardScan`; and, for paste specifically, an *additional*
+bug where `sanitizeClipboardText` stripped ALL whitespace unconditionally,
+which would corrupt any barcode containing a meaningful internal space
+even if the charset gates were fixed). Confirmed via a physical example
+the user provided: Charlotte Wix's real barcode format is
+`"PA5 76LE"` -- letters and a space, not an edge case for that brand,
+its *only* format.
+
+**Real master-data analysis, all 9 brands, provided by the user (staging
+only ever had 1 of 9 brands loaded, so this had to come from outside
+this dev environment):** real barcode lengths range 7-14 characters
+across the catalog; FURLA/MARELLA/MAX&CO./PENNYBLACK/TEEMBE/UCB are pure
+numeric (12-14 digits); GEOX and LIU.JO DONNA are almost entirely
+numeric with a handful of alphanumeric exceptions (`"PYTSETPYTS10"`,
+lowercase `"dl0084003392"`); Charlotte Wix is alphanumeric for 100% of
+its 63 items, including a `"/"` character in at least one real barcode
+(`"FE1 10L/XL"`). No cross-brand barcode collisions. ~70 items across 3
+brands were actively affected by the combination of the numeric-only
+gates and the length≥12 threshold.
+
+**Fix, phase 1 (charset + length):**
+- `isNumericString` replaced with `isBarcodeCandidateChar`/
+  `isBarcodeCandidateString` (`/^[A-Za-z0-9 /]/`), covering every real
+  character class found in the actual catalog. Applied at all four
+  gates; dead code (`shouldResetScanOnInput`, unused anywhere) deleted.
+- `keyboardScanMinLength` lowered from `12` to `7` -- the real observed
+  catalog minimum (Charlotte Wix's shortest format), not padded lower,
+  since padding below a known real minimum only widens false-positive
+  surface with no benefit. Kept as one shared hardcoded constant rather
+  than building dynamic derivation from live registered-barcode data --
+  a deliberate scope decision (real minimum is now known, and building
+  a live-query/cache mechanism for a value that only changes on
+  deliberate brand-onboarding decisions was judged not worth the added
+  complexity for this codebase).
+- `sanitizeClipboardText` now only `.trim()`s (leading/trailing
+  whitespace) -- no longer collapses/strips internal whitespace, so a
+  barcode with a real internal space survives a paste intact. Confirmed
+  a no-op for every pure-numeric brand (no whitespace to strip in the
+  first place).
+- Real test items created on staging (`TEST-SCAN-CW-01/02`,
+  `TEST-SCAN-GEOX-01`, `TEST-SCAN-LIUJO-01`, using the exact real
+  barcode values above, clearly `[TEST SCAN]`-labeled, 10 units stock
+  each in the POS Profile's warehouse) and independently verified
+  against the real `get_items_from_barcode()` backend function --
+  confirming the backend was already correct before any frontend change
+  -- before building anything.
+- Full regression: frontend suite 226/226 files → 1142/1142 tests after
+  this phase (12 new tests covering real alphanumeric/space/`/` formats
+  at real lengths plus explicit regression proof the existing
+  pure-numeric brands behave identically).
+
+**Two real bugs found during the user's own live testing on staging,
+both traced live per explicit instruction, not guessed:**
+
+**Bug A -- premature-firing race.** Scanning the real Charlotte Wix
+barcode 89410444020014-adjacent-style item `"PA4 79SF"` (8 characters)
+correctly added the item, but a spurious "Item not found: PA4 79S"
+error dialog *also* appeared -- missing the final "F". Root cause:
+`handleSearchInput` (built for virtual/scripted input tools that update
+the field's value without firing real keydown events at all, per its
+own pre-existing comment) has no keystroke-speed check whatsoever -- it
+fires whenever the field's value hasn't changed for `keyboardScanProcessingDelay`
+(100ms), regardless of how it got there. At the old `minLength=12`,
+hitting exactly 12 characters mid-sequence with more still coming was a
+rare coincidence for 12-14 digit barcodes; at `minLength=7` with
+Charlotte Wix's 7-8 character format, "exactly at the threshold with
+one character still to go" is close to the normal case, and a routine
+human pause >100ms before the last character reads as "the value has
+settled" on the *incomplete* string. Fixed by deferring to
+`handleSearchKeydown`'s own timing-verified evaluation when its buffer
+is already tracking the identical value (only possible for genuinely
+fast, scanner-speed input -- real human typing keeps resetting that
+buffer via its own gap check), avoiding redundant double-scheduling of
+two independent evaluations for the same fast-typed moment. **Traced
+precisely, not assumed: this defer does NOT, by itself, stop a
+premature evaluation from firing during ordinary human typing** (a
+real >100ms pause mid-sequence can still trigger `handleSearchInput`'s
+idle check on its own, since the defer only applies when
+`handleSearchKeydown`'s buffer is tracking the value, which it never is
+for realistic human-paced typing) -- what actually makes that harmless
+is Bug B's confidence-based fix below, not this defer. A dedicated test
+("tags a premature idle-settle fire on human-paced typing as low
+confidence, never high") confirms the premature call does fire but is
+never tagged `"high"`.
+
+A second, related robustness gap found while validating this fix:
+`isLikelyKeyboardScan`'s *average*-interval-only check can be fooled by
+a fast-typed prefix diluting one slow gap below the threshold, even
+though no real human or working scanner would naturally produce that
+exact pattern (a genuine scanner sends every character uninterrupted at
+uniform speed; the pattern requires literally impossible sub-45ms/char
+sustained "human" typing followed by an artificial pause) -- added
+`maxGapObserved` tracking (the single worst inter-keystroke gap, not
+just the average) as a stricter, defensive check with its own direct
+unit tests (`keyboardScan.spec.ts`, new file).
+
+**Bug B -- classification gap, confirmed with real data, not
+hypothetical.** Searching for style code `"4524019703"` (10 digits,
+pure numeric -- a real internal style/reference code, not a registered
+barcode) triggered a Scan Error instead of showing search results.
+Confirmed via a direct DB query: `"4524019703"` is a real `Item` in the
+catalog (the style/template item), and it is literally a *prefix* of
+its own variant's real 14-digit registered barcode
+(`"45240197030024"`) -- a style-code search and an in-progress scan of
+one of its own variants can be character-for-character identical at
+any given moment. No length or charset rule can ever perfectly separate
+these; the codebase already demonstrated the correct pattern in one
+place (`_performSearch`'s `resolveItemByBarcode` branch: check a real,
+already-loaded local index first, only escalate on a confirmed match)
+but applied it inconsistently -- a second, separate, hardcoded
+`/^\d{12,}$/` branch in the same function committed blindly with no
+local pre-check at all, and the deeper, always-correct backend lookup
+(`get_items_from_barcode()`) had its "not found" outcome wired to
+*always* show the error dialog regardless of how confident the trigger
+was that this was a deliberate scan in the first place.
+
+**Redesign: confidence-based, not classification-based.** Rather than
+trying to guess better from shape (provably impossible given the real
+data above), every trigger source is tagged `"high"` or `"low"`
+confidence, and only a `"high"`-confidence miss shows the error dialog:
+- `"high"`: `handleSearchKeydown`'s verified scanner-speed timing
+  (`isLikelyKeyboardScan`), the `onScan.js` hardware-scanner library's
+  own independent document-level detection (`triggerOnScan`), a
+  camera-decoded barcode (a genuine scan of a real symbol -- found
+  while auditing every real caller of `onBarcodeScanned` for coverage,
+  not previously identified), and `resolveItemByBarcode`'s
+  already-locally-confirmed exact match.
+- `"low"`: `handleSearchInput`'s idle-settle path, paste, and the
+  `/^\d{12,}$/` heuristic -- none of these can distinguish a real
+  barcode from a shape-alike search term on their own.
+- On a match, behavior is unchanged regardless of source -- auto-add to
+  cart, exactly as before; this was never in question.
+- On a miss, only `"high"` shows the "Item not found" dialog. `"low"`
+  stays completely silent -- no dialog, no error tone -- and, for the
+  `/^\d{12,}$/` branch specifically, no longer returns early: normal
+  search now runs alongside the (silent, fire-and-forget) barcode
+  attempt, so a miss surfaces real search results instead of a dead
+  end, exactly matching what the user asked for ("search should still
+  happen").
+- The stock-shortage error path (`addScannedItemToInvoice`, a
+  completely different, legitimate error since the item *was* found)
+  is untouched -- confirmed via its own existing passing tests.
+
+**Full regression check, final state:** frontend suite **227/227
+files, 1158/1158 tests** (16 new across this phase: confidence tagging
+at all six real trigger sources, the timing-race defer, `maxGapObserved`,
+both miss/match paths in `useScanProcessor`, the `/^\d{12,}$/`
+fallthrough, and a new dedicated `keyboardScan.spec.ts` for
+`isLikelyKeyboardScan` in isolation). `bench build --app posawesome`
+clean. Backend: N/A, no Python touched across either phase. `bench
+migrate`: N/A. Security: no new input/auth surface -- confidence only
+changes which client-side heuristic path a value arrived through before
+reaching the same, already-safe, unchanged backend lookup.
+
+**Promoted to `develop-swan` as one commit** (`bc4f33f`) -- despite
+evolving through several iterations (initial charset/length fix →
+timing-race discovery → confidence redesign) within the same session,
+none of the intermediate states were ever separately committed or
+promoted, so it's recorded as one commit and one story here, matching
+this session's established precedent (section 33's sibling-hint feature
+did the same). User retested all scenarios live on staging before
+promotion was requested (Charlotte Wix scan-and-add, style-code search,
+real barcode paste, genuine scan failure still correctly alarming).
+
+**A search-results-clear investigation happened the same day** (dead
+`itemsSelectorSearch.clearSearch()` in `useItemsSelectorSearch.ts` --
+correctly designed, including a `usesLimitSearch`-aware reset, but never
+wired to the UI, and internally broken besides since it reads through a
+`<script setup>` component proxy that never exposes the state it needs
+via `defineExpose`; the live "X" button instead calls a different,
+simpler `clearSearch()` in `useItemsSelectorSearchInput.ts` that only
+clears the text, never the underlying stale search-results state --
+reproduces specifically in Limit Search mode, confirmed live via this
+store's actual POS Profile config). A fix was designed and reviewed but
+the user explicitly chose not to build it in *this* session, since it
+hadn't been separately stage-tested -- built the next session instead,
+see section 35.
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed to production.** The user has
+explicitly deferred production deployment until after a physical
+barcode-scanner test at the store against real Charlotte Wix stock
+(staff have both the scanner and the actual items on hand) -- staging
+testing used pasted/typed input and the real test items created above,
+not genuine hardware-scanner keystroke timing. Do not deploy to
+production until that physical test is confirmed by the user.
+
+## 35. Search results not resetting on clear (Limit Search mode): built and promoted, one day after being investigated and deliberately deferred (2026-08-26)
+
+**Context:** section 34 investigated this gap as a side finding while
+building the barcode fix -- diagnosed precisely and a fix was designed
+and reviewed, but the user explicitly chose not to build it in that
+session since it hadn't been separately stage-tested, and didn't want
+it bundled into the barcode promotion sight-unseen. Built the next day,
+exactly per the design already reviewed.
+
+**Root cause, confirmed via code trace, not assumed:** the search box's
+"X" clear button and Enter-on-empty both only ever reset the text refs
+(`search_input`/`first_search`). In Limit Search mode (confirmed live
+on this store's actual POS Profile: `pose_use_limit_search = 1`),
+`filteredItems`/`items` hold whatever a prior server search returned --
+merely emptying the text does nothing to that state. Traced into
+`filterAndPaginate` (`useItemSearch.ts`): with an empty search term, it
+returns `items.slice(0, limit)` -- the stale results, unfiltered, not
+empty -- so the grid kept showing the last search's results
+indefinitely instead of dropping back to the existing "Scan a tag or
+search to begin" empty-browse-prompt state (section 10's
+`BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY` design, already correctly
+conditioned on `displayedItems.length === 0`, just never reached).
+
+A correctly-designed reset already existed --
+`itemsSelectorSearch.clearSearch()` in `useItemsSelectorSearch.ts`, with
+a proper `usesLimitSearch`-aware branch calling `clearLimitSearchResults()`
+-- but was never wired to the UI, and would not have worked even if it
+were: it reads/writes through `vm = vmInstance?.proxy`, and since
+`ItemsSelector.vue` uses `<script setup>`, that public proxy only
+exposes exactly what's listed in its `defineExpose({...})` block --
+confirmed by reading that block in full: `first_search`, `items`,
+`clearingSearch`, `search_backup`, `clearLimitSearchResults`,
+`resetBarcodeIndex`, and `eventBus` are all absent from it. Per the
+user's explicit instruction, this dead code and its vm-proxy issue were
+left completely untouched -- the real fix uses state already correctly
+in scope in `ItemsSelector.vue` instead of resurrecting it.
+
+**Fix, two call sites, same underlying mechanism:**
+- `useItemsSelectorSearchInput.ts`'s `clearSearch()` -- the function
+  actually wired to the "X" button -- now takes optional
+  `isLimitSearchEnabled`/`resetLimitSearchResults` callbacks (both
+  optional, so the composable still works standalone without them) and
+  calls the latter when in Limit Search mode. Wired in
+  `ItemsSelector.vue` to real, already-in-scope state:
+  `isLimitSearchEnabled: () => usesLimitSearch.value`,
+  `resetLimitSearchResults` calling
+  `itemsIntegration.clearLimitSearchResults({ preserveItems: false })`
+  (matching this store's actual `BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY =
+  true` policy -- clear means empty, not "fall back to a cached browse
+  set") plus `resetBarcodeIndex()`.
+- The identical gap reached via Enter on an emptied box (`onEnter`'s
+  wrapper delegates to `_performSearch`, whose own empty-query early
+  return -- `< 3 chars` -- never reset anything either) fixed by
+  checking for an empty trimmed `search_input` first and routing
+  through the same fixed `clearSearch()` instead of
+  `itemsSelectorSearch.onEnter(e)`.
+
+**Full regression check:** frontend suite **228/228 files, 1165/1165
+tests** (7 new, `useItemsSelectorSearchInput.spec.ts` -- covers the
+reset firing/not-firing based on limit-search mode, working correctly
+with the new deps omitted entirely, and firing through both of the
+composable's other internal callers of `clearSearch` --
+`prepareSearchInjection` and `handleItemSearchFocus`). Also re-ran the
+5 existing test files that mount `ItemsSelector.vue` as a real
+component (`itemsSelectorContainerRefWiring`, `itemsSelectorStockWiring`,
+`posNarrowSplitBand`, `posLayoutSplitRatio`, `useItemSelectorLayout` --
+23 tests) specifically to confirm the real component still wires and
+renders correctly after this change, not just that isolated units
+pass -- all green. `bench build --app posawesome` clean. Backend: N/A.
+`bench migrate`: N/A. Security: no new input/auth surface -- purely
+resets already-loaded client-side state.
+
+**Promoted:** committed to `develop-swan` (`fb20edc`), user-retested
+live on staging first (both the "X" button and Enter-on-empty now
+correctly drop back to the empty-browse prompt instead of showing
+stale results), cherry-picked to `stable`, both branches pushed.
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed.** Bundled with section 34's barcode
+fix for a single combined production deployment, pending the same
+physical hardware-scanner test at the store.
+
+## 36. Notification cleanup: a genuine double-toast bug on every scan, two stacking patterns found app-wide, and a redundant sale-completion toast (2026-08-26)
+
+**Trigger:** the user noticed scanning a barcode showed two sequential
+toasts every time -- "Scanning for: {barcode}" then "Item {name} added
+to invoice" -- and asked for a broader app-wide review of notification
+practice, not just this one case.
+
+**Root cause, traced precisely into `toastStore.ts`'s actual queue
+mechanics, not assumed:** the snackbar shows one notification at a
+time; notifications with the *same* `key` merge in place, but different
+keys queue sequentially rather than overlapping. The "Scanning for"
+toast (`key: "scanner-progress"`, `timeout: 2000`) and the "Item added"
+toast (`key: "invoice-item-added"`, default `timeout: 3000`) had
+different keys -- so on every scan, the full 2-second progress toast
+had to finish (plus a 300ms animation gap) *before* the real
+confirmation could even start showing. This wasn't just visual noise;
+it actively delayed the meaningful feedback by 2+ seconds on every
+single scan, for an operation (a local-index barcode lookup) that's
+normally near-instant.
+
+**Industry comparison requested and given honestly:** Square, Clover,
+Toast, and Shopify POS show no text confirmation at all for a
+successful scan -- the cart visibly updating plus a success tone are
+the confirmation. This app already has both (`playScanTone("success")`
+and the item appearing in the invoice), making the toast layer
+redundant on top of two already-sufficient signals, not just poorly
+timed.
+
+**Fix, phase 1 -- approved and built together, one round:**
+- Removed the "Scanning for" progress toast from
+  `useScannerInput.ts`'s `runScanPipeline` entirely -- no replacement.
+- Removed the "Item {name} added to invoice" success toast (both the
+  `toastStore` branch and its `frappe.show_alert` fallback) from
+  `useScanProcessor.ts`'s `addScannedItemToInvoice` -- no replacement.
+  A successful scan now shows zero text notifications; only the
+  existing success tone and the visible cart update remain. The
+  high-confidence scan-error path (`showScanError`/`scanErrorDialog`,
+  from section 34's confidence-based fix) is a completely separate
+  mechanism (a dedicated dialog ref, not `toastStore`) and was traced
+  and confirmed untouched.
+- Both now-unused `useToastStore()` imports removed from those two
+  files as a direct, minor consequence.
+
+**Broader app-wide sweep, done rather than assumed clean:** delegated a
+systematic search across all 216 `toastStore.show(` call sites in ~44
+files for the same class of problem (a progress-style toast immediately
+followed by a result toast for the same action, or multiple toasts
+describing one underlying event with no shared key), then personally
+verified every finding by reading the actual code rather than trusting
+the search summary. Found:
+- **`Navbar.vue`'s `handleSyncTotalsNotification`** (verified directly):
+  pending-count and synced-count are two sides of the same sync event
+  (pending drops *because* synced rises), but three independent,
+  non-exclusive `if` blocks each fired their own unkeyed toast --
+  routinely stacking 2 toasts for one real event.
+- **`invoice_utils/validation.ts`'s return-invoice `validate()`**
+  (verified directly): a positive-qty return item and a positive
+  subtotal are the same root cause (the item's positive qty IS what
+  keeps the subtotal positive) but fired as two separate unkeyed
+  toasts.
+- **A weaker candidate, explicitly scoped out at the user's request:**
+  `useBarcodePrintOutput.ts`'s fallback-printer retry toasts show the
+  same shape but are a rare, already-slow, explicit user action where a
+  progress toast has more legitimate value -- not fixed.
+
+Both confirmed cases were fixed identically: giving the existing
+`toastStore.show()` calls a shared key (`"offline-sync-status"`,
+`"return-validation"`) so they merge in place instead of stacking --
+the exact same pattern this codebase already proves works correctly in
+`socketStore.ts`'s own progress/result toast pairs (`` `invoice-processing::${invoice}` ``),
+just not applied consistently everywhere.
+
+**A second, separately-investigated finding: the post-sale "Invoice
+{id} is Submitted" toast.** Traced to `usePaymentSubmission.ts` --
+POS Awesome's own code (not a generic Frappe/ERPNext framework
+message), branching on doctype (Sales Order / Quotation / Invoice).
+Assessed differently from the scan case on purpose: completing a sale
+happens once per transaction, not repeatedly, so the *frequency* cost
+is low -- but the *content* (a raw internal accounting naming-series ID
+like `ACC-SINV-2026-00092`) reads as a technical/ERP message, and the
+moment already has two stronger confirmation signals a toast would be
+redundant with: an automatic receipt print (`onPrint(...)`, already
+wired into the same code path) and the screen transitioning for the
+next sale. None of Square, Clover, Toast, or Shopify POS show a toast
+at this exact moment either, for the same reason.
+
+**Fix, phase 2 -- separate investigation, separate approval, built
+after phase 1 was already staging-verified:** removed the plain-success
+toast branch entirely, no replacement. Explicitly kept the *other*
+branch in the same code path -- a `loading: true` progress toast shown
+only when payment entries process asynchronously after submit
+(`hasPostSubmitPaymentWork`) -- since it's the only signal staff get
+that background work is still running after the visible submit
+completes; nothing else communicates that. This distinction was
+surfaced back to the user before building (their initial approval
+phrasing didn't address it) rather than assumed either way. That
+branch already used the same shared-key merge pattern
+(`` `invoice-processing::${invoice}` ``, resolved elsewhere by
+`socketStore.ts`) and was left byte-for-byte unchanged.
+
+**"Select a customer" investigated and confirmed correct, not
+touched.** Fires from `invoice_utils/dialogs.ts`'s `show_payment()` --
+a genuine validation gate blocking checkout when no customer is
+selected, triggered only by an explicit user action (clicking to open
+payment), matching standard retail POS practice (Square/Clover/Toast
+all block checkout on a missing required field). Already correctly
+de-duplicated: no explicit `key` was needed since its stable default
+key (`` `${color}::${title}` ``) already causes repeated clicks to
+merge rather than stack. No change made.
+
+**Full regression check, both phases:** frontend suite 227/227 → 230/230
+files across the two rounds (phase 1: 230/230 files, 1169/1169 tests,
+11 new; phase 2: 230/230 files, 1170/1170 tests, 1 new). `bench build
+--app posawesome` clean both times. Backend: N/A, no Python touched
+either phase. `bench migrate`: N/A. Security: N/A, no new input/auth
+surface -- purely client-side notification removal/merging. Confirmed
+untouched: the scan-error dialog, the return-quantity auto-correction
+logic, the stock-shortage error toast (a different, legitimate error --
+the item *was* found), and the post-submit background-processing
+loading indicator and its `socketStore.ts` resolution.
+
+**Promoted:** phase 1 committed as `36d532f`, phase 2 as `6d6d5bf` --
+kept as two separate commits (no file overlap between them, and each
+went through its own investigate → propose → approve → build → stage-test
+cycle rather than being approved together, matching this session's
+established one-concern-per-commit convention). User retested both
+live on staging before either commit (scan: sound + cart update, no
+lingering popup; sync and return-validation: one clean updating
+notification instead of stacking; sale completion: no popup for a
+plain sale, processing toast still correct for the credit/cashback
+scenario).
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed.** This is the third set of changes
+staged on `stable` today (barcode fix, section 34; search-clear fix,
+section 35; this notification cleanup) -- all bundled for one combined
+production deployment, pending the user's physical hardware-scanner
+test at the store.
+
+## 37. Zero valuation rate blocking checkout for Swan's deliberate zero-rate items: three related fixes (2026-08-29 → 2026-08-30)
+
+**Trigger:** after clicking Pay, checkout showed "Row #1: Item
+35740232030013 has zero rate but 'Allow Zero Valuation Rate' is not
+enabled." Swan's business model deliberately uses zero valuation rate
+on every item (an opening-stock model with no formal PO/Supplier cost
+tracking -- see section 20 and the top of this file for the original
+model). The user asked for the actual code/data to be investigated
+first, not guessed at.
+
+**Investigation, not guessing:** `allow_zero_valuation_rate` is a
+per-line `Check` field on `Sales Invoice Item`/`POS Invoice Item`, read
+by two independent places in ERPNext core -- `stock_controller.py`'s
+`check_zero_rate()` (hooked to `on_update()`, non-blocking, just
+`frappe.toast()`, no `throw`) and `stock_ledger.py`'s fallback
+valuation lookup (`get_valuation_rate(raise_error_if_no_rate=True)`,
+a genuine hard block when no warehouse valuation rate exists at all).
+POS Awesome never set this field anywhere in invoice construction.
+Checked real Stock Ledger Entry history for the reported item and
+confirmed most prior sales had been hitting only the non-blocking
+warning path (many successful `docstatus=1` invoices with
+`valuation_rate=0` spanning weeks) -- so the bug wasn't new, it had
+just been silently tolerable until now. A related but genuinely
+separate and unfixed finding surfaced during this same check: one
+return transaction had polluted the item's valuation with a real
+non-zero incoming rate that drifted its moving average to ~4.86 --
+reported to the user as out of scope, not folded into this fix.
+
+**Fix 1 -- `apply_zero_valuation_rate_defaults()`, matching how
+ERPNext's own POS already behaves by default:** added to
+`invoice_processing/utils.py`. Reads
+`POS Profile.posa_allow_zero_rated_items` (a pre-existing field that
+had never been wired to anything) and, when enabled, sets
+`allow_zero_valuation_rate = 1` on every item row. Wired into every
+code path that independently constructs a submittable invoice item
+list: `submit_invoice()` (`creation.py`), submitted-invoice amendments
+(`submitted_invoice_edits.py`'s `build_submitted_invoice_amendment_payload()`
+-- the field isn't in `ITEM_EDITABLE_FIELDS` so it never survives a
+copy from the original invoice's rows without this), and (fix 3 below)
+`update_invoice()`'s intermediate draft save. 6 new unit tests in a new
+`invoice_processing/test_utils.py`, all passing.
+
+**Fix 2 -- `posa_allow_zero_rated_items` relocated to a discoverable
+section.** The field existed but sat in an unrelated location, making
+it effectively undiscoverable to enable on a POS Profile. Verified via
+live `frappe.get_meta("POS Profile")` query (not the fixture's
+`insert_after`, following the [[posa_walkin_customer]] "Campaign"
+section lesson already in `CLAUDE.md`) that "Sales and Return
+Controls" was the correct home and `posa_allow_partial_payment` its
+last live field. Hand-edited `custom_field.json`'s
+`posa_allow_zero_rated_items` entry directly (never `bench
+export-fixtures`, per this repo's own documented caution) --
+`insert_after: "posa_display_item_code"` -> `"posa_allow_partial_payment"`.
+Verified via `git diff --stat` this was a clean, minimal 4-line diff.
+Ran `bench migrate` twice on staging: field landed at the correct
+position both times (idempotent), and the live `posa_allow_zero_rated_items=1`
+value already set on "Test Pos" survived both runs untouched (fixture
+sync rewrites field *definitions*, never document data).
+
+A suspected side effect -- `posa_walkin_customer` appearing to shift
+position during this same migrate -- was investigated and turned out
+to be a false alarm from an incomplete first query (the console session
+had been cut off mid-command). A clean re-query confirmed
+`posa_walkin_customer`'s fixture entry (`insert_after:
+"posa_fetch_coupon"`) already matches its live position exactly, inside
+the correctly-labeled "Sales and Return Controls" section -- no drift,
+nothing to fix. Retracted to the user immediately once caught rather
+than left standing.
+
+**Fix 3 -- the same warning still showing at click-Pay, before final
+submit.** The user retested fix 1 and reported the core checkout error
+was gone, but the *warning* toast still appeared the moment "Pay" was
+clicked, just not after final submission. Traced precisely (not
+assumed) via a full click-to-backend trace: `Pos.vue` -> `show_payment()`
+-> `process_invoice()` -> `posawesome.posawesome.api.invoices.update_invoice`,
+which does an intermediate `docstatus=0` draft save
+(`invoice_doc.save()`) *before* payment/submission -- a second,
+independent code path building invoice item rows that fix 1 didn't
+reach, since `apply_zero_valuation_rate_defaults()` was only wired
+into `submit_invoice()` and the amendment path. `on_update()` (which
+fires `check_zero_rate()`) runs on every save, draft or submit, so it
+fired identically at this earlier step. Fixed by adding the same
+`apply_zero_valuation_rate_defaults()` call to `update_invoice()`
+(`creation.py`), applied to `data["items"]` before
+`_get_mutable_invoice_doc()` builds the doc -- confirmed via reading
+that function's three internal branches (new invoice, stale/submitted
+doc, existing draft) that all three read from the same `data["items"]`
+list, so mutating it in place beforehand reaches every case. Added a
+new regression test verifying the mutation actually reaches the
+constructed payload, not just that the function gets called -- proved
+it was a genuine guard by temporarily reverting the fix and confirming
+the test failed (`KeyError`) before restoring it. Framing check with
+the user: this was treated as completing fix 1's own coverage (a
+missed code path), not as "notification cleanup" like section 36 --
+the toast disappears as a side effect of the underlying condition no
+longer being true, not because anything was suppressed at the UI layer.
+
+**Full regression check, all three fixes combined:** frontend suite
+230/230 files, 1170/1170 tests (fixes 1-3 are backend/fixture-only, ran
+anyway per standing convention). Backend: `test_creation.py` 69/69 run,
+8 errors -- confirmed via `git stash` comparison these are the exact
+same pre-existing, unrelated errors as baseline (a mix of
+`mode_of_payment` `AttributeError`s and an un-stubbed `frappe.local` in
+one test class, none touched by this work); `test_utils.py` 6/6 pass;
+`test_invoices.py` unchanged pre-existing `ImportError`.
+`bench build`: N/A, no frontend files touched. `bench migrate`: run
+twice for fix 2, clean and idempotent both times. Security: N/A, no
+user input/auth/data-access surface -- fix 1/3 only change which
+already-authorized invoice's own default field values get set; fix 2
+is a pure UI field-placement change. Confirmed untouched: `submit_invoice()`'s
+own use of the function, and the other `update_invoice()` tests in the
+same class (customer-field-clearing, stale-doc handling, manual-posting-date
+preservation) all pass/fail identically to baseline.
+
+User confirmed live on staging: no warning at click-Pay or at
+submission, sale completes cleanly with a zero-rate item.
+
+**Production status: staging-verified and promoted to `develop-swan`/
+`stable` only -- NOT yet deployed.** This is the fourth set of changes
+staged on `stable` today (barcode fix, section 34; search-clear fix,
+section 35; notification cleanup, section 36; this zero-valuation-rate
+fix) -- all bundled for one combined production deployment, pending the
+user's physical hardware-scanner test at the store.
+
+## 38. System Status panel exposed server/DB internals to any cashier; restricted to System Manager (2026-08-30)
+
+**Trigger:** the user confirmed regular cashier/POS User accounts could
+open the System Status panel (the info button in the POS header --
+server CPU/RAM usage, DB table sizes and row counts, uptime) via
+`NavbarInfoGadgets.vue` -- unrestricted since it was originally built.
+
+**Investigation:** traced the panel to two backend endpoints in
+`posawesome/api/utilities.py`, `get_server_usage()` and
+`get_database_usage()` -- both `@frappe.whitelist()` with zero
+server-side permission check, confirmed reachable by any authenticated
+session regardless of whether the button was visible in the UI. Found
+this app's own established pattern for this exact class of problem:
+`pos_access.py`'s `POS_PRIVILEGED_MANAGER_ROLES`/`user_is_pos_supervisor()`
+helpers, used elsewhere to gate supervisor-only POS actions server-side
+-- but that role set (System Manager, Accounts Manager, Sales Manager,
+Stock Manager, POS Manager) was designed for *business* overrides
+(discounts, credit approvals), not *infrastructure* visibility (raw
+server internals). Asked the user which fit better before building;
+they chose System Manager only -- the narrowest option, treating this
+as IT-admin data rather than a store-management concern.
+
+**Fix, both layers, per this repo's established fixes #15/#16 pattern
+(a hidden button alone is not real security if the API call underneath
+is still reachable):**
+- **Server-side (the actual boundary):** `frappe.only_for("System
+  Manager")` added to both `get_server_usage()` and
+  `get_database_usage()` -- the same idiomatic Frappe guard used
+  throughout core for role-gated whitelisted methods (Administrator
+  bypasses by its own built-in short-circuit, same as every other
+  `only_for()` call in the framework).
+- **Client-side (UX, not the security boundary):** new
+  `frontend/src/posapp/utils/systemStatusPermission.ts`, mirroring the
+  existing `itemQuickEditPermission.ts` pattern exactly (reads
+  `frappe.boot.user.roles`, the canonical source at desk boot). Wired
+  into `NavbarAppBar.vue` as `v-if="systemStatusVisible"` on
+  `<NavbarInfoGadgets>` -- the whole info-button menu (cache usage, DB
+  usage, CPU/RAM gadgets), not just one gadget inside it.
+
+**Cashier experience, confirmed:** `v-if` fully prevents the component
+from mounting, so `ServerUsageGadget.vue`/`DatabaseUsageGadget.vue` and
+their auto-polling composables (`useServerStats`, `useDatabaseStats`)
+never mount and never fire their `frappe.call`s for a non-System-Manager
+user -- the button is simply absent, no failed request, no error toast.
+
+**Full regression check:** frontend suite 231/231 files, 1174/1174
+tests (4 new: `systemStatusPermission.spec.ts`). Backend: new
+`test_system_status_permission.py`, 5/5 pass against real staging via
+`bench run-tests` -- verified as a genuine guard, not a tautology, by
+temporarily removing the `only_for` call and confirming the
+corresponding test failed (`AssertionError: PermissionError not
+raised`) before restoring it. `bench build --app posawesome`: clean,
+exit 0, including the `vue-tsc` type check. `bench migrate`: N/A, no
+doctype/fixture/print-format files touched. Security review: this
+change *is* the security fix -- both endpoints took no arguments (no
+injection surface), and the only gap was the missing role check itself,
+now closed server-side independent of the frontend. Confirmed
+untouched: no other navbar gadget, slot, or the mobile app-bar branch
+(which never rendered this panel to begin with); the only template
+change is the single `v-if` addition.
+
+**Promoted:** committed to `develop-swan`, cherry-picked to `stable`,
+both pushed. Unlike sections 34-37 (still deliberately held for a
+combined deployment pending the user's physical scanner test), this fix
+closes a real, currently-live access-control gap and was treated as its
+own, separately expedited production promotion rather than bundled with
+the others.
+
+## 39. Pre-rounding intermediate amounts: item price precision and customer-credit math both wrong the same way (2026-09-05)
+
+**Root cause, one pattern, two call sites:** `flt()` (both the local
+copy in `useInvoiceCurrency.ts` and ad hoc rounding elsewhere) was being
+applied to individual values *before* summing/comparing them, instead of
+summing the raw values and rounding once at the end. Small per-line
+rounding errors compound into a visibly wrong total once several
+already-rounded values are added together -- confirmed as a real gap by
+checking ERPNext's own `update_outstanding_amt`, which does not round
+`outstanding_amount` on write, so any pre-rounding on this app's side is
+strictly a source of drift, not a defense against one.
+
+**Fix, item price precision:** `useInvoiceCurrency.ts`'s local `flt()`
+now routes through Frappe's global `flt()` instead of a local
+`.toFixed()` implementation -- `.toFixed()` has its own binary-
+representation rounding quirks distinct from Frappe's own rounding,
+so two different "correct" roundings could disagree on the same input.
+
+**Fix, customer-credit math (`useRedemptionLogic.ts`,
+`usePaymentSubmission.ts`):** `available_customer_credit` and
+`redeemed_customer_credit` now sum raw amounts and round once, matching
+the pre-submit credit mirror check in `usePaymentSubmission.ts` so the
+UI's displayed credit and the value actually submitted can no longer
+silently disagree by a rounding-order difference.
+
+**A second, unrelated bug found while fixing the first:** correcting
+`redeemed_customer_credit`'s rounding surfaced an infinite loop in its
+allocation-remainder-absorption logic -- a mutation sequence that didn't
+converge once the rounding order changed. Fixed alongside the rounding
+change; both were needed for the function to terminate correctly, not
+just compute the right number.
+
+**Full regression check:** frontend suite passing (see section 40 for
+the combined final count across all of tonight's commits -- these
+changes shipped in the same batch). New tests: `useInvoiceCurrencyFlt.spec.ts`
+and expanded `useRedemptionLogic.spec.ts`, both verified as genuine
+guards via revert/restore (temporarily reintroducing the pre-rounding
+behavior and confirming the specific new assertions failed with the
+expected wrong totals, then restoring). `bench build`: clean, `vue-tsc`
+passed. `bench migrate`: N/A, no doctype/fixture files touched. No
+backend files touched -- pure frontend arithmetic-ordering fix.
+
+**Promoted:** committed to `develop-swan` (`3d3a150`), cherry-picked to
+`stable` (`827f6e0`), both pushed together with the rest of tonight's
+batch (sections 40-41). Independently regression-tested on `stable`
+after cherry-picking, not just carried over from `develop-swan`'s
+result. Not yet deployed to production -- pending the user's go-ahead.
+
+## 40. Limit Search system audit: five related search bugs, plus a sixth regression found during the user's own manual verification (2026-09-05 → 2026-09-06)
+
+A single audit of POSAwesome's item search (`item_processing/search.py`
+on the server, `itemsStore.ts`/`useItemSearch.ts`/`useItemsSelectorSearch.ts`
+on the client) turned up five distinct, real gaps. Each was implemented,
+tested, and verified as its own self-contained fix/commit -- listed here
+in the order they were built, plus a sixth fix for a regression the
+first five introduced, caught by the user testing live on staging
+immediately afterward.
+
+**1. Partial barcode matching (`search.py`, commit `f071486`).**
+Limit Search mode's `or_filters` only checked `name`/`item_name`/
+`item_code` -- a fragment of a *registered barcode* that differs from
+the item's own `item_code` (an item can have several barcodes) was
+invisible to the query no matter what else matched downstream, since the
+row was never fetched from the database at all. New
+`_find_item_codes_by_barcode_fragment()` joins the real `Item Barcode`
+child table (`frappe.get_all("Item Barcode", filters={"barcode": ["like",
+f"%{term}%"]}, pluck="parent")`) and adds any matches as an extra
+`["item_code", "in", [...]]` OR condition. Verified live against real
+staging data: a search for the last few digits of a real registered
+barcode (distinct from the item_code) now finds the correct item.
+
+**2. Scan-overwrite bug (`useScanProcessor.ts`, commit `17d7845`).**
+`onItemNotFound` fired unconditionally on any barcode-lookup miss,
+overwriting the live search box with a stale pre-lookup snapshot of the
+scanned code -- including for "low" confidence input (idle-settle
+typing, a paste, a bare numeric-length heuristic) where a miss just
+means "not a barcode, this was a real search term all along." A cashier
+who kept typing during the async lookup would find their input silently
+replaced mid-sentence. Now only a "high" confidence miss (verified
+scanner-speed timing, or the onScan.js hardware library) reports
+not-found; a low-confidence miss stays silent, matching this app's
+established confidence-based design (section 34).
+
+**3. Reload Items did nothing with an empty search box
+(`loadItemsRequest.ts`/`itemsStore.ts`, commit `f60f85b`).**
+`recoverItemCatalog()` (the "Reload Items" button) inherited the same
+`BROWSE_WITHOUT_SEARCH_REQUIRES_QUERY` gate meant for idle browsing --
+an unscoped reload (no search term) never reached the network at all
+and silently wiped the catalog to empty, with no error and no loading
+indicator. `loadItems()` gained an explicit `bypassBrowseGate` option,
+set unconditionally by `recoverItemCatalog()`, so an explicit reload
+always performs a real fetch regardless of the current search box
+state. Two pre-existing tests had been asserting the *old, buggy*
+behavior as correct (`"...clears via the browse-without-search gate"`)
+-- rewritten to assert the fix, not worked around.
+
+**4-5. Limit Search rework: prefix-only matching, inconsistent minimum
+length, and Enter-required search (commit `ce4c5a8`, the largest of the
+five).** Three related gaps, fixed together since they touch the same
+functions:
+  - Name/item_name matching was prefix-only (`"term%"`), unlike
+    item_code which was always contains-anywhere (`"%term%"`) -- a
+    genuine mid-word fragment (e.g. `"otton"` for `"Cotton"`) could be
+    missed outright. Now contains-anywhere on every field, consistently,
+    matching what non-Limit-Search mode already did correctly. The old
+    zero-results fallback retry in `_run_item_query` is removed as dead
+    code: once the primary query is already contains-anywhere, a
+    broader retry's conditions are always a strict subset of the
+    primary's and could never find a row it didn't already return.
+  - The minimum search length disagreed across layers (2 in Limit
+    Search mode's own `min_search_len`, 3 elsewhere) and, below that
+    length, ran a narrow almost-always-empty exact-item-code-only
+    fallback instead of showing nothing. Unified to one
+    `MIN_SEARCH_TERM_LENGTH = 3` constant -- `searchConstants.ts` on the
+    frontend, matched by a same-named constant in `search.py` -- enforced
+    identically in both search modes, client and server: below it, show
+    nothing rather than an unfiltered or wrong result set. A confirmed
+    exact barcode/serial/batch match is still honored regardless of
+    length (it's a definitive identification, not a vague fragment).
+  - In Limit Search mode nothing ever re-queried the server as the user
+    typed -- only pressing Enter ran a search at all, since Limit Search
+    has no local catalog to filter reactively the way non-Limit-Search
+    mode does (that mode's `displayedItems` computed just re-filters the
+    already-loaded catalog live on every keystroke, no trigger needed).
+    The already-correctly-built, already-debounced (~300ms)
+    `search_onchange` in `useItemsSelectorSearch.ts` had zero callers
+    anywhere in the app before this fix -- confirmed via grep, not
+    assumed. Wired it into every keystroke via a new
+    `onSearchInputChanged` hook (`useItemsSelectorSearchInput.ts` →
+    `ItemsSelector.vue`), gated to Limit Search mode only so
+    non-Limit-Search mode's already-working reactive filtering is
+    untouched.
+
+  Verified live against real staging data (direct backend `get_items()`
+  calls against "Test Pos"'s real garment catalog, not just unit tests):
+  `"j"`/`"ja"` (1-2 chars) → 0 results; `"jac"` (3 chars) → 106 real
+  matches; `"acke"` (mid-word inside "JACKET", not a prefix of anything)
+  → 104 matches including `JACKET-1-40`; `"reen"` (mid-word inside
+  "GREEN") → 87 matches. A live-browser Playwright check for the
+  auto-search-without-Enter behavior specifically was attempted but
+  blocked by a missing system library (`libnspr4.so`) in this sandbox --
+  requires a root `apt-get install` not done without explicit
+  authorization; the user tested this manually on staging instead.
+
+**6. Regression found during the user's manual staging test: debounced
+auto-search stripped a trailing space typed mid-sentence
+(`useItemsSelectorSearch.ts`, commit `e10520b`).** Reported directly by
+the user testing fixes 1-5 live: typing `"jersey"`, a space, then
+`"skirt"` produced `"jerseyskirt"`. Root cause traced and confirmed via
+an isolated reproduction *before* any fix was written (per the user's
+explicit ask to confirm root cause first): `_performSearch()` has always
+trimmed the search box and written the trimmed value back into the
+live, bound input (`vm.first_search = trimmedQuery; syncSearchInput(vm,
+trimmedQuery)`) -- harmless when this function only ran on Enter (the
+user had finished typing by then), but destructive once fix #4-5's
+auto-search wiring made it also fire automatically ~300ms after any
+typing pause, including the pause right after typing a space. The
+debounce would catch the box at `"jersey "`, trim it to `"jersey"`, and
+silently overwrite the live input before the next word was typed.
+Fixed by gating the writeback on an explicit `isAutoTrigger` flag --
+`_performSearch({ isAutoTrigger: true })` from the debounce skips the
+writeback entirely; `onEnter()`'s direct calls are unaffected and still
+clean up trailing whitespace exactly as before. Confirmed as a genuine
+regression (not pre-existing) via `git diff`: the trim/writeback code
+itself was untouched by fix #4-5; only its new reachability from an
+automatic, mid-typing trigger was new.
+
+**Full regression check (all six fixes together, final state on
+`develop-swan` and independently reverified on `stable` after cherry-
+picking):** frontend suite 234/234 files, 1201/1201 tests. Backend:
+`test_item_search_serialization.py` 21/21 (`python -m unittest`, the
+established reliable way to run this file's `sys.modules`-stubbing
+tests -- see the WSL2/test-runner caution in `CLAUDE.md`). Every new
+test verified as a genuine guard via revert/restore, not just written
+and trusted. `bench build --app posawesome`: clean, exit 0, `vue-tsc
+--noEmit` passed with zero type errors, both standalone and as part of
+the build, on both branches. `bench migrate`: N/A, no doctype/fixture/
+print-format files touched by any of the six fixes. Security: N/A, no
+new user-input/auth/data-access surface -- all six are search/UI logic
+on already-authenticated POS sessions. Confirmed untouched: payment,
+invoice, and the section 39 credit-rounding fix's own files are
+untouched by any of these six commits (verified by file-level diff
+inspection before committing, not assumption).
+
+**Promoted:** each of the six fixes committed to `develop-swan` as its
+own separate commit (not squashed), then cherry-picked to `stable` in
+the same order -- all seven cherry-picks (five here plus section 39's
+rounding fix, which predates this audit chronologically but was batched
+into the same push) applied with zero merge conflicts. Both branches
+pushed. Not yet deployed to production -- pending the user's go-ahead.
+
+## 41. Discount % auto-advance inconsistency: an intentional "stay put" rule silently bypassed after a session's first edit (2026-09-06)
+
+**How this was found:** the user asked, as a plain investigative
+question (no fix requested yet), why pressing Enter after typing a
+discount % on a cart row caused a color change plus focus jumping to the
+Discount Amount field -- was it intentional UX, or a side effect of the
+`_applyItemDetailPayload` racing-refresh fix from earlier the same
+night? Traced precisely before touching any code: **unrelated to
+`_applyItemDetailPayload`** (that function only mutates plain data
+fields, has no `.focus()`/class-toggling logic, and isn't even in the
+call chain a discount-% Enter press reaches -- that goes through
+`handleDiscountPercentUpdate`/`calcPrices`, a separate synchronous local
+calculation). Both symptoms are one feature: `ItemsTable.vue`'s
+spreadsheet-style keyboard-grid navigation. The active-row/active-cell
+highlight (dark navy background plus a cyan cell border,
+`CartItemRow.vue.css`) and the focus jump are the same state change
+(`activeCellKey` moving to the next column) viewed from two angles, not
+two separate mechanisms.
+
+**The actual bug, found while tracing "is this a problem":**
+`handleGridEditorSubmitted` already had an explicit carve-out keeping
+Discount %/Discount Amount from auto-advancing (unlike qty → uom → rate,
+which are meant to advance) -- the authors clearly considered this
+question already. But that carve-out lived in only ONE of two
+independent Enter-interception sites. The other -- `handleGridKeydown`'s
+capture-phase listener on the table container, which intercepts Enter
+*before* it reaches the input's own bubble-phase handler whenever
+`gridMode === "cell"` -- had no such carve-out and unconditionally
+advanced regardless of which field was active. Since `gridMode` latches
+to `"cell"` as a side effect of the very first Enter-driven edit of
+*any* grid field -- including the "stay put" branch itself
+(`stayOnGridEntryFromItem` sets `gridMode.value = "cell"`) -- and
+nothing resets it on a plain mouse click elsewhere (only Escape twice or
+an F-key shortcut calls `deactivateKeyboardGrid()`), the capture-phase
+path is what actually runs on every discount-field edit after a
+session's first one. The carve-out the code clearly intended essentially
+never fires in normal continued use -- confirmed by direct code trace,
+not assumption, before reporting back or proposing any fix.
+
+**Fix:** a single shared `isStayPutGridColumnKey(key)` helper, used by
+both interception sites. The capture-phase path now calls a new
+`commitActiveGridEditorAndStay()` (commits the value, refocuses the same
+cell in display mode -- mirroring `stayOnGridEntryFromItem`'s own
+behavior) instead of `commitActiveGridEditorAndMoveEntry()` whenever the
+active cell is a discount field in the standard (non-counter-grid) cart.
+Counter-grid-dialog mode's own, intentionally different always-advance
+behavior is untouched (`isStayPutGridColumnKey` returns `false`
+whenever `props.counterGrid` is true).
+
+**Full regression check:** frontend suite 234/234 files, 1201/1201
+tests (4 new tests in `itemsTableDiscountStayPut.spec.ts`, following
+this app's established raw-source-string-assertion pattern for large
+`<script setup>` components too heavily integrated to mount directly --
+same approach as `itemsSelectorContainerRefWiring.spec.ts`/
+`itemsSelectorAutoSearchWiring.spec.ts`). Verified as a genuine guard
+via revert/restore: temporarily reverting the capture-phase branch back
+to an unconditional advance made the exact test checking that wiring
+fail, as expected. `bench build`: clean, `vue-tsc` passed. `bench
+migrate`: N/A. Security: N/A, pure keyboard-navigation/focus state, no
+input/auth/data surface. Confirmed untouched: Tab-to-exit-grid, arrow-key
+navigation, and qty/uom/rate's own auto-advance are all unchanged.
+
+**Promoted:** committed to `develop-swan` (`dc40192`), cherry-picked to
+`stable` (`0b4ca38`), both pushed as the last of tonight's seven-commit
+batch. Not yet deployed to production -- pending the user's go-ahead.
+
+## 42. TRACKED, NOT YET FIXED -- pre-Pay total can transiently show tax as exclusive when the site's tax template is inclusive (2026-09-13)
+
+**Status: deferred.** Found and diagnosed while manually verifying the
+Pay-click `reload_current_invoice_from_backend()` removal (see the
+commit `f545d53`, "remove redundant reload_current_invoice_from_backend()
+round trip from Pay click"). Confirmed unrelated to that fix -- present
+on `stable` too, and lives entirely in code that fix never touched. Not
+fixed yet; recorded here so it isn't lost.
+
+**Symptom:** on Swan's OMR POS Profile ("Test Pos", tax template `VAT 5%
+Inclusive - S`), a cart with a 44% item discount briefly showed a
+pre-Pay total of 113.904 that didn't match the payment screen's
+internally-consistent 108.480 (net) + 5.420 (tax) = 113.900 a moment
+later. Repeated with clean discount percentages (70/55/50/40%) and the
+gap did not reproduce -- only 44% showed it in the user's manual test.
+
+**Root cause (traced, not yet fixed):** `get_invoice_doc()`
+(`frontend/src/posapp/components/pos/invoice_utils/document.ts:296-364`)
+has a client-side fallback that estimates tax itself whenever the cart's
+current state hasn't yet synced tax rows from the server
+(`context.invoice_doc.taxes` empty). That fallback branches on
+`getTaxInclusiveSetting()` (`offline/cache.ts:1676`, reading cached
+`memory.tax_inclusive` / localStorage `posa_tax_inclusive`): if that flag
+reads `false`, it computes `tax_amount = net_total * rate / 100` -- an
+**exclusive** formula ("add 5% on top") -- even when the real template is
+inclusive (5% already baked into item prices, confirmed live:
+`tabSales Taxes and Charges` row for `VAT 5% Inclusive - S` has
+`included_in_print_rate=1`). `108.480 * 1.05 = 113.90400000000001`,
+an exact match to the reported number -- strong confirmation this
+specific fallback fired for that click.
+
+The flag itself is normally set correctly from the server at app
+bootstrap (`bootstrapConfig.ts:71`) but defaults to `false`
+(`offline/db.ts:378`) and is explicitly reset to `false` by
+`clearAllCache()` (`offline/db.ts:1328,1369`) until the next bootstrap
+completes. For a **single-item cart**, ERPNext's real per-row tax
+rounding cannot itself diverge from a whole-total rounding (one row =
+one rounding decision either way), which rules out "discount percentage
+lands on an awkward rounding boundary" as the mechanism here -- the 44%
+correlation in the user's test is much more likely to be which click
+happened to catch the cart mid-sync (or the flag momentarily stale)
+than any property of the number 44 itself.
+
+**Blast radius:** display-only. Checked the actual saved invoices in the
+database -- their `net_total`/`total_taxes_and_charges`/`grand_total`
+are always self-consistent (server-computed), so this never posts a
+wrong amount. It's a transient client-side preview glitch that could
+confuse a cashier (a number visibly changing between cart and payment
+screen), not a ledger-correctness bug.
+
+**Next steps when picked up:** confirm live via
+`localStorage.getItem('posa_tax_inclusive')` during a repro (expect
+`"false"`/`null` on this profile if this is really what's firing); most
+direct fix is likely making the fallback in `document.ts` never guess
+wrong in this specific way -- e.g. always re-derive `tax_inclusive` from
+the already-cached tax template's own `included_in_print_rate` rather
+than trusting a separately-cached flag that can go stale independently
+of the template it's describing.
+
+## 43. TRACKED, NOT YET FIXED -- update_invoice()'s draft-save path has no server-side lock/dedup against concurrent creates (2026-09-13)
+
+**Status: deferred.** Found while investigating and fixing the PAY-button
+double-click bug (`c2a9270`, "guard the PAY button and its keyboard
+shortcuts against a rapid double-click/double-tap"). That commit closes
+the *practical* trigger -- a cashier's double-click, double-tap, or held
+keyboard shortcut can no longer fire two concurrent `show_payment()`
+calls from the POS UI. This item is the part that fix deliberately did
+**not** touch: nothing on the server itself stops two genuinely
+concurrent `update_invoice()` calls (however they're triggered) from
+creating two separate draft invoices. Not fixed yet; recorded here so
+the gap isn't lost now that the UI-level symptom is gone and less likely
+to surface it by accident.
+
+**Mechanism (traced, not yet fixed):** `_get_mutable_invoice_doc()`
+(`posawesome/posawesome/api/invoice_processing/creation.py:1285-1288`)
+decides create-vs-update purely from the client-supplied `data.name`:
+```python
+invoice_name = (data or {}).get("name")
+if not invoice_name:
+    return frappe.get_doc(data)   # brand-new doc, no lock, no dedup check
+```
+For a fresh sale, the client has no `name` until the *first*
+`update_invoice()` response comes back (`context.invoice_doc.name` is
+set from that response, not before). Two concurrent calls with no `name`
+both take this branch independently and both proceed through
+`invoice_doc.docstatus = 0; invoice_doc.save()`
+(`creation.py:1908-1912`) -- a genuine DB insert each, with nothing
+serializing them.
+
+The one thing that looks like it should help doesn't apply to this path.
+`update_invoice()` calls `extract_invoice_client_request_id(data)`
+(`creation.py:1676`) and `set_invoice_client_request_id(invoice_doc,
+client_request_id)` (`creation.py:1716`), but that only *stamps* a
+`posa_client_request_id` field onto the doc before save -- it never
+calls the actual dedup lookup, `find_invoice_by_client_request_id()`
+(`posawesome/posawesome/api/idempotency.py:96-125`, a plain
+`frappe.db.get_value` with no `for_update`/row lock either). That lookup
+is only ever called from the separate `submit_invoice()` function (the
+later payment-confirmation RPC), not from the draft-save PAY triggers.
+Confirmed the frontend never even attaches a `posa_client_request_id`/
+`idempotency_key` on this path either -- `frontend/src/posapp/components/
+pos/invoice_utils/server.ts`'s `update_invoice()` and `document.ts`'s
+`get_invoice_doc()` never set either field, so `client_request_id` is
+`None` end-to-end for every Pay-click draft save. The `unique: 1` DB
+constraint on `posa_client_request_id`
+(`posawesome/fixtures/custom_field.json:8776-8798`) never engages either,
+since the field is null on every concurrent insert (and MySQL/MariaDB
+unique indexes don't block multiple NULLs).
+
+**Blast radius today:** low, now that `c2a9270` removed the only
+practical way a normal cashier session could trigger two concurrent
+calls from the POS UI itself. Remaining exposure is anything that calls
+`update_invoice()` concurrently *without* going through
+`show_payment()`'s guard -- a client bypassing the UI (two raw API
+calls), a race between two browser tabs/devices on the same POS
+session, or any future UI entry point that ends up calling
+`process_invoice()`/`update_invoice()` without routing through
+`show_payment()`. `@frappe.whitelist()` makes `update_invoice()`
+reachable by any authenticated session regardless of what the UI does
+(see the existing CLAUDE.md lesson on this), so this isn't only a POS
+Awesome frontend concern.
+
+**Next steps when picked up:** the client-request-id plumbing already
+exists for `submit_invoice()` and just needs extending to this path --
+(1) have the frontend actually attach a real `posa_client_request_id`
+to the Pay-click payload (currently absent), and (2) wire
+`find_invoice_by_client_request_id()` into `update_invoice()`'s create
+branch so a repeated request with the same id updates the
+already-created doc instead of inserting a second one. That lookup
+alone isn't a true lock (still a read-then-decide race under real
+concurrency, per its own docstring/implementation), so closing this
+fully likely also needs either a short-lived cache-based lock (the same
+pattern `terminal_state.py`'s cashier-unlock state already uses,
+keyed by session + POS Profile) held for the duration of the create, or
+a DB-level uniqueness constraint that would reject the second insert
+outright rather than relying on an application-level check-then-act.
+
+## 44. TRACKED, NOT YET FIXED -- an in-progress cart has zero persistence until Pay/Save & Clear; a crash, refresh, or freeze loses it completely (2026-09-14)
+
+**Status: deferred.** Found while investigating, at the user's request, what
+happens to a large in-progress cart (100-150 items) if the browser tab
+crashes, is refreshed, loses network, or the app freezes before "Pay" or
+"Save & Clear" is ever clicked. Investigation only -- nothing built yet;
+recorded here so it isn't lost and can be picked up as its own feature.
+
+**Mechanism (traced, confirmed as a true negative, not an unsearched gap):**
+the in-progress cart lives entirely in the Pinia `invoiceStore`
+(`frontend/src/posapp/stores/invoiceStore.ts`) -- `itemsData`
+(`reactive(Map)`, line 91), `itemOrder` (`ref<string[]>`, line 90), and
+`invoiceDoc` (line 87) -- with no persistence layer attached at all:
+
+- No Pinia persistence plugin is registered (`stores/index.ts:22-25` calls
+  plain `createPinia()`); `frontend/package.json` has no persistence-plugin
+  dependency.
+- Every store mutator (`addItem` line 393, `removeItemByRowId` line 558,
+  etc.) calls `touch()` (line 109), which only bumps
+  `metadata.changeVersion` in memory -- nothing writes to `localStorage`,
+  `sessionStorage`, or IndexedDB.
+- The offline/IndexedDB layer (`frontend/src/offline/`) is a different
+  problem entirely and does not touch this: its Dexie schema
+  (`offline/db.ts:53-109`) has tables for cached lookup data
+  (items/customers/prices), the invoice outbox, and offline-queued
+  invoices -- no table represents an in-progress, not-yet-submitted cart.
+  The earliest point anything in the cart's lifecycle touches persistent
+  storage is `update_invoice()`'s Pay-click draft-save (writes to the
+  **server DB**, not local storage, and only fires when the cashier opens
+  the Payments screen -- `invoice_utils/dialogs.ts:16` ->
+  `invoice_utils/server.ts:101-166`) or `submitInvoice()`'s outbox/offline
+  queue (`usePaymentSubmission.ts:958`, only reached after payment is
+  confirmed). Nothing in `add_item`/`remove_item`/qty-and-rate-edit code
+  paths (`useItemAddition.ts`, `invoice_utils/actions.ts`) calls
+  `isOffline()` or touches `offline/` at all -- confirmed via grep, zero
+  matches.
+- Boot sequence (`posapp.ts`'s `initializeApp()` line 257 ->
+  `mountPosApp()` line 363 -> `Pos.vue`'s `onMounted()` lines 758-783)
+  always starts from a fresh, empty `createPinia()` instance and never
+  attempts to read back prior cart state from anywhere. No "resume last
+  session"/"recover draft" logic exists, not even partial or broken. No
+  "hold/park invoice" feature exists in this codebase either (grepped for
+  `hold_invoice|held_invoice|park.*invoice|suspend.*invoice` -- zero
+  matches), so there isn't even a manual escape hatch for a cashier who
+  senses trouble and wants to protect a large cart mid-build.
+- Network loss specifically changes nothing about this: `isOffline()` only
+  affects cached-lookup fallbacks and the two Pay-time save paths above --
+  a dropped connection mid-build is invisible to the live cart, which
+  keeps working purely in memory with the same (zero) protection it had
+  while online.
+
+**Blast radius:** high-severity but narrow-window -- a cart of any size
+(5 items or 150) is equally unprotected; only elapsed build time/typed
+effort at risk scales with cart size. A crash/refresh/freeze at any point
+before Pay or Save & Clear is a full, silent, unrecoverable loss of every
+item and every per-line edit (custom rate, discount, UOM, serial/batch
+selection) on that cart -- no error surfaced to the cashier, nothing to
+undo, just an empty cart on the next load.
+
+**Suggested approach when picked up (not designed in detail, no code
+written):**
+1. New Dexie table/schema for a draft-cart snapshot (items, order,
+   invoice_doc, sticky fields) -- none exists today; the closest available
+   primitive is `offline/db.ts`'s `persist(key)` (coalesced, worker-batched
+   writes, documented at `offline/db.ts:22-29`), whose batching machinery
+   is reusable but whose existing tables (`KEY_TABLE_MAP`,
+   `offline/db.ts:111+`) don't include anything shaped like this.
+2. A debounced writer hooked to `invoiceStore`'s existing
+   `metadata.changeVersion`/`touch()` signal (already bumped on every
+   mutation for total recalculation, `invoiceStore.ts:109-114` and the
+   `triggerUpdateTotals` debounce at lines 183-196) -- no new
+   change-detection plumbing needed, just a sibling that also persists.
+3. A best-effort `beforeunload` flush plus a `visibilitychange`-driven
+   periodic save -- both hook points are already used elsewhere in this
+   app for unrelated purposes (`plugins/print.ts:167-249` for print-popup
+   detection; `useNetworkLifecycle.ts:206-217`, `useItemSync.ts:14-33`,
+   `offline/sync/runtime.ts:89-96` for connectivity/sync-timer behavior),
+   so the wiring idiom is established even though no cart-specific
+   instance of it exists yet.
+4. A boot-time check (`posapp.ts`/`Pos.vue`) that detects a leftover draft
+   and prompts "Recover your last cart?" -- this is the part needing real
+   product decisions, not just code: staleness/expiry policy (a draft from
+   three days ago shouldn't resurrect), what happens if the POS
+   profile/customer/pricing context has changed since, and what happens if
+   a different cashier logs into the same terminal before the prompt is
+   acted on.
+
+**Rough size estimate:** a medium feature, not a quick fix -- the
+storage/debounce plumbing (items 1-2 above) is probably about a day's work
+given the existing primitives; the recovery-prompt UX and staleness/edge
+-case handling (items 3-4) is where the real time and product-decision
+surface is. Nothing architecturally blocks it -- explicitly not a "needs a
+redesign" situation, just unbuilt.
+
+## 45. TRACKED, NOT YET FIXED -- search_customers()'s unindexed LIKE '%...%' mobile-number fallback scan (2026-09-14)
+
+**Status: deferred.** Found while investigating, at the user's request,
+whether `search_customers()` (`posawesome/posawesome/api/customers.py:251-
+297`) has a real performance problem -- it does a `mobile_no LIKE
+'%fragment%'` scan pulling up to 500-1000 rows, filtered further in
+Python, used as the online fallback for mobile-number search. Investigation
+only -- nothing built yet; recorded here so it isn't lost, and explicitly
+gated on getting a real production number before deciding whether it's
+worth doing (see below).
+
+**Mechanism (traced):** `search_customers()` builds a 4-digit fragment from
+the longest normalized digit-key in the search term (`digits[-4:]`,
+`customers.py:265-266`) and filters `Customer` with
+`{"mobile_no": ["like", f"%{fragment}%"], "disabled": 0}` (plus an optional
+`customer_group` restriction), capped at `limit_page_length=max(result_limit
+* 5, 500)` (`customers.py:267-291`). The result is then re-filtered in
+Python via `_mobile_matches_search()` (`customers.py:43-50`) for the real,
+fuzzy match (handles leading `0`/`00` country-code prefixes and 8/9/10-digit
+tail variants across both sides of the comparison).
+
+**What's actually slow, precisely identified:** not row count, not the
+Python-side filtering (a few hundred cheap string-containment checks,
+microseconds) -- it's the `LIKE '%...%'` pattern itself. Confirmed via the
+vanilla ERPNext `Customer` doctype JSON (`erpnext/selling/doctype/customer/
+customer.json`) that `mobile_no` has no `search_index` flag, and confirmed
+live on `staging.local` (`SHOW INDEX FROM \`tabCustomer\``) that only
+`PRIMARY`, `customer_name`, and `customer_group` are indexed -- `mobile_no`
+has none. But a plain index on `mobile_no` would not actually fix this
+query: a **leading wildcard defeats a standard B-tree index** in
+MySQL/MariaDB regardless of whether one exists, since only prefix matches
+(`'abc%'`) can use it. The `LIMIT` also doesn't bound scan cost, only result
+size -- if a fragment matches fewer than 500 rows (the common case), the
+engine must still examine every row before concluding there's nothing more,
+so scan cost scales with total table size, not match count.
+
+**Frequency, traced precisely:** this is a rare fallback, not a hot path.
+The only frontend caller is `fetchServerMobileMatches()`
+(`frontend/src/posapp/stores/customersStore.ts:384-413`), invoked from
+`performSearch()` (`customersStore.ts:463-510`) only when (a) the search
+term is mobile-number-shaped AND (b) the local IndexedDB cache -- which
+*is* properly indexed via Dexie's `.where(...).startsWith(...)`
+(`customersStore.ts:415-461`) -- already returned zero matches. Most mobile
+searches never reach the server at all.
+
+**Real-world urgency -- explicitly unverified, needs a real number:** the
+only customer data reachable from this dev environment is `staging.local`
+(30 total customers, 4 with a mobile number -- confirmed via direct query)
+and `rewards.staging.local` (a different site entirely, no `tabCustomer`
+table at all). Neither is representative of Swan's real production scale,
+and production (`e.swan-intl.com`) is not reachable from this environment.
+**Do not treat this as urgent or not-urgent without checking the real
+production `Customer` row count first** -- at a few thousand rows this is
+probably a non-issue given how rarely the fallback fires; at tens of
+thousands+ it's a real, felt slowness the next time it fires.
+
+**Suggested approach when picked up (not designed in detail, no code
+written):** a plain index on `mobile_no` would be a no-op for this query
+shape (see above) -- the real fix needs a normalized, indexable column:
+1. A stored, digits-only mobile column kept in sync via a `before_save`/
+   `validate` hook on `Customer` (covering create AND update -- including
+   non-UI paths like bulk import/API-created customers, not just the POS
+   flow, or the indexed column will silently drift out of sync).
+2. A **reversed-digits** variant of that column, since the real search need
+   is "ends with these last 4 digits" -- a suffix search, which becomes a
+   *prefix* search (`LIKE 'reversed_fragment%'`, indexable) once the digits
+   are stored reversed.
+3. A backfill migration for existing customers.
+4. Cheaper, lower-benefit interim mitigation that needs no schema change:
+   tightening the `disabled=0`/`customer_group` pre-filters reduces rows
+   examined post-filter, but only helps when a POS profile actually
+   restricts customer groups (many don't -- the filter is conditional), and
+   doesn't change the fundamental un-indexability of the `LIKE '%...%'`
+   scan itself.
+
+**Risk to the fix, if built:** the SQL pre-filter that feeds the Python
+layer must remain a **true superset** of what `_mobile_matches_search()`
+currently considers a match (its fuzzy, multi-variant country-code/tail
+comparison) -- a narrower or differently-shaped pre-filter risks silently
+dropping a legitimate match before Python ever sees it. Testing would need
+to specifically cover country-code-prefixed numbers and varying tail-length
+matches, confirming identical result sets before/after for the same search
+terms, not just "the query runs faster."
+
+## 46. TRACKED, NOT YET FIXED -- print-format list re-fetched unnecessarily on every POS-profile/invoice-type change; a fix was built and then reverted after a staging discrepancy (2026-09-14)
+
+**Status: deferred, fix reverted.** `get_print_formats()`
+(`frontend/src/posapp/components/pos/Payments.vue:1033-1061`) re-fetches
+the print-format list on every POS-profile and invoice-type change, even
+though print formats essentially never change mid-shift. A caching fix was
+designed, implemented, and passed its own full regression checklist
+(241/241 frontend files, 1257/1257 tests; clean `bench build`; new
+regression guards confirmed to genuinely fail without the fix via
+`git stash` revert/reconfirm) -- but the user found a discrepancy while
+manually testing it on staging (see below) and asked to drop it and revert
+rather than ship something not fully understood. **The implementation was
+fully reverted** (`Payments.vue` restored to its last-committed state; the
+three new files -- `utils/paymentPrintFormatCache.ts`,
+`tests/paymentPrintFormatCache.spec.ts`,
+`tests/paymentsPrintFormatCacheWiring.spec.ts` -- deleted, all untracked,
+never committed). Nothing of the fix remains in the working tree. Recorded
+here, including the design that was built and the unresolved discrepancy,
+so a future session doesn't have to re-derive the investigation from
+scratch.
+
+**Root cause, as traced:** two watchers in `Payments.vue` call
+`get_print_formats()` unconditionally -- the `uiStore.posProfile` watcher
+(`immediate: true`, fires on *any* reference change to the profile object)
+and the `invoiceType` watcher (fires on every Invoice/Return/Order/
+Quotation toggle). The backend
+(`posawesome/posawesome/api/print_formats.py:9-12`) does
+`frappe.get_all("Print Format", filters={"doc_type": doctype})` -- the
+result depends **only on `doctype`**, not company or profile at all.
+Profile/invoiceType only decide *which* doctypes get resolved
+(`utils/paymentPrintDoctype.ts`'s `resolvePaymentPrintFormatDoctypes` ->
+`resolvePosDocumentDoctype`, driven by `invoiceType` plus two profile
+booleans -- `posa_allow_sales_order`/`posa_create_only_sales_order` and
+`create_pos_invoice_instead_of_sales_invoice`). Toggling Invoice <-> Return
+resolves to the identical `["Sales Invoice", "POS Invoice"]` doctype set
+both times, yet re-fetched on every toggle.
+
+**The design that was built (reverted, not lost -- can be re-implemented
+directly from this description):** a module-level cache
+(`Map<string, string[]>`, keyed by doctype) in a new plain `.ts` file,
+deliberately **not** component-local state -- `Payments.vue` is mounted/
+unmounted on every payment-dialog open/close in dialog mode
+(`components/pos/shell/Pos.vue:21-32`, `v-dialog v-if="usePaymentDialog"`),
+so a `ref` in `<script setup>` would be wiped on every reopen and provide
+close to no benefit in that mode; a module-level singleton survives across
+mounts for the life of the tab. Session-lifetime, no TTL (print formats
+are static config, unlike #3's customer-balance freshness check). Only
+successful fetches were cached, never a failed one, so a transient network
+error would retry next call instead of leaving formats permanently empty.
+Per-doctype granularity so a partial cache hit (e.g. Invoice's two
+doctypes already cached, then switching to Order) only fetches the
+still-missing doctype.
+
+**The staging discrepancy that stopped this (not yet investigated further):**
+the user observed **4 print-format-related network calls still firing on
+one dialog open** on staging, which doesn't match what the design/tests
+predicted -- with `invoiceType === "Invoice"` or `"Return"`,
+`resolvePaymentPrintFormatDoctypes` should resolve to exactly 2 doctypes
+(`["Sales Invoice", "POS Invoice"]`), meaning at most 2
+`get_print_formats` calls on a cold cache and 0 on a warm one, never 4 on
+a single open. This was not chased down before the revert -- worth
+investigating properly next time rather than assuming the cache logic
+itself was correct just because its unit/wiring tests passed. Candidate
+explanations to check first when this is picked back up (none confirmed):
+whether `get_print_formats()` is somehow being invoked more than once per
+dialog open (e.g. both watchers firing in the same tick on initial mount,
+`uiStore.posProfile`'s `immediate: true` plus a near-simultaneous
+`invoiceType` watcher firing), whether "4 network calls" in the browser's
+network tab actually means 4 *distinct* `frappe.call` invocations to
+`get_print_formats` specifically versus other requests being miscounted
+alongside it, or whether the resolved doctype list is larger than 2 in
+whatever POS profile/invoice-type combination was being tested (worth
+confirming live via `resolvePaymentPrintFormatDoctypes`'s actual inputs on
+that profile rather than assuming the Invoice/Return branch was the one in
+effect).
+
+**Next steps when picked up:** reproduce the 4-call observation first
+(browser devtools network tab, filtered to `get_print_formats`, on the
+exact profile/invoice-type combination the user tested) and get a precise
+count and set of arguments for each call *before* re-implementing anything
+-- the fix design above is very likely still correct, but should be
+verified against a real repro rather than re-shipped on the strength of
+its unit tests alone a second time.
+
+## 47. TRACKED, NOT YET FIXED -- customer_balance_replay is dead code, and an offline credit-conflict-at-sync falls back to a generic "saved as draft" toast with no explanation (2026-09-14)
+
+**Status: deferred.** Two related gaps in the offline-sync path for
+credit-redeeming sales, found and reported by the user. Investigation
+only -- nothing built yet; recorded here so it isn't lost.
+
+**Gap 1 -- dead code:** `customer_balance_replay` is built and attached to
+an offline sale's queued entry whenever store credit was redeemed
+(`frontend/src/offline/invoices.ts`, inside `prepareOfflineInvoiceEntry()`,
+lines 192-209):
+```ts
+if (
+    Number(cleanEntry?.data?.redeemed_customer_credit || 0) > 0 &&
+    cleanEntry?.invoice?.customer &&
+    replaySources.length
+) {
+    cleanEntry.data.customer_balance_replay = {
+        customer: cleanEntry.invoice.customer,
+        redeemed_customer_credit: cleanEntry.data.redeemed_customer_credit,
+        sources: replaySources,
+        timestamp: Date.now(),
+    };
+}
+```
+Confirmed via a repo-wide grep for `customer_balance_replay`: it is written
+at exactly this one call site and read nowhere else in the codebase --
+the only other match is `frontend/tests/storedValue.spec.ts:176`, which
+only asserts the field is *built* correctly, not that anything downstream
+*consumes* it. Nothing in the sync-replay logic (`syncOfflineInvoices()`,
+same file, described below) ever reads `queuedInvoice.data.customer_balance_replay`.
+It's a genuinely unfinished feature -- built, wired to nothing, silently
+carried along in every offline credit-redemption payload for no effect.
+
+**Gap 2 -- generic failure message hides the real cause:**
+`syncOfflineInvoices()` (`offline/invoices.ts:322-370`) tries
+`submit_invoice` for each queued offline entry; on **any** failure
+(`catch (error)`, line 341) it falls back to `update_invoice()` (an
+unsubmitted draft, `docstatus=0`) with zero inspection of *why* the
+submit failed -- `error` is only `console.error`'d (line 342-345), never
+examined or threaded through. The resulting `totals` object
+(`{pending, synced, drafted}`, lines 380-384) carries only counts, no
+per-entry reason, and the toast built from it is a flat, cause-blind
+string in three separate places (`Navbar.vue:1118-1128`,
+`stores/syncStore.ts:85-90`, `composables/runtime/useQueueMetrics.ts:83-87`
+-- all three format the same `"{0} offline invoice{1} saved as draft"`
+template): a cashier sees "3 offline invoices saved as draft" with no clue
+whether that's a credit conflict, a stock issue, or something else
+entirely.
+
+**Confirmed real cause for the credit-conflict case specifically:** traced
+into the backend `submit_invoice()` path -- `_validate_customer_credit_redemption()`
+(`posawesome/posawesome/api/invoice_processing/creation.py:1068-1126`)
+re-fetches `get_available_credit()` **server-side** at actual submit time
+(not trusting the client-supplied credit figures the offline sale was
+built against) and `frappe.throw()`s one of two specific, identifiable
+messages when the recomputed credit no longer matches what the offline
+sale tried to redeem (e.g. "The full available customer credit ({0}) must
+be applied -- partial redemption is not allowed.", line 1121-1125). This is
+exactly the exception `syncOfflineInvoices()`'s generic `catch` block
+swallows without inspecting -- the specific, real reason ("credit was
+already spent elsewhere while this sale was offline") is available in
+`error.message`/`error.exc_type` at the exact point it's discarded.
+
+**Suggested approach when picked up (not designed in detail, no code
+written):**
+1. Decide `customer_balance_replay`'s fate first, since gap 2's fix may
+   depend on it: either (a) finish it -- have the sync-retry path
+   genuinely attempt to replay/re-derive the credit redemption against
+   fresh server state using the `sources`/`redeemed_customer_credit` it
+   already carries, or (b) remove it as dead weight if a replay attempt is
+   deemed not worth building (e.g. if the "recompute and reject" behavior
+   in `_validate_customer_credit_redemption()` is actually the desired,
+   safe behavior and a client-side replay would just be redundant/risky).
+2. Regardless of (1), thread the real failure reason through
+   `syncOfflineInvoices()`'s catch block instead of discarding `error` --
+   at minimum, detect this specific credit-conflict exception (by message
+   match or, better, a dedicated `exc_type`/error code from the backend
+   the frontend can check reliably rather than string-matching a
+   translatable message) and surface a distinct toast/detail line
+   specifically for it, instead of the generic drafted-count message.
+   `totals`/`normalized` would need a new field (e.g. a reasons breakdown,
+   not just a count) to carry this from `syncOfflineInvoices()` through to
+   the three toast call sites.
+
+**Risk to the fix, if built:** the credit-recompute-at-submit behavior in
+`_validate_customer_credit_redemption()` itself must not change --
+its whole point is that it's the trustworthy, server-side final check
+(the frontend/offline figures are pre-submit UX only, explicitly
+documented in that function's own docstring). Any fix here should only
+add *visibility* into why a draft fallback happened, not alter when or
+whether one happens. If (1)(a) -- an actual replay attempt -- is pursued,
+it needs its own careful design: a naive replay against possibly-stale
+`sources` could re-introduce exactly the kind of double-spend the
+recompute-and-reject behavior exists to prevent.
+
+## 48. TRACKED, NOT YET FIXED -- Invoice Management reprint has no in-app preview before silent QZ print (2026-09-14)
+
+**Status: deferred, feature idea, investigated and scoped, not built.** The
+user asked whether an in-app "preview before print" step would make sense
+specifically for Invoice Management's reprint button, as distinct from the
+original Pay-time print -- reprint isn't a time-pressured checkout moment
+(a cashier looking something up, resolving a dispute, reprinting a lost
+receipt), unlike the original sale, where speed genuinely matters and a
+preview would be actively counterproductive (confirmed separately: with
+QZ Tray configured, as "Test Pos" is, both the original print and today's
+reprint go completely silently to the physical printer with zero visual
+step of any kind -- no browser dialog, no in-app preview, nothing rendered
+on screen; verified by tracing `printDocumentViaQz()` in
+`frontend/src/posapp/services/qzTray.ts:515-544`, which fetches print HTML
+server-side via `frappe.www.printview.get_html_and_style` and sends it
+straight to the printer with no DOM rendering step at all). This entry
+records the investigated feasibility and shape of a reprint-only preview,
+for a future session to build.
+
+**Mechanism this would build on:** the reprint button
+(`InvoiceManagement.vue`'s `printInvoice()`, lines 3836-3895) already
+branches on how the profile is configured -- `printDocumentViaConfiguredQz()`
+when QZ Tray is set up (silent, no visual step), `silentPrint()` as a raw
+-print/QZ-failure fallback, or `window.open(url, "Print")` when QZ isn't
+configured at all (opens Frappe's own generic `/printview` page, which
+already shows the real invoice before the browser's native print dialog
+fires -- an implicit preview of sorts, just not a custom POS Awesome UI).
+The HTML a new preview would show is **already fetched today, on every
+silent print** -- `printDocumentViaQz()` calls
+`frappe.www.printview.get_html_and_style` (already whitelisted, already in
+active use) to get the exact HTML+style that goes straight to the printer.
+No new backend endpoint or data source would be needed.
+
+**Why this is safely isolated from Pay-time printing:** reprint
+(`InvoiceManagement.vue`'s `printInvoice()`) and the original sale print
+(`Payments.vue`'s print flow) are already separate functions in separate
+files with no shared call path -- they only share a few *read-only* utility
+functions (`resolvePaymentPrintFormat`, `printDocumentViaQz`,
+`printHtmlViaQz`), none of which would need behavior changes for this. The
+one real touch point is exporting a currently-private helper
+(`buildPrintHtml` in `qzTray.ts:86`, not currently exported) -- a pure
+visibility change with zero behavior difference, zero risk to how Pay-time
+printing works today.
+
+**What it would involve (not designed in full, no code written):**
+1. A new small dialog component (e.g. `PrintPreviewDialog.vue`) -- a
+   Vuetify modal rendering the fetched HTML+style, most safely via a
+   sandboxed `<iframe srcdoc="...">` (the print HTML is a full rendered
+   document with its own styling, not something safe to inject directly
+   via `v-html` into the app's own DOM) plus Print/Cancel actions.
+2. Export `buildPrintHtml` from `qzTray.ts` (currently module-private,
+   `qzTray.ts:86`).
+3. Modify `printInvoice()`'s QZ branch specifically: fetch the HTML via
+   the existing `frappe.www.printview.get_html_and_style` call, open the
+   preview dialog with that content, and only call the existing
+   `printHtmlViaQz()` (already exported, `qzTray.ts:437`) on confirm --
+   reusing the same already-fetched HTML for the actual print, so preview
+   and print are guaranteed to match and nothing is fetched twice.
+4. New tests: a new dialog-component spec, plus a raw-source wiring test
+   for the modified `printInvoice()` branch (this file very likely uses
+   the same `.js`-suffix-importing-`.ts` convention as `Payments.vue` --
+   would need to confirm and follow the same raw-source-assertion pattern
+   if so).
+
+**Two open scope questions, not yet decided:**
+1. **Raw/ESC-POS printing** (`posa_raw_printing`, currently off for "Test
+   Pos" but a real configuration option) is a fundamentally different
+   rendering pipeline -- escape codes for a thermal printer, not HTML.
+   There's no "rendered document" to preview the same way; a preview there
+   would need to be, at best, a plain confirm prompt with no real visual
+   content, or the raw-print path could be left out of the preview feature
+   entirely (print immediately as today, preview only gates the HTML/QZ
+   path).
+2. **The browser-fallback path** (no QZ configured -- `window.open(url,
+   "Print")`) already opens a visible tab showing the real invoice before
+   the browser's native print dialog fires, which arguably already
+   functions as an implicit preview. Worth deciding whether to route this
+   path through the new in-app modal too for a consistent look across all
+   three configurations, or leave it as-is since it already has a
+   visual step, just not a custom-styled one.
+
+**Rough size estimate:** small-to-medium -- smaller than the cart
+-persistence gap (§44, no new backend/schema work needed at all here; the
+fetch endpoint already exists and is already used exactly this way) and
+roughly comparable in scope to the discount-navigation fix or the
+customer-info-freshness caching work done earlier the same night. Estimated
+at roughly a focused half-day-to-a-day including the full regression
+checklist, mostly bounded by getting "Confirm actually prints correctly"
+right across the QZ/raw/browser-fallback branches and building the new
+dialog component, not by complexity in the core idea.
+
+## 49. Item discount editing: single toggle split into independent Disc %/Disc Amt POS Profile settings, plus a closed server-side manual-discount gap (2026-09-30)
+
+**Trigger:** the user wanted item-level discount editing in the cart
+locked down -- visible but non-editable, no role exception -- and asked
+for the backend to be checked first, since a frontend-only disable
+doesn't stop a tampered request payload.
+
+**Investigation found a real, pre-existing gap, not specific to
+discounts:** `posa_allow_user_to_edit_item_discount` (and its siblings
+`posa_allow_user_to_edit_rate`/`posa_allow_user_to_edit_additional_discount`)
+were referenced nowhere in the Python backend except a fixture export
+list and a one-time UI-reorganization patch -- never in any validation
+logic. `invoice_processing/creation.py` builds the Sales Invoice/POS
+Invoice doc straight from the client payload (`frappe.get_doc(data)` /
+`invoice_doc.update(data)`), trusting whatever `rate`/`discount_amount`/
+`discount_percentage` the client sent, per item, with no re-derivation
+from `price_list_rate` or an Item Price record. The only existing
+discount-related server check, `item_sale_controls.py`'s
+`validate_invoice_item_sale_controls()` (wired to the `Sales
+Invoice`/`POS Invoice` `validate` doc-event hook), only blocked discounts
+on items flagged `retailmind_non_discountable` and enforced an unrelated
+below-cost margin floor -- neither tied to the edit-permission toggles at
+all. Confirmed the same gap exists for `posa_allow_user_to_edit_rate`
+too, left untouched as out of scope.
+
+**First pass (superseded the same session):** hardcoded both Disc % and
+Disc Amt cart cells to always-disabled in `CartItemRow.vue`/
+`ItemsTableExpandedRow.vue`, and added a backend check
+(`collect_manual_item_discount_errors()`, wired alongside the existing
+`item_sale_controls.py` checks on the same `validate` hook) that rejected
+any non-offer item discount outright. Built, full regression run,
+reported -- then the user changed direction before testing it: keep the
+two toggles as independent per-field controls instead of removing them.
+
+**Final design, built and shipped instead:**
+- **New POS Profile field:** `posa_allow_user_to_edit_item_discount_amount`
+  ("Allow user to edit item discount amount") -- hand-added to
+  `custom_field.json` (never via `bench export-fixtures`, per this file's
+  own standing caution about that tool truncating the file), anchored
+  with `insert_after: "posa_allow_user_to_edit_item_discount"`. Verified
+  via live `frappe.get_meta("POS Profile")` on staging.local, both before
+  and after a second `bench migrate`, that it lands in the existing
+  "Pricing and Discount Controls" section right after its sibling and
+  stays put (idempotent) -- not just trusted from the fixture's own
+  `insert_after` value.
+- **Frontend:** the single `disableDiscountEdit` computed split back into
+  two independent ones -- `disableDiscountPercentEdit` (gated by
+  `posa_allow_user_to_edit_item_discount`, restored to its original
+  condition including the `posa_is_replace`/`posa_offer_applied`/
+  `retailmind_non_discountable` item-state exceptions) and
+  `disableDiscountAmountEdit` (identical shape, gated by the new field).
+  Same split applied in `ItemsTableExpandedRow.vue`.
+- **Backend:** `collect_manual_item_discount_errors()` now resolves both
+  POS Profile flags via `frappe.db.get_value()` and only rejects a
+  non-offer item discount when **both** are off. Either toggle being on
+  is a full exemption -- `discount_percentage` and `discount_amount` are
+  mathematically equivalent (typing one derives the other), so they were
+  deliberately not treated as two separate security boundaries; the two
+  toggles are a UI/workflow distinction for staff (which cell is
+  editable), not two different trust levels. This is the same trust
+  boundary the app already had before this whole change started, not a
+  new gap -- the fix only closes the case where both toggles are off.
+  `posa_offer_applied` remains the one disclosed, unclosed bypass
+  regardless of toggle state (no server-side POS Offers re-computation
+  exists to verify it against; already flagged as a known limitation,
+  not fixed here).
+- Chose reject (`frappe.throw`) over silently zeroing the discount on a
+  violation, confirmed by reading Frappe's own `Document.hook()`/
+  `compose()` in `document.py`: the core controller's `validate()`
+  (which computes `rate`/`amount`/`grand_total` from the client-supplied
+  discount) runs *before* app-level `doc_events` hooks fire, so zeroing
+  the discount field after the fact would leave the invoice's total
+  still reflecting the discount while the field itself read zero -- an
+  inconsistent, misleading record. Matches the existing
+  `non_discountable` check's own reject convention.
+
+**On Swan's live profiles:** both toggles currently off everywhere
+(the pre-existing `posa_allow_user_to_edit_item_discount` was manually
+turned off by the user on staging specifically to test the fully-locked
+state before deciding whether to ever turn one on for a given store) --
+so today, neither Disc % nor Disc Amt is editable by anyone, matching
+what was tested and confirmed on staging before this was committed.
+
+**Full regression check (final design):** frontend suite 242/242 files,
+1254/1254 tests (3 new/updated in `cartItemRowKeyboard.spec.ts` covering
+the split gating). Backend `item_sale_controls` module: 30/30 pass (24
+prior + 6 new, covering both-off/either-on/no-profile-given at both the
+unit and `validate_invoice_item_sale_controls` integration level) via
+`bench --site staging.local run-tests --module` -- hit the same
+known pre-existing, unrelated `run-tests` cleanup-stage crash
+(`ModuleNotFoundError: frappe.utils.nestedset`) documented earlier in
+this file; confirmed the actual test results (`OK`) print before that
+crash, unaffected by it. `invoice_processing.test_creation` also run:
+66/74 pass, 8 pre-existing failures confirmed present via `git stash`
+with this change removed entirely -- unrelated (`AttributeError:
+mode_of_payment`), and that module's own test harness fully mocks
+`frappe`/the document lifecycle, so it never exercises
+`item_sale_controls.py` regardless. `bench build --app posawesome`:
+clean, exit 0. `bench migrate`: required (fixture touched), run twice,
+confirmed idempotent field placement both times. Security review: as
+above -- trust boundary unchanged from before this session started
+(a policy the user explicitly re-affirmed), `frappe.db.get_value` calls
+parameterized (no injection surface), no new whitelisted endpoints.
+Confirmed untouched: `posa_allow_user_to_edit_rate` and everything
+rate-related; the separate invoice-level `additional_discount` field in
+`InvoiceSummary.vue`; the POS Offers engine (`useInvoiceOffers.ts` sets
+`posa_offer_applied`/discount fields directly, never through the now
+independently-gated manual editors, so offers still work regardless of
+either toggle's state).
+
+**Promoted:** tested and confirmed on staging by the user, then
+committed to `develop-swan` only -- `stable`/production intentionally
+untouched per explicit instruction.
+
+## 50. Orig. Price cart column made permanent, and Invoice Management hard-defaults to List View (2026-09-30)
+
+**Trigger:** two small requests investigated together. (1) Show the
+item's pre-discount price-list rate in the cart, always visible. (2)
+Invoice Management should always open in List View, not whatever it was
+last left on.
+
+**Investigation found item 1 was already fully built, just not in the
+right tier:** a "Price List Rate" column already existed end to end --
+defined in `useInvoiceItems.ts`'s `available_columns`, rendered
+read-only in `CartItemRow.vue`, and already exposed for free in the
+COLUMNS settings menu (`InvoiceItemsActionToolbar.vue` generically loops
+every non-required column). It just lived in the optional,
+user-toggleable tier alongside UOM/Offer? rather than the permanent
+tier Disc %/Disc Amt/Rate/Amount already occupy. The user resolved two
+open questions: relabel to "Orig. Price" (matching the "Disc %"/"Disc
+Amt" abbreviation style -- space is tight, no horizontal scroll
+wanted), and move it into the required/permanent tier.
+
+**Item 2's investigation:** `InvoiceManagement.vue`'s `viewMode`
+defaulted to `"card"` in a plain `data()` -- no `localStorage`, no
+persisted preference anywhere in the file. But `Pos.vue` mounts
+`<InvoiceManagement>` unconditionally (no `v-if`) alongside the POS
+shell's other dialogs, so the component is created once per page load
+and never destroyed -- its own `v-dialog` is just toggled open/closed.
+That's why it looked like it "remembered" a session state: switching to
+Card mid-session and reopening the dialog later left `viewMode`
+wherever it was last set, since the component instance never
+re-runs `data()`. The existing `invoiceManagementDialog` watcher already
+hard-resets `activeTab` to a target/default every time the dialog opens
+-- the same spot needed a matching `viewMode` reset, which it didn't
+have.
+
+**Fix, both items:**
+- `useInvoiceItems.ts`: `price_list_rate` column relabeled `"Price List
+  Rate"` -> `"Orig. Price"`, moved `required: false` -> `true`. Removed
+  the now-dead special case in `loadColumnPreferences`'s no-saved-
+  preference fallback that used to force-include it (redundant once
+  `required` already guarantees it). Updated a stale comment in
+  `useItemsTableResponsive.ts`'s `OPTIONAL_COLUMN_PRIORITY` that
+  described this column as "selected by default... optional," which
+  is no longer true in the real app (left the array entry itself in
+  place, since the utility is generic and some other caller could still
+  pass it in as optional).
+- `InvoiceManagement.vue`: added `this.viewMode = "list";` to the
+  `invoiceManagementDialog` watcher's open branch, right alongside the
+  existing `activeTab` reset. Also changed the `data()` default from
+  `"card"` to `"list"` for consistency, though the watcher is what
+  actually matters given the component's session-long lifetime.
+
+**One trade-off flagged, not fixed, by design:** the responsive
+column-hiding logic (`useItemsTableResponsive.ts`) never hides
+`required` columns regardless of viewport width, so Orig. Price can no
+longer be dropped to make room on a narrow screen -- exactly matching
+Disc %/Disc Amt/Rate/Amount's existing behavior, which is the tier the
+user explicitly asked for. This does shrink the room left for the two
+still-optional columns (UOM, Offer?) before they get dropped on narrow
+viewports. The user asked to defer concrete narrow-screen verification
+(1366x768/1280x800) to their own later testing rather than have it
+block this commit -- an in-progress investigation into a real-browser
+measurement harness (reusing the real `ItemsTable.vue`/`CartItemRow.vue`
+components and CSS, plus a real, previously-measured anchor point from
+`itemSelectorLayout.ts`'s own comments: a 1366px window's selector
+panel, 4/12 split, measures ~455px, implying the invoice panel's 8/12
+share is roughly ~910px at that width) was stopped mid-way at the
+user's request, not because it hit a dead end.
+
+**Full regression check:** frontend suite 243/243 files, 1258/1258
+tests. New `invoiceManagementViewModeDefault.spec.ts` (3 tests, using
+the same raw-options-object `.call(context)` technique
+`invoiceManagementRepairFilter.spec.ts` already established for this
+heavy component -- verified against the pre-fix code first: the
+`data()` test failed against the old `"card"` default, and the watcher
+test failed with no `viewMode` line present, before either passed).
+Updated `useInvoiceItemsColumns.spec.ts`: the test asserting
+`price_list_rate` was still a valid optional key now uses `posa_is_offer`
+instead; added a dedicated test that it can never be excluded, and an
+assertion for the new "Orig. Price" label. Backend: N/A, no `.py` files
+touched. `bench build --app posawesome`: clean, exit 0. `bench
+migrate`: N/A, no doctype/fixture/print-format files touched. Security
+review: N/A, no user input/auth/data-access surface touched -- column
+visibility/labeling and a UI default-state reset only. Confirmed
+untouched: the three other column-related test files
+(`useItemsTableResponsive.spec.ts`, `itemsTableResponsiveColumns.spec.ts`,
+`posNarrowSplitBand.spec.ts`) use their own standalone header fixtures
+decoupled from `useInvoiceItems.ts`'s real column list, so needed no
+changes; `PriceListRateDialog.vue` (an unrelated admin feature) and
+`ItemsTableExpandedRow.vue`'s own spelled-out "Price List Rate" mobile
+form label (not the space-constrained grid header this request was
+about) were both deliberately left alone.
+
+**Promoted:** committed to `develop-swan` only, `stable`/production
+untouched. Narrow-screen horizontal-scroll behavior deferred to the
+user's own manual testing rather than verified here.
+
+## 51. Arabic description printed next to the English description on the "Swan Sales Invoice" receipt (2026-10-01)
+
+**Request.** Print a pre-stored Arabic translation next to each receipt
+line's English `description` (the category word, e.g. "JACKET"), with
+no change for items that have no translation yet. The user had already
+created `Item.custom_description_arabic` (Data, after `description`) by
+hand on production, run migrate, and bulk-filled it for the 552 Max&Co
+rows; the other 8 brands are still blank.
+
+**Field now git-tracked.** Hand-added `Item-custom_description_arabic`
+to `posawesome/fixtures/custom_field.json` (key set copied from the
+neighbouring `Item-retailmind_short_name` entry; no `export-fixtures`)
+and to `hooks.py`'s Custom Field filter list. Label "Description
+Arabic" -- the label Customize Form derives that fieldname from. Note
+for production: fixture import is `force=True`, so the next production
+migrate after this is promoted will overwrite the hand-made field's
+properties with this entry (column and data are untouched). On staging
+the console-made copy was deleted first so the field was provably
+created by migrate alone; it lands directly under `description`, in
+Item's own (collapsible) "Description" section -- the right place.
+
+**Print format (DB-only, not in git).** The user pasted production's
+current HTML; it matched staging's copy exactly (only a trailing
+newline differed), so no production-only hand-edits were at risk. Three
+additions, the rest byte-identical:
+
+- One batched lookup per receipt (`frappe.db.get_all("Item", name in
+  the invoice's item codes)`), guarded by
+  `frappe.db.exists("Custom Field", "Item-custom_description_arabic")`:
+  selecting a nonexistent column would raise a SQL error and fail the
+  print, so the same HTML is safe on a site without the field.
+- If the item has a non-blank Arabic value, the description line becomes
+  a flex row: English left, Arabic right in a `dir="rtl" lang="ar"`
+  span, escaped with `|e` (Frappe's Jinja has no autoescape). Otherwise
+  the original description line is emitted unchanged.
+- CSS: the English span doesn't shrink (capped at 60% width) and only
+  the Arabic wraps -- a first version let a long Arabic string squeeze
+  "HAT-CAP" into "HAT-"/"CAP". Spacing uses `margin-left`, not flex
+  `gap`, in case QZ Tray's embedded HTML engine predates flex gap.
+
+**Verified on staging** via `frappe.www.printview.get_html_and_style`
+(the function the QZ path calls), rendered as the non-admin Test Pos
+cashier `testserver@swan.com`, then rasterised in headless Chromium at
+80mm: field absent -> receipt prints, description lines identical to
+the original; one item with Arabic + one blank -> Arabic right-aligned
+on the same line, blank item unchanged; whitespace-only value treated as
+blank; `<b>` injection escaped; long Arabic wraps under itself, long
+English wraps under itself, no horizontal overflow. Receipt height with
+a typical short translation is unchanged (1410px either way). Staging
+item `30410232030043` keeps the test value "جاكيت"; all other probes
+were reverted. Not verified: an actual QZ Tray/thermal print (QZ's own
+renderer, not Chromium) -- the receipt's existing Arabic lines already
+print through that path.
+
+**Regression check.** Frontend: 243/243 files, 1258/1258 tests.
+Backend (isolated): new `test_item_description_arabic_field` 2/2
+(fails with the `hooks.py` line removed -- checked), plus the three
+existing fixture-parsing modules `test_customer_credit_invoice_fields`
+2/2, `test_sale_floor_profile_settings` 3/3,
+`test_gift_card_profile_settings` 3/3. `bench build`: N/A, no frontend
+files touched. `bench migrate`: twice, exit 0, idempotent (same
+placement both runs, test value preserved). Security: no new
+whitelisted method; the lookup runs inside `get_html_and_style`, which
+already enforces read permission on the Sales Invoice, reads one field
+of only that invoice's items, and its filter values go through
+`db_query`'s parameterised `in` condition; output escaped. Untouched:
+Z Report (separate format, hardcoded name in `printZReport()`), the
+DUPLICATE reprint banner and every other receipt section (byte-identical
+lines), raw ESC/POS path (off, not Jinja).
+
+**Promoted:** committed to `develop-swan` only, `stable`/production
+untouched. Production still needs the updated print format HTML pasted
+into Desk by the user (DB-only record).
+
+## 52. Z Report header: store name text replaced by the per-store receipt logo (2026-10-02)
+
+**Request.** Drop the store/branch name text from the top of the Z Report
+and show the store's receipt logo instead, using the same mechanism as
+the regular receipt. Whether the name was dynamic or hardcoded was
+explicitly out of scope.
+
+**Change** (`print_format/z_report/z_report.json`, git-tracked standard
+format, unlike the DB-only receipt): the
+`<div class="store-name">{{ report.store_name }}</div>` line and its
+now-unused `.store-name` CSS rule are replaced by the exact logo block
+the "Swan Sales Invoice" receipt uses --
+`frappe.call("posawesome.posawesome.api.print_assets.get_receipt_logo_data_uri",
+pos_profile=doc.pos_profile)`, rendered as a centred 40mm `<img>` only
+when a logo is set. The company line (`report.company`), title and
+everything below are unchanged. `get_z_report_data()` still returns
+`store_name`; nothing else reads it now, left in place. Live staging
+record was confirmed identical to git before migrating (no live-only
+edits for migrate's delete-and-recreate to wipe).
+
+**Verified on staging** via `get_html_and_style` (the Z Report's QZ
+print path), as cashier `testserver@swan.com`, rasterised in headless
+Chromium: Test Pos's closing shift embeds Test Pos's logo
+(`swanGalleriaLogo_bw66e47d.png`) and no longer contains "Swan
+Galleria"; a second, temporary POS Profile with a different test logo
+and a copied closing shift (inserted inside a transaction that was
+rolled back; test PNG deleted from disk) embeds its own logo and not
+Test Pos's; with no logo set the report starts at the company line, no
+broken image. Authorization unchanged and re-checked:
+`get_receipt_logo_data_uri()` returns "" for a plain user not assigned to
+the profile and the logo once assigned (managers -- e.g. testserver's
+Sales Manager role -- can read any profile, by design of
+`get_authorized_pos_profile()`).
+
+**Regression check.** Frontend: 243/243 files, 1258/1258 tests.
+Backend (isolated): `test_z_report` 3/3, `test_print_assets` 4/4 (both
+followed by the known pre-existing teardown ImportError, reproduced
+identically with this change stashed). `bench build`: N/A, no frontend
+files touched. `bench migrate`: twice, exit 0, live record equals git
+after both. Security: no new endpoint or query; reuses the existing
+whitelisted logo endpoint with its own per-profile authorization, keyed
+by the closing shift's own `pos_profile`. Untouched: the receipt print
+format, `printZReport()`'s QZ call, Z Report data/figures.
+
+**Promoted:** committed to `develop-swan` only, `stable`/production
+untouched. Unlike the receipt, this reaches production via the normal
+pull + migrate -- no Desk paste needed.
+
+**Follow-up (same day): company name line removed too.** The user
+wanted the header to be the logo only, so the
+`<div class="company-name">{{ report.company }}</div>` line and its
+`.company-name` CSS rule were removed as well; the "Z REPORT" title and
+everything below are unchanged (the only remaining `report.company*`
+reference is `company_currency`, the "OMR" suffix). With no logo set,
+the report now starts directly at the "Z REPORT" title. Re-verified the
+same way (cashier render of Test Pos and a rolled-back second profile,
+Chromium screenshots): logo is the first element, no store or company
+name text anywhere, per-profile logos correct, plain-user authorization
+unchanged. Regression check: frontend 243/243 files, 1258/1258 tests;
+`test_z_report` 3/3, `test_print_assets` 4/4 (same pre-existing
+teardown error); build N/A; migrate twice, exit 0, live equals git.
+Committed to `develop-swan` only.
+
+## 53. Promotion of 15 pending commits to stable, combined receipt HTML, stale-test fixes (2026-10-02)
+
+**Promoted to `stable`** (`0b4ca38..972e712`, pushed): `f545d53`,
+`c2a9270`, `1ae53b9`, `b720667`, `f79fb6c`, `b384128`, `e535058`,
+`99fc978`, `b15a938`, `4d8bc26`, `d334397`, `fe750d4`, `3082dc6`,
+`7286bf5`, `501bed0` in that order, plus the test fix `ae9b484` below.
+The last five conflicted only in `PROGRESS_NOTES.md` (stable's copy stops
+at section 28; each commit appends a later section). Per the user's
+choice, stable keeps its own notes unchanged: code taken, notes dropped.
+Every promoted commit's code diff verified byte-identical to its original
+(`git patch-id`), and `stable`'s tree now differs from `develop-swan`
+only in `PROGRESS_NOTES.md` and `CLAUDE.md`.
+
+**Combined receipt HTML.** `4d8bc26` had also switched the DB-only
+"Swan Sales Invoice" receipt to the shared
+`credit_exchange.get_customers_with_same_shift_return()` on staging
+(2026-09-15, per the Version log), but a 2026-09-30 edit put the old
+inline SQL back, and production never had it -- so section 51's Arabic
+HTML (built from production's copy) still used the old SQL. Built one
+combined HTML: production's copy + Arabic description (section 51) +
+only the exchange-logic hunk of the 09-15 version (its layout was older
+and was not reused). Verified on staging as the cashier against
+`ACC-SINV-2026-00083` with the return's state changed inside a
+rolled-back transaction: submitted same-shift return -> "Exchange Value"
+both ways; cancelled or draft return -> old SQL wrongly said "Exchange
+Value", combined says "Credit Applied"; return in another shift ->
+"Credit Applied" both ways. Staging's print format now holds it.
+Production must paste it **after** migrate: it calls a method that only
+exists once `4d8bc26` is deployed.
+
+**Stale tests found by the promotion's regression check, fixed in
+`ae9b484`** (test-only, each module failed before and passes after):
+`test_payment` still expected the change reconciliation against the
+cash account (`1ae53b9` deliberately switched it to the receivable
+account); `test_overview_loyalty` (3), `test_cash_movement_integration`
+(1) and `test_pos_closing_shift` (3) predate `4d8bc26`'s overview call
+into `credit_exchange`, whose opening-shift lookup hit fake shifts that
+returned the wrong shape or didn't exist. They now resolve to the
+test's own opening shift; one asserts the exchange lookup authorizes
+against that shift's profile/company. These had gone unnoticed because
+earlier regression checks didn't run these modules.
+
+**Regression check on `stable` (final).** Frontend 243/243 files,
+1258/1258 tests. Backend, 20 modules in isolation: 14 OK (incl. the 4
+fixed above, `test_same_shift_exchange` 5/5, `test_z_report` 3/3,
+`test_item_sale_controls` 30/30, `test_payments` 9/9); 4 fail exactly as
+on pre-promotion `stable` `0b4ca38` (`test_creation` 8 errors,
+`test_invoice_cancel_hooks` 2, `test_invoices` 1 import error,
+`test_workspace_gift_card` 2); 2 can't start (below). `bench build`
+exit 0. `bench migrate` twice, exit 0, Z Report live == git, Arabic
+field after `description`, both discount toggles present.
+
+**Open, not fixed:**
+- `test_credit_exchange` and `test_submitted_invoice_edits_credit_badge`
+  (both new in `4d8bc26`) crash before running any test: Frappe's
+  test-record preloader (`compat_preload_test_records_upfront` ->
+  `make_test_records`) tries to insert ERPNext's "Standard Buying" Price
+  List, which already exists on staging -> `DuplicateEntryError`. So the
+  tests written for the shared exchange logic have never actually run
+  here. Separate investigation, deliberately not blocking this release.
+- Security gap in `d334397`: `collect_manual_item_discount_errors()`
+  skips any line carrying `posa_offer_applied`, a client-supplied flag
+  never re-validated server-side, so a hand-crafted request could bypass
+  the new manual-discount restriction. Not a regression (no server check
+  existed before `d334397`); needs its own fix.
+
+## 54. Size/Color/Brand per invoice line and POS Cashier name as Report View columns (2026-10-05, `397b01d`)
+
+**Request.** Staff need Size, Color and Brand per line item, and the POS
+Cashier's real name (not email), as ordinary Sales Invoice Report View
+columns: Pick Columns, filters incl. date range, Group By, export.
+
+**Found first (live, staging).**
+- Size/Color exist only in Item's `Item Variant Attribute` table (exactly
+  `Size` and `Color`, 2001 variants each, plus one stray `Test Size`), which
+  Report View can't reach from Sales Invoice.
+- Brand was already stored: ERPNext's own `Sales Invoice Item.brand`
+  (121/126 lines filled), but `hidden: 1` -- and Report View's Pick
+  Columns/Group By skip hidden fields (`report_view.js`, `group_by.js`).
+- `posa_cashier` (Link User) is set server-side at submit from the PIN-
+  unlocked terminal cashier and displays the email.
+- `fetch_from` was rejected for the name: on a submit, Frappe only applies
+  fetched values when `allow_on_submit` is set, and the cashier is set in
+  the same save as the submit -- it could silently stay empty.
+
+**Built.**
+- New fields (hand-added to `custom_field.json` + hooks fixture list):
+  `Sales Invoice Item-posa_item_size`, `-posa_item_color` (Data, read-only,
+  after `brand` in the "Description" section) and
+  `Sales Invoice-posa_cashier_name` (Data, read-only, list view + standard
+  filter). The name field is anchored after
+  `posa_below_cost_override_details`, the end of a hidden 4-field chain
+  already anchored on `posa_cashier`, to avoid an `insert_after` tie; it
+  renders directly under POS Cashier.
+- Property Setters `Sales Invoice Item-brand-hidden` (0) and
+  `-brand-read_only` (1), in `property_setter.json` + hooks.
+- `invoice_reporting_fields.set_invoice_reporting_fields()`, called from
+  the existing Sales Invoice `validate` hook (`invoice.py`): Size/Color and
+  Brand always from the Item (never the client payload), cashier full name
+  (falls back to the user id). Snapshot at save time. Sales Invoice only.
+- Patch `backfill_invoice_reporting_fields`: creates the three fields from
+  the fixture's own definitions first (patches run before fixture sync),
+  backfills via SQL, and reports unmatched variant lines / other attribute
+  names to migrate output and Error Log ("Invoice reporting backfill:
+  unmatched Size/Color") instead of failing.
+
+**Verified on staging.** Migrate twice, field placement stable. Backfill:
+121/126 lines (the 5 blanks are the non-variant "Consulting" item),
+115/120 invoices with a cashier name (5 have no `posa_cashier`); report
+flagged only `Test Size`. Real draft insert (rolled back): variant row got
+38 / NAVY BLUE 002 / MAX&CO., cashier name "Aziz". Report View's own query
+API exercised for columns + Size filter + date range, and Group By Brand,
+Size-within-brand, Cashier Name. New module `test_invoice_reporting_fields`
+11/11 (wiring test confirmed to fail without the hook call). Frontend
+243/243, 1258/1258 (one transient failure on the first run, clean rerun,
+no frontend files touched). Not clicked through in a browser (headless
+Chromium can't start here: missing `libnspr4`).
+
+**Production.** After pull + `bench migrate` (no build), check Error Log
+for the backfill report; if production's attributes aren't spelled exactly
+`Size`/`Color`, adjust `ITEM_ATTRIBUTE_FIELDS` and rerun.
+
+## 55. TRACKED, NOT YET FIXED -- two stale test modules hiding untested behaviour, incl. draft-invoice scoping (2026-10-05)
+
+**Status: deferred to its own session.** Diagnosed while running the
+regression check for section 54; failures identical with that change
+stashed.
+
+- `test_invoice_cancel_hooks` (2 errors): its hand-made `frappe` stubs lack
+  `frappe.utils.cint`, which `invoice.py` -> `item_sale_controls.py` (and
+  `tax_contracts.py`) import. The two tests that load `invoice.py` never
+  reach an assertion. The file also leaves its stubs in `sys.modules` (no
+  cleanup, unlike `test_invoices.py`), so later Frappe code in the same
+  process crashes with `cannot import name 'child_table_fields' from
+  'frappe.model'` -- possibly related to the known full-suite `run-tests`
+  crash (unverified).
+- `test_invoices` (1 import error, 0 tests run): its fake `creation` module
+  lacks `trusted_invoice_shift_reassignment`, imported by
+  `invoices.py` -> `submitted_invoice_edits.py`.
+- Both breaking imports already exist in base release `cd5eba1`; these
+  tests have likely never passed on this fork.
+
+**The real gap** is what these tests were meant to guard, currently with
+no automated coverage: cancel-hook submission-ledger cleanup;
+**draft-invoice scoping** (`get_draft_invoices`: cashiers limited to their
+own shift, supervisors company-wide -- a permission boundary); submitted-
+invoice editability (recent normal invoice editable, returns blocked).
+Unknown whether any of these is actually broken until the tests run.
+
+**Suggested approach:** update or replace the stubs (patch real `frappe`
+as `test_invoice_reporting_fields.py` does), add `sys.modules` cleanup to
+the cancel-hooks test, then run the assertions; treat any assertion
+failure as a potential real bug.
+
+## 56. Check Stock: scan a tag to look up sizes/colours/stock without adding to the cart (2026-10-06, `a0adb64`)
+
+**Request.** Staff scan tags just to check other sizes/colours and
+availability; every scan landed in the cart and had to be removed. They
+liked the VIEW toast's Select Item dialog, minus the cart step. Normal
+scan-to-sell had to stay exactly as it was.
+
+**Options weighed.** A Lookup Mode toggle (rejected: the highest risk of a
+cashier forgetting the mode -- left on, scans silently stop selling), an
+"undo" on the VIEW toast (rejected: the item still enters the cart, and
+undo is fragile when the scan only raised an existing line's qty), and a
+dedicated dialog (chosen: the "mode" is a visible modal that ends when it
+closes).
+
+**Found first.**
+- `onscan.js` (in the page folder) is never loaded -- Frappe only loads
+  the page's own `posapp.js` -- so `useScannerInput.ts`'s `onScan` path is
+  dead code. Hardware scanners are keystrokes into whatever has focus.
+- Two `ItemsSelector` instances can coexist (main + counter search
+  dialog), so swapping one instance's scan handler would be fragile.
+- `useScanProcessor`'s find step is tied to the panel's in-memory catalog
+  and writes to the offline cache; reusing it from a dialog meant editing
+  the selling path.
+- All page-wide key listeners (type-to-search, Tab redirect) already stand
+  down while a dialog is visible.
+
+**Built.**
+- `ItemHeader.vue`: Check Stock icon button (`mdi-tag-search-outline`)
+  just left of the tune icon; `ItemsSelector.vue` shows it only for
+  `context="pos"` outside the counter search dialog (hidden on Purchase
+  Orders and Barcode Printing), and shows a "needs a connection" toast
+  instead of opening while offline.
+- `StockLookupDialog.vue` (mounted in `Pos.vue` next to `Variants`):
+  own code field (Enter, or idle auto-lookup for scanners without an Enter
+  suffix), attribute filter chips, cards with barcode/price/qty and a
+  full-width Add button; scanned variant first; card labels follow the
+  filter-row order. Keystrokes landing on a chip/button are pulled back
+  into the code field so a scanner's Enter can't press it. Add repeats
+  `Variants.vue`'s add steps (rate fetch + `add_item`) and closes;
+  `Variants.vue` itself untouched. Add hidden on return invoices.
+- `stockLookupScanRoute.ts` + one check each in `useScannerInput.ts`'s
+  `triggerOnScan`/`onBarcodeScanned`: scans go to the dialog only while it
+  has registered a handler. No mode flag -- registration is dropped on
+  every close path (v-model/Esc/outside click, Close, Add, unmount) with
+  `flush: "sync"`; a handler error drops the route and closes the dialog;
+  module state only, so a reload starts in selling. On close, focus goes
+  back to the item search.
+- `item_processing/stock_lookup.py` -> `items.lookup_item_stock`
+  (read-only): `get_authorized_pos_profile` first, then resolves the code
+  (Item Barcode, scale barcode if the item exists, item code, batch/serial
+  if the profile enables them), returns the family via
+  `get_item_variants` or a single item via `get_items_details`, at the
+  profile's own warehouse. Codes over 140 chars return not-found without a
+  query.
+
+**Verified.** Frontend 245/245 files, 1288/1288 tests. New
+`stockLookupDialog.spec.ts` runs the real `useScannerInput` +
+`useScanProcessor` pipeline: for each close path a scan afterwards adds to
+the cart; confirmed real guards by mutation (no unregister -> 7 fail; no
+scan interception -> 11 fail; no prop forwarding in `ItemsSelector` -> 4
+fail). Backend in isolation: `test_stock_lookup` 9/9, `test_barcode` 3/3,
+`test_details` 7/7, `test_items_numeric_code` 4/4, `test_items_delta` 4/4,
+`test_offline_sync_items` 4/4, `test_pos_access` 12/12. `bench build`
+exit 0; no migrate needed (no doctype/fixture/print format). Live on
+staging in headless Chromium (13-variant family, scanner-speed
+keystrokes): lookup leaves the cart untouched, and a scan after Esc,
+outside click, Close, Add and a reload each added to the cart; VIEW toast
+and its dialog still work; no overflow at 390px. Staging has no
+out-of-stock variants, so that card state is covered by unit tests only.
+
+**Headless browser now works here** (earlier sections said it couldn't):
+`apt-get download libnss3 libnspr4 libasound2t64`, `dpkg-deb -x` into a
+scratch dir, run with `LD_LIBRARY_PATH` pointing at it; session via
+`bench --site staging.local browse --user Administrator`.
+
+**Production.** Pull + `bench build --app posawesome` + restart; no
+migrate needed.
+
+## 57. Discount reasons on cart lines, required before payment per store (2026-10-06, `02f4d9d`)
+
+**Request.** Staff give line discounts (Disc % only; Disc Amt and the
+invoice-level discount stay locked) and must record why -- e.g. a bank
+card offer. Pick-only, per store, and nothing changes for stores that
+don't opt in.
+
+**Found first (live, staging).**
+- `get_invoice_items` (`document.ts`) is an explicit allowlist of line
+  fields, so a new line field never leaves the browser unless added there.
+- Frappe validates Link fields *before* `validate` hooks
+  (`document.py` `_validate_links` then `run_before_save_methods`), so a
+  queued offline sale naming a since-deleted reason would fail to sync --
+  hence sanitising the raw payload in `update_invoice`/`submit_invoice`.
+- Offline invoices sync through the same `submit_invoice`/`validate`, so a
+  strict server rule would reject sales already paid for offline.
+- **Z Report gap:** "Discounts Granted" summed only the invoice-level
+  `discount_amount`, so Disc % line discounts never reached it (staging
+  shifts showed 0 against 860.69 / 26.73 of real line discounts).
+
+**Built.**
+- POS Profile `posa_require_discount_reason` ("Ask for a discount reason",
+  default off, in "Pricing and Discount Controls"). Off = cart exactly as
+  before; the server also does nothing for that store.
+- Doctype **POS Discount Reason** (`reason_name`, `enabled`,
+  `display_order`, read-only `is_system`; renamable; names containing the
+  word "Discount" refused on save/rename; "Not recorded" can't be renamed
+  or deleted). Line field `posa_discount_reason` (Link) on Sales Invoice
+  Item and POS Invoice Item, after `discount_amount` ("Discount and
+  Margin"). Pick-only: an earlier note field/"Other (note)" reason was
+  removed before release.
+- Patch `seed_pos_discount_reasons`: NBO Sadara, NBO Infinite / Platinum,
+  OAB Elite / Infinite, OAB Credit Card, Bank Dhofar Al Riadah, Bank Muscat
+  Private Banking, Bank Muscat Asalah, Bank Muscat Al Jawhar, Bank Muscat
+  Oman Air Platinum, WGO, VIP, H.H Family, Sale, Staff, Damaged item,
+  Manager approval, Other / General (orders 1-17), plus hidden
+  "Not recorded" (99). Idempotent: existing reasons never edited; an
+  earlier "– xx%" name is renamed via `frappe.model.rename_doc.rename_doc`
+  (the `frappe.rename_doc` wrapper has no `ignore_permissions` -- caught
+  only by running the patch on real data); old "Mastercard" deleted only if
+  unused. Staging already ran it, so it never re-runs there; staging's ten
+  bank/WGO reasons were renamed by hand with Frappe rename and the four
+  general ones set to 14-17.
+- Till: `DiscountReasonDialog.vue` (one tap picks; Enter takes the
+  preselected/latest reason; persistent, no "Later"; long names wrap in the
+  button; one column at <=480px; scrollable). Opened from both Enter paths
+  -- the row editor's `*-edit-submitted` and the keyboard grid's
+  capture-phase Enter (`commitActiveGridEditorAndStay`, which commits by
+  blur so the row event never fires: the section-41 trap again; the row is
+  taken from the event, not the stale active row). Red "Reason?" chip on
+  lines still missing one. `ensureDiscountReasons` in `show_payment`
+  blocks payment until every discounted line has a reason. Scanner guard:
+  printable keys swallowed, Enter within 300ms ignored -- attached to
+  Vuetify's overlay wrapper via `content-props`, because focus can sit
+  there, outside the card. Preselected button found by name, not a CSS
+  selector (escaping silently failed on these names).
+- Server (`api/discount_reasons.py`, from the invoice `validate` hook):
+  undiscounted/offer/free lines cleared; on submit a missing reason becomes
+  "Not recorded" (safety net only, never a rejection); returns copy the
+  original line's reason via `sales_invoice_item`/`pos_invoice_item`. Boot
+  data (`update_opening_shift_data`) carries the reason list, so it works
+  offline.
+- Z Report: `get_shift_line_discount_totals` adds discount_amount x qty of
+  positive line discounts, in company currency.
+
+**Receipt -- DB-only, not in git.** The "Swan Sales Invoice" print format
+is a hand-made DB record (`standard: No`; migrate never touches it; no app
+ships a file of that name). Change: `Discount <reason> 45.0% on 44.600 is
+-20.070` -- reason inserted after "Discount", numbers unchanged; no reason
+or "Not recorded" prints exactly as before (all 114 staging receipts
+byte-identical, normal and reprint); long names wrap (never trimmed); the
+Desk-PDF page-height estimate counts wrapped lines (3+ long reasons used to
+spill onto a second page). The record uses CRLF line endings -- read and
+write the files with `newline=""`. Files, outside git, in
+`/home/aziz/frappe-bench/print_format_backups/`:
+- `swan_sales_invoice_staging_2026-10-06_before_discount_reason.html` /
+  `.json` -- rollback copy (sha256 `d949a2569fc30dca...`)
+- `swan_sales_invoice_2026-10-06_after_discount_reason.html` -- content to
+  paste (`1d72ec39a6819a89...`)
+- `swan_sales_invoice_2026-10-06_discount_reason.diff` -- the three changes
+Not covered: the offline receipt (`offline_print_template.ts`).
+
+**Verified.** Frontend 248/248 files, 1328/1328 tests; guards mutation-
+checked (Pay gate, both Enter paths, scanner guard on the overlay,
+preselected focus, persistence, payload allowlist). Backend in isolation:
+`test_discount_reasons` 27/27, `test_z_report_line_discounts` 2/2, plus
+the invoice, offline-sync, return, closing-shift and print-assets modules;
+`test_creation`, `test_invoice_cancel_hooks`, `test_invoices`,
+`test_submitted_invoice_shift_security` fail identically at HEAD
+(pre-existing). Migrate run repeatedly: idempotent. Live on staging
+(headless Chromium): picker with all 17 reasons at 1440-360px, Enter and
+scanner guard on both prompts, Pay blocked/unblocked, switch off = unchanged
+till; Desk print preview, QZ path, reprint and PDF of a real till draft
+with a long reason and an Arabic line.
+
+**Open -- pre-existing security gap, for a later fix.**
+`shifts.check_opening_shift(user)` is whitelisted and trusts the
+client-supplied `user`: any authenticated session can fetch another
+user's open shift, full POS Profile and Company doc. Not introduced or
+changed here (this feature only adds non-sensitive reason names to that
+payload).
+
+**Production.** Pull, `bench --site <site> migrate` (doctype, fields,
+seed), `bench build --app posawesome`, restart; then paste the receipt
+HTML by hand (see above) and turn the switch on per store.
+
+## 58. Parent Style, Season, Collection, Item VAT and Item Group as Report View columns per invoice line (2026-10-08, `3eedc90`)
+
+**Request.** One Report View row per Sales Invoice line with Parent style,
+Item Group, Description, Season, Collection, Disc %, discounted price
+without VAT, and the exact 5% VAT of that line.
+
+**Found first (live, staging; ERPNext 16.26).**
+- Already pickable: Description (plain text), Disc % (`discount_percentage`),
+  Net Rate (unit price ex-VAT after discount) / Net Amount (line total
+  ex-VAT -- use this for totals; Net Rate x Qty misses it by a cent on some
+  lines). Item Group exists on the line but is hidden.
+- Per-line VAT exists only in ERPNext 16's hidden child table **Item Wise
+  Tax Detail**; Report View joins child tables with no relation between
+  them (a 2-line invoice -> 4 rows, each item paired with every VAT
+  amount), so it can't be shown as-is. `amount - net_amount` is off by
+  +-0.01 on some lines (ERPNext puts the rounding cent on one line's VAT).
+  The UAE regional `tax_rate`/`tax_amount` fields on staging are ERPNext
+  test-suite leftovers (company is in Oman) and always 0.
+- Season and Collection exist **only on production**, as hand-made Item
+  custom fields `custom_season` / `custom_collection` (Data), e.g.
+  "SS26 1ST DEL" (the delivery is part of the value; no separate Delivery
+  column). About 1,768 of 8,591 production variants have no Season and 579
+  no Collection -- intended.
+- POS delivery charges are added as an "Actual" taxes row, which ERPNext
+  also spreads over the per-line breakdown -- excluded from Item VAT.
+
+**Built.**
+- Sales Invoice Item fields (read-only, after `posa_item_color`, Description
+  section): `posa_item_variant_of` (Link Item, "Parent Style"),
+  `posa_item_season`, `posa_item_collection` (Data), `posa_item_vat`
+  (Currency, company currency, "Item VAT"). Property Setter
+  `Sales Invoice Item-item_group-hidden` = 0. Hand-added to the fixtures;
+  **no Item custom field is shipped** (a test fails if `Item-custom_season`
+  / `Item-custom_collection` ever appear in a fixture or `hooks.py`).
+- `invoice_reporting_fields.set_invoice_reporting_fields` (Sales Invoice
+  validate hook, last step): one batched Item query (brand, variant_of,
+  plus custom_season/custom_collection only if `frappe.get_meta("Item")`
+  has them -- otherwise those line fields are left untouched and saving
+  carries on). Values from the line's own (variant) Item; a blank is copied
+  as blank -- no parent fallback, no placeholder. Snapshot at save time:
+  old sales keep the values from when they were saved. Item VAT from
+  ERPNext's in-memory per-line breakdown (`doc._item_wise_tax_details`,
+  rounding cent included; non-"Actual" taxes only), else the stored Item
+  Wise Tax Detail rows, else `amount - net_amount` (logged); untaxed
+  invoices get 0. Returns are negative.
+- Patch `backfill_invoice_line_reporting_fields`: creates the four fields
+  from the fixture first (patches run before fixture sync), then batched
+  SQL: Parent Style from `Item.variant_of`; Season/Collection from each
+  Item's **current** value, blanks skipped quietly, skipped entirely (one
+  note) unless the Item field is defined *and* its column exists (a deleted
+  Custom Field leaves its column behind); Item VAT exactly from stored
+  breakdown rows, approximate `amount - net_amount` only for taxed invoices
+  with no breakdown. Reports (migrate output + Error Log "Invoice line
+  reporting backfill: lines to review") only lines whose Item no longer
+  exists and approximate-VAT invoices. Idempotent.
+
+**Verified.** Staging backfill: Season/Collection match each Item on all
+136 lines, blanks blank, no placeholders; Item VAT equals the stored
+breakdown on all 104 taxed lines, 0 on the 21 untaxed; line VATs sum to
+Total Taxes and Charges on all 117 submitted invoices. Hook run on
+ERPNext's real recalculation of all 117: copies the per-line breakdown
+exactly (125/125). Real till draft (Pay): all columns correct, VAT
+2.05 + 4.32 + 5.31 = 11.68 = total taxes. With the Item fields deleted:
+till save still works; backfill skips Season/Collection with a note.
+Report View's own query: one row per line with all columns. Tests:
+`test_invoice_reporting_fields` 25/25, new `test_invoice_line_backfill`
+6/6; five guards mutation-checked. Frontend 248/248, 1328/1328; migrate
+three times, idempotent; backfill re-run changes nothing.
+
+**Staging-only test setup (not in git).** `Item-custom_season` and
+`Item-custom_collection` (Data) were created by hand on staging only, and
+four items have test values:
+- `30410232030043`: Season "SS26 1ST DEL", Collection "SS26 1ST DEL"
+- `35210232030015`: Season "SS26 2ND DEL", Collection "SS26 2ND DEL"
+- `35210232030014`: Season blank, Collection "SS26 2ND DEL"
+- `30440222030023`: Season "FW25 1ST DEL", Collection blank
+
+**Noted, unrelated.** Staging's System Settings currency precision is 2,
+while OMR has 3 decimals: newer invoices round to 0.01, older ones used
+0.001 (recalculating an old invoice today re-rounds its totals). Not
+changed.
+
+**Production deploy.**
+1. `bench --site <prod-site> backup --with-files`
+2. Collision check -- must return no rows:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE fieldname IN ('posa_item_variant_of','posa_item_season','posa_item_collection','posa_item_vat'); SELECT name FROM \`tabProperty Setter\` WHERE name LIKE 'Sales Invoice Item-item_group%';"
+   ```
+3. Item fields this relies on -- should return 2 rows, both Data:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT name, fieldtype FROM \`tabCustom Field\` WHERE dt='Item' AND fieldname IN ('custom_season','custom_collection');"
+   ```
+4. Optional -- taxed invoices that would get the approximate VAT:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT COUNT(DISTINCT si.name) FROM \`tabSales Invoice\` si JOIN \`tabSales Taxes and Charges\` t ON t.parent = si.name AND t.charge_type != 'Actual' WHERE NOT EXISTS (SELECT 1 FROM \`tabItem Wise Tax Detail\` w WHERE w.parent = si.name);"
+   ```
+5. `cd apps/posawesome && git pull upstream stable`
+6. `bench --site <prod-site> migrate` -- read the backfill's output (and
+   Error Log "Invoice line reporting backfill: lines to review").
+7. `bench restart` (no `bench build`: no frontend change).
+8. Report View -> Pick Columns -> Sales Invoice Item: Parent Style, Item
+   Group, Season, Collection, Item VAT; spot-check that one invoice's Item
+   VAT sums to its Total Taxes and Charges.
+
+## 59. Light-mode contrast: unreadable active cart row, Frappe's Bootstrap recolouring buttons, theme-aware greys and a darker light palette (2026-10-08)
+
+**Reported.** Light mode, cart row selected: Disc %, Disc Amt and Rate showed
+no visible text; Qty was fine. Audited the whole POS live on staging in both
+themes (screenshots plus a script that measures every visible text element's
+contrast against its composited background) before fixing anything.
+
+**Root cause of the report.** The keyboard-active row is hard-coded navy
+`#174a70` with `color: #fff !important` on its `td` in both themes
+(`CartItemRow.vue`). Disc %/Disc Amt/Rate/UOM are display boxes
+(`.posa-cart-table__editor-display`) with `background:
+var(--pos-primary-container)` (`#e0f7fa` light, `#003344` dark) and `color:
+var(--pos-primary-text)` -- a variable defined nowhere, so the text inherited
+the row's white: 1.1:1 in light, fine in dark only by accident. Qty is a real
+`<input>`, which theme.css's global `.posapp .v-text-field input { color:
+var(--pos-text-primary) !important }` forced to dark grey.
+
+**Step 1 -- `41517fb` (stable `e331cbf`).**
+- Every active row now gets what counter-grid rows already had: transparent
+  editors, white text, cyan outline (`items-table-styles.css`). The selectors
+  include `td` so they outrank theme.css's global `!important` input/overlay
+  rules.
+- `--pos-primary-text` defined (light `#00363a`, dark `#e0f7fa`), and the
+  `--pos-button-warning-*` / `--pos-button-success-*` variables the Purchase
+  and Barcode Printing +/- buttons referenced but nobody defined.
+- **Frappe's desk CSS leaks Bootstrap 4's bg-variant rules onto Vuetify
+  buttons**: `button.bg-primary:hover, button.bg-primary:focus {
+  background-color: black !important }` (plus success/warning/info/secondary
+  shades). Vuetify colours buttons with the same `bg-*` classes, so any
+  hovered or tapped primary button turned black -- and in dark mode its
+  on-primary text is also black, so it vanished (seen on the LIST/CARD
+  toggle after a tap). A theme.css rule restores each colour on hover/focus.
+
+**The theme rules that never applied: `data-route`, not `data-page-route`.**
+Frappe sets `data-route="posapp/pos"` on `<body>` (`frappe/views/
+container.js`); `data-page-route` exists only on the inner
+`.page-container` div. So every existing theme.css rule written as
+`body[data-page-route="posapp"] ...` has never matched anything -- the
+dialog card background/text overrides, the tooltip styling, the scrim, the
+"hide Frappe desk elements" block. Confirmed live (`body.matches(
+'[data-page-route="posapp"]')` is false). Also: Vuetify dialogs render in a
+`.v-overlay-container` under `<body>`, outside `.posapp`, so `.posapp ...`
+rules don't reach dialogs either. The new rules in this section use
+`body[data-route^="posapp"]`. **The old rules were deliberately left as
+they are**: switching them on now would restyle every dialog at once and
+needs its own review.
+
+**Step 3 -- `b00fa5d` (stable `476c516`).**
+- **Item-history dialog, dark mode: hint text and "Page 1" dark-on-dark.**
+  The real cause was a prop default, not CSS. `ItemSalesHistoryModal.vue`
+  declared `isDarkTheme?: boolean` with no default and used `props.isDarkTheme
+  ?? theme.isDark.value`. Vue casts an absent Boolean prop to `false`, never
+  `undefined`, so the `??` fallback never ran and the dialog was always
+  `v-theme--light`; Vuetify's `.text-medium-emphasis` then used the light
+  theme's dark on-background colour on the dark card. Found by reading the
+  live element's matched rules (CDP `CSS.getMatchedStylesForNode`). No caller
+  passes the prop. Fix: explicit `isDarkTheme: undefined` default. The
+  existing `newFeaturesDarkMode.spec.ts` asserted the `??` line as a source
+  string and could not see this; the new `itemSalesHistoryModalTheme.spec.ts`
+  reads the compiled prop and fails without the fix (checked).
+- `text-grey-darken-*` / `text-grey` replaced with Vuetify 3's
+  `text-high-emphasis` / `text-medium-emphasis` (Close Shift overview and
+  reconciliation, Offline Invoices, cash movement). The old classes were
+  fixed greys: 2.7:1 in dark (headings) and 2.7:1 in light (subtitles).
+- Light mode field labels: full opacity on `--pos-text-secondary` (were
+  2.4:1 at Vuetify's medium-emphasis opacity on the grey field fill);
+  focused/error/disabled fields untouched.
+- Drafts button: no longer `theme="dark"` + a white-text class (white on
+  `#ffc107`, 1.6:1). The class's `var(--pos-text-primary)` only resolved to
+  white because theme.css redefines the `--pos-*` tokens under
+  `.v-theme--dark`.
+
+**Step 2 -- `31fd81a` (stable `e87aee4`).** Light theme in `vuetify.ts`:
+warning `#ff9800` -> `#b35900`, secondary `#00bcd4` -> `#007c8a`, success
+`#66bb6a` -> `#2e7d32`, `on-warning` `#212121` -> `#ffffff`. Each is >= 4.5:1
+on white and on `--pos-surface-muted`, and carries white text as a fill.
+Dark theme unchanged. Visible effect: Drafts becomes burnt orange with white
+text; "0 Offers", Sales Return "Clear"/"Return without Invoice", Invoice
+Management "Paid" chips and Close Shift tile icons become readable.
+
+**Verification.** Contrast sweep before/after each step in both themes: every
+targeted finding gone, nothing new, dark unchanged or better. Frontend
+249/249 files, 1329/1329 tests on both `develop-swan` and `stable`; `bench
+build` exit 0 on both. No backend, doctype, fixture or print-format change.
+
+**Still below 3:1, not addressed:** Save & Clear and PAY (white on hard-coded
+orange/green, large bold text), the green "Online" indicator, Close Shift's
+close button, Invoice Management's Close button/tile subtitles/History tab,
+the drafts count chip, the dark-mode item-history "Sales History" tab, and
+(found later, existing) the dark-mode Barcode Printing header (white on
+`#00d4ff`, 1.8:1). Disabled controls stay faint by design.
+
+**Staging side effect, cleaned up.** Opening Pay in the audit script saves
+the cart as a draft invoice; the sweeps created `ACC-SINV-2026-00163`
+(Anonymous, test item) more than once, deleted each time. The throwaway
+cashier was deleted; Administrator's desk theme is back on Dark (the POS
+theme toggle also saves it to the user's desk theme).
+
+**Production deploy.**
+1. `cd apps/posawesome && git pull upstream stable`
+2. `bench build --app posawesome`
+3. `bench restart`
+No migrate for this change. If production has not yet deployed section 58
+(`54267b1`), that commit comes with the pull and needs its own steps
+(backup, checks, `migrate`) from section 58 first.
+
+## 60. Z Report: Items Sold / Items Returned, and Number of Items + Total Quantity become the net (2026-10-19)
+
+**Report.** A one-shift exchange (sale 1 piece 77.200, return 1 piece
+-64.200, 13.000 Visa using the 64.200 return credit) showed Total Quantity 0
+on the Closing Shift form but Number of Items 1 and Total Quantity 1 on the
+Z Report. Staff expect 0.
+
+**Cause.** `get_z_report_data()` summed `total_qty` in the sale branch only,
+and both print-format lines printed that one figure. Sales-only had been a
+deliberate choice when the Z Report was built (section 1); the user has now
+defined the figures differently. The Closing Shift's own `total_quantity`
+(`creation.py`) sums every invoice, returns included (negative quantities).
+Reproduced on staging: `POSA-CS-26-0000011` stored 14, Z Report printed 16.
+
+**Definitions (user's).** Items Sold = pieces on sale receipts (a qty-2 line
+counts 2); Items Returned = pieces on return receipts; Number of Items =
+Total Quantity = Sold - Returned (same as the Closing Shift). Sales Count /
+Returns Count stay receipt counts; Items/Receipt and Sales Figure/Item stay
+on Items Sold, 0 when nothing was sold.
+
+**Built.**
+- `z_report.py`: `items_sold`, `items_returned` (abs of the return's
+  negative `total_qty`), `total_qty` = their difference rounded to 3.
+  Frappe's `flt(x, 3)` already returns 0.0 for a rounded -0.0, so no
+  separate guard was needed (checked directly; a test covers it).
+- `z_report.json`: "Items Sold" and "Items Returned" above both net lines
+  (Today's Operations and Additional Information). A `qty()` Jinja macro
+  prints quantities as whole numbers (0, 2, -1), 2 decimals only if
+  fractional. Items/Receipt stays a 2-decimal ratio.
+- New `test_z_report_item_counts` (7): the user's six cases, receipt counts,
+  per-item basis, nothing-sold, no "-0", whole-number printing, both
+  sections' lines. Fails against the old code (8 failures) and the old print
+  format (2).
+
+**Checked first, nothing wrong.** The exchange's monthly-report rows (no
+production access here, checked by arithmetic + staging storage): qty 0,
+13.000, VAT 3.676 - 3.057 = 0.619 (both exactly 5% inclusive), net ex-VAT
+12.381 = Closing Shift Net Total; a credit return has no payment rows and
+redeemed credit is not a payment row, so Visa 13.000 = the final total.
+Report View's Totals Row (`report_view.js` `get_columns_totals`) is a plain
+sum of the *loaded* rows: it covers only what's loaded (20 by default), adds
+invoice-level columns once per line on multi-line invoices, and payment
+columns differ from Final Price by net customer credit and by cash change
+(the Cash row is the tendered amount, e.g. `ACC-SINV-2026-00121`: 200.000
+with 43.200 change).
+
+**Verified on staging.** Live "Z Report" record identical to git before
+migrate; migrate twice, exit 0, identical after each (the JSON has no
+`modified`, so every migrate recreates it from the file -- pre-existing).
+All 13 submitted shifts: new net = stored `total_quantity`. Real HTTP render
+of `POSA-CS-26-0000011` via `get_html_and_style` (the reprint/QZ path):
+Items Sold 16 / Returned 2 / Total Quantity 14 / Number of Items 14, counts
+11 and 1 unchanged. Frontend 249/249, 1329/1329. Backend (isolated):
+`test_z_report_item_counts` 7/7, `test_z_report` 3/3 (its trailing
+`AttributeError: module 'frappe' has no attribute 'model'` also occurs on
+unchanged HEAD -- the module stubs `frappe` in `sys.modules`),
+`test_z_report_line_discounts` 2/2, `test_same_shift_exchange` 5/5,
+`test_pos_closing_shift` 9/9.
+
+**Note.** Reprints are computed live, so a past shift's reprint now shows the
+net figures and won't match its original paper copy.
+
+**Production deploy.** Compare the live "Z Report" Print Format with git
+first (migrate recreates it), then pull, `bench --site <prod-site> migrate`,
+`bench restart`. No build.
+
+## 61. Z Report VAT nets returns: Net Sales incl. VAT, VAT on Sales / on Returns, Net Excl. VAT from invoice net totals (2026-10-19)
+
+**Problem.** The Z Report's VAT block covered sales only. For the section 60
+exchange (77.200 sale, 64.200 return) it printed Tax Incl. Sales Figure
+77.200, VAT 3.676, Net Excl. VAT 73.524; the Closing Shift shows 13.000,
+0.619, 12.381.
+
+**Built (user-approved design).**
+- `z_report.py`: `vat_on_sales` and `vat_on_returns` (abs of each return's
+  base `total_taxes_and_charges`, row-wise via `get_base_value()` like
+  sales VAT); `total_vat` = their difference.
+- "Tax Incl. Sales Figure" renamed **"Net Sales incl. VAT"** and now prints
+  `net_sales` (sales - returns). New lines "VAT on Sales" and "VAT on
+  Returns" (both positive, like Total Returns) above "VAT Amount" (net).
+- **Net Excl. VAT = the sum of each invoice's own base net total** (returns
+  negative), the same source as the Closing Shift's `net_total`
+  (`creation.py`). The first version used Net Sales - VAT; on staging that
+  was 0.010 off on `POSA-CS-26-0000013`, because `ACC-SINV-2026-00083` is
+  internally inconsistent (net 178.96 + VAT 8.95 = 187.91, grand total
+  187.90 -- ERPNext rounding a VAT-inclusive price at staging's 2-decimal
+  currency precision, see section 58). The user chose the Closing Shift
+  match over the printed lines always adding up: on such a shift Net Sales
+  incl. VAT - VAT Amount differs from Net Excl. VAT by the rounding.
+- `data.py` `get_shift_invoice_rows()` also fetches `net_total` /
+  `base_net_total` (its other callers in `pos_closing_shift.py` read
+  specific keys and are unaffected).
+- Unchanged, still gross sales: Total Sales, Sales Figure/Receipt, Sales
+  Figure/Item, Total Sales Receipts. Total Register unchanged.
+- New `test_z_report_vat` (8): the exchange, gross figures kept, returns-only
+  shift (negative), return VAT in company currency, the 00083 rounding case,
+  the row query fetching net totals, the print-format lines (and no "Tax
+  Incl. Sales Figure"), Total Sales Receipts still gross. Mutation-checked:
+  old code + old print format fail 5; reverting Net Excl. VAT to Net Sales -
+  VAT fails the rounding test; dropping the `data.py` fields fails the query
+  test.
+
+**Verified on staging.** All 13 submitted shifts, four figures each against
+the Closing Shift: Total Quantity = `total_quantity`, VAT Amount = sum of
+the `taxes` table, Net Sales incl. VAT = `grand_total`, Net Excl. VAT =
+`net_total` -- 52/52 equal. Real HTTP render via `get_html_and_style`:
+`POSA-CS-26-0000011` Net Sales incl. VAT 899.170, VAT on Sales 47.649, on
+Returns 4.860, VAT Amount 42.789, Net Excl. VAT 856.381;
+`POSA-CS-26-0000013` 3861.930 / 243.036 / 59.220 / 183.816 / 3678.124.
+Live "Z Report" record identical to git before and after; migrate twice,
+exit 0, no drift. Frontend 249/249, 1329/1329. Backend (isolated):
+`test_z_report_vat` 8/8, `test_z_report_item_counts` 7/7, `test_z_report`
+3/3, `test_z_report_line_discounts` 2/2, `test_same_shift_exchange` 5/5,
+`test_pos_closing_shift` 9/9, `test_overview_loyalty` 4/4,
+`test_cash_movement_integration` 2/2. `test_z_report` and
+`test_overview_loyalty` print a trailing `AttributeError: module 'frappe'
+has no attribute 'model'` after OK on unchanged HEAD too (both stub
+`frappe` in `sys.modules`).
+
+**Production deploy (with section 60).** Compare the live "Z Report" Print
+Format with git first (migrate recreates it), then pull, `bench --site
+<prod-site> migrate`, `bench restart`. No build. Reprints of past shifts
+recompute live and will show the new figures.
+
+## 62. Closing a shift shows a "Shift closed" screen instead of the opening dialog; opening-dialog Submit guards (2026-10-19)
+
+**Problem.** After Close Shift -> Submit, the "Create POS Opening Shift"
+dialog appeared by itself. Staff took it for the close still asking for
+confirmation, pressed its Submit and opened a shift nobody wanted.
+
+**Cause.** `usePosShift.ts` `submit_closing_pos()` ends by calling
+`check_opening_entry()` -- the page-load check -- which finds no open shift
+and calls `openDialog()`. Upstream behaviour (`cd5eba17`, 15.33.0). The
+closing dialog hides itself on Submit before the server answers
+(`useClosingShift.ts`), and 1-2 s later a dialog with a Submit button in the
+same corner appears, prefilled (company, profile, zero amounts), so one press
+opens a shift.
+
+**Built (option A of four; B log out, C go to Desk, D relabel the dialog
+were rejected).**
+- `usePosShift(openDialog, onShiftClosed)`; `check_opening_entry({
+  onNoOpening })` defaults to `openDialog`, so login/refresh still show the
+  dialog. After a close it passes `onShiftClosed` (also when the post-close
+  check fails with nothing cached). Another open shift for the same user
+  (other POS Profile) still loads as before.
+- New `ShiftClosedPanel.vue`: "Shift closed / The Z Report is printing."
+  with **Close** (same red as the dialog's Close; goes to Desk), **Log Out**
+  and **Open New Shift**. `Pos.vue` `shiftClosed` flag hides the POS area and
+  mobile dock; Open New Shift opens the dialog; registering a shift clears it.
+- Shared helpers: `authService.logoutToPosLogin()` (the dialog's logout,
+  moved) and `services/deskNavigation.ts` `goToDesk()` (`set_route("/")` +
+  reload), used by the dialog's Close and the new Close. No role check, as the
+  dialog's Close has none.
+- `OpeningDialog.vue` `submit_dialog()`: returns early while `is_loading`
+  (two clicks in one tick reach the handler before the button re-renders
+  disabled); `async` + `try/catch/finally` so Submit re-enables after a
+  failure and a failure doesn't also raise the global "An unexpected error
+  occurred" toast (frappe.call already shows the server's message).
+- **No server lock** (user's choice): `validate_unique_open_shift()` stays the
+  only server guard; its docstring notes it isn't race-proof.
+
+**Bug found in staging review, fixed before commit.** A first version used
+`frappe.call(...).then(...).finally(...)`. `frappe.call` returns jQuery's
+`$.ajax()` result (Frappe ships jQuery 3.7.0): `then`/`catch`/`always`, **no
+`finally`** (checked against Frappe's own jQuery). Opening a shift showed
+"An unexpected error occurred: frappe.call(...).then(...).finally is not a
+function" (the shift still opened). The specs mocked `frappe.call` with
+native Promises, which have `finally`, so they passed. New
+`tests/helpers/frappeCallPromise.ts` returns jQuery-shaped promises (no
+`finally`); the opening-dialog and `usePosShift` specs use it, and the
+dialog spec fails on anything reaching Vue's `errorHandler`. Against the
+broken code: native mock -> both success-path tests pass; jQuery-shaped mock
+-> all 3 fail with the exact error. `authService.logout().finally()` is fine:
+`api.callEnvelope()` returns a native Promise (pre-existing code, moved).
+
+**Tests.** `usePosShift.spec.ts` +5 (Shift Closed after a close / after a
+failed post-close check; other open shift still loads; dialog on page load /
+on failed load check). `openingDialogSubmitGuard.spec.ts` 3 (opens without
+an error and re-enables Submit; two clicks in one tick -> one request; failure
+re-enables Submit without the toast). `shiftClosedPanel.spec.ts` 6 (text;
+Close, Log Out, Open New Shift in that order; each button only its own
+action; `goToDesk`). `posShiftClosedWiring.spec.ts` 5 (source checks:
+`Pos.vue` can't be mounted under Vitest's bundled Vite -- `.js`-suffixed
+store imports). Each fails against the old code where it guards new
+behaviour.
+
+**Verified on staging** (headless Chromium, Administrator + throwaway PIN
+cashier, deleted afterwards), final build: load with no shift -> dialog;
+shift opened behind the dialog then Submit -> server's "already has an open
+POS shift", Submit re-enabled, no toast; double-click Submit -> exactly one
+shift; unlock, Menu -> Close Shift -> Submit -> Shift Closed screen (light
+and dark checked), no new shift; Close -> `/desk`; Open New Shift -> dialog;
+refresh -> dialog. No "Global Error" in the console. Frontend 252/252,
+1348/1348; `bench build` exit 0; `test_pos_closing_shift` 9/9; no migrate
+(nothing doctype-shaped). Test shifts left on staging (no invoices):
+`POSA-OS-26-0000017`, `-21`, `-23` (closed by `POSA-CS-26-0000015`, `-18`,
+`-19`); `-20` and `-22` cancelled.
+
+**Note.** `pos_opening_shift/test_pos_opening_shift.py` is an empty
+placeholder (`class TestPOSOpeningShift(unittest.TestCase): pass`), so
+"running" it tests nothing; `validate_unique_open_shift()` has no backend
+test.
+
+**Production deploy.** Frontend change: `bench build --app posawesome`,
+restart, staff hard-refresh. No migrate needed for this change.
+
+## 63. TRACKED, NOT YET FIXED -- create_opening_voucher doesn't check the user is assigned to the POS Profile (2026-10-19)
+
+`shifts.py` `create_opening_voucher(pos_profile, company, balance_details)`
+is whitelisted and inserts with `ignore_permissions=True`.
+`POSOpeningShift.validate_pos_profile_and_cashier()` only checks that the
+profile belongs to the company and that the user is enabled -- not that the
+user is in the profile's `applicable_for_users`. Any logged-in user can open
+a shift on any POS Profile by calling the method directly. Suggested fix:
+resolve the profile through `pos_access.get_authorized_pos_profile()` (as
+`get_z_report_data` does) before inserting. Found during section 62; the
+user chose to track it separately.
+
+## 64. Shift Closed screen: Z Report print status and a Reprint Z Report button (2026-10-19)
+
+**Problem.** The Z Report prints automatically on close. If it doesn't print,
+the shift is already closed and staff may not know what to do.
+
+**Found.**
+- **Z Report History works from the Shift Closed screen** (checked live): the
+  navbar Menu stays usable, the item has no shift condition, the dialog lists
+  by `uiStore.posProfile` (not cleared by a close) and `list_closing_shifts`
+  re-authorizes via `get_authorized_pos_profile()`; the just-closed shift is
+  first. After Close (to Desk) or a refresh, the persistent opening dialog
+  covers the Menu, so History needs a new shift (or Desk + browser print).
+- **QZ Tray: paper-out and switched-off printers look like success.**
+  `qz.print()` resolves once QZ hands the job to the OS print queue. Printer
+  states (paper out, offline, cover open) only reach a page through
+  `qz.printers.startListening` / `setPrinterCallbacks` (qz-tray 2.2.5), which
+  this app doesn't use -- so the app treats such a print as done and nobody
+  is warned; the job may print by itself later (a reprint can then give a
+  second copy). Only QZ not running/disconnected/paused, no printer selected,
+  or a missing printer/driver error are reported. Based on the QZ API, not
+  tested against a physical printer.
+- Before this change a failure showed only a 3 s toast "Z Report print
+  failed" (no reason; the reason went to the console), and the Shift Closed
+  screen always said "The Z Report is printing."
+
+**Built (option B; A = button only, C = QZ status listener, D = guidance
+text, not chosen).**
+- `documentPrint.ts` `printZReport()` returns `{ ok, error }`; keeps its
+  toast, so Z Report History is unchanged. `ok` means QZ accepted the job.
+- `usePosShift` passes `{ closingShift, zReportPrint }` to the Shift Closed
+  callback; the close still prints once.
+- New `composables/pos/closing/useShiftClosedPrint.ts`: print state
+  (printing / sent / failed) and reason; `reprint()` prints the just-closed
+  shift, ignored while a print runs or before any close. Extracted from
+  `Pos.vue` so its behaviour is unit-tested (`Pos.vue` can't be mounted).
+- `ShiftClosedPanel.vue`: "Printing the Z Report…" (Reprint disabled +
+  loading); "Z Report sent to the printer. If it didn't print, check the
+  printer and press Reprint." (honest about paper-out); failure as a Vuetify
+  warning alert: "The Z Report didn't print." / reason (bold, plain text) /
+  "Check QZ Tray and the printer, then press Reprint." Buttons: Close, Log
+  Out, Reprint Z Report, Open New Shift; after a failure Reprint is white on
+  `#bf360c` (~5.6:1; the first try, Vuetify `warning` flat, left the label
+  almost invisible in light mode). Card widened to 880px for one row.
+
+**Tests.** New `printZReportResult.spec.ts` (2), `useShiftClosedPrint.spec.ts`
+(5); `usePosShift.spec.ts` +1; `shiftClosedPanel.spec.ts` 9;
+`posShiftClosedWiring.spec.ts` 6. Each fails without the change it covers
+(2, 1 with the reprint guard removed, 1, 5, 2).
+
+**Verified on staging** (headless Chromium has no QZ Tray, so prints fail):
+after close "Printing…" with Reprint disabled, then the warning with "QZ Tray
+is not available."; double-click Reprint -> one print request for the
+just-closed shift; Z Report History from the screen lists it first and
+prints it. Light theme checked after the contrast fix; dark not (theme
+follows the user's saved setting, left alone). The "sent" message is only
+unit-tested -- needs a real till with QZ. Frontend 254/254, 1360/1360;
+`bench build` exit 0; backend (isolated) `test_pos_closing_shift` 9/9,
+`test_z_report` 3/3, `test_z_report_vat` 8/8, `test_z_report_item_counts`
+7/7; no migrate. Test shifts left: `POSA-OS-26-0000027`, `-28` (closed by
+`POSA-CS-26-0000023`, `-24`), no invoices.
+
+**Production deploy.** Frontend: `bench build --app posawesome`, restart,
+staff hard-refresh.
+
+## 65. "Close your shift?" confirmation before a shift is closed (2026-10-19)
+
+**Problem.** Submit in the Close Shift dialog closed the shift at once, with
+no warning; staff could close it by mistake.
+
+**Where Submit closes the shift.** `ClosingDialog.vue` Submit ->
+`useClosingShift.ts` `submitDialog()` (checks every closing amount is a
+number, emits `submit_closing_pos`, hides the dialog) -> `Pos.vue` listener
+-> `usePosShift.submit_closing_pos()` -> `creation.py`
+`submit_closing_shift` (save + submit), then Z Report print and the Shift
+Closed screen.
+
+**Recovering from an accidental close (checked on staging in a rolled-back
+transaction).** On submit, POS Closing Shift links and closes the opening
+shift, deletes the shift's unprinted draft invoices **only if the profile
+has `posa_allow_delete`**, links the invoices, and -- on profiles with
+`create_pos_invoice_instead_of_sales_invoice` only -- merges POS Invoices
+into Sales Invoices. Recovery: a System Manager / Sales Manager /
+Administrator opens Desk -> POS Closing Shift -> **Cancel**; `on_cancel`
+unlinks the opening shift (status back to Open) and clears the invoice
+links; the till is refreshed and the shift loads again (cancelling
+`POSA-CS-26-0000024` turned `POSA-OS-26-0000028` Closed -> Open and
+`check_opening_shift` loaded it; rolled back). Not undone: deleted drafts,
+the POS Invoice merge (POS Invoice profiles), and the printed Z Report
+(throw it away; the cancelled shift drops out of Z Report History, which
+lists submitted shifts only). The real close later prints a new Z Report.
+
+**Built.**
+- New `components/pos/closing/CloseShiftConfirmDialog.vue`: "Close your
+  shift?" / "This will end your shift and print the Z Report. You won't be
+  able to sell until you open a new shift." / **Go Back** (default focus, so
+  a stray Enter doesn't close) and **Close Shift** (Submit's green). Esc or
+  an outside click = Go Back. Theme tokens; buttons wrap on phones.
+- `useClosingShift.ts`: `submitDialog()` split into `requestSubmit()` (same
+  amount check, then opens the confirmation; sends nothing),
+  `cancelConfirm()` (closes only the confirmation; the closing dialog and its
+  `dialog_data` stay as entered) and `confirmSubmit()` (emits
+  `submit_closing_pos` once, then closes both). A `closeSent` guard ignores a
+  second press; reset by a `flush: "sync"` watcher whenever the closing
+  dialog opens (a default pre-flush watcher missed a close+reopen in one
+  tick -- caught by a test).
+- `ClosingDialog.vue`: Submit -> `requestSubmit`; confirmation wired. Its
+  window-level Esc handler used to close the closing dialog; with the
+  confirmation open, Esc would have closed **both** and lost the figures --
+  now Esc only closes the confirmation while it's open.
+
+**Tests.** New `useClosingShiftConfirm.spec.ts` (5),
+`closeShiftConfirmDialog.spec.ts` (5), `closingDialogConfirmWiring.spec.ts`
+(3, source checks: `ClosingDialog.vue` can't be mounted). Fail without the
+change: 5 (old composable), 1 (guard removed), 1 (focus removed), 3 (old
+`ClosingDialog.vue`).
+
+**Verified on staging** (Administrator + throwaway PIN cashier, deleted),
+desktop light, desktop dark, phone 390x844 dark and light (Administrator's
+desk theme set to Dark for the dark runs and restored to Light): typed
+12.345, Submit -> confirmation, Go Back focused, 0 close requests; Esc and
+Go Back -> confirmation gone, closing dialog open, 12.345 kept; double-click
+Close Shift -> exactly 1 `submit_closing_shift`; 1 Z Report print, Shift
+Closed screen with print status; Reprint -> 1 print. On phones the Menu is
+the navbar's ⋮ button. Frontend 257/257, 1373/1373; `bench build` exit 0;
+`test_pos_closing_shift` 9/9; no migrate. Test shifts left:
+`POSA-OS-26-0000030`..`-33` (closed by `POSA-CS-26-0000026`..`-29`), no
+invoices.
+
+**Production deploy.** Frontend: `bench build --app posawesome`, restart,
+staff hard-refresh.
+
+## 66. TRACKED, NOT YET FIXED -- submit_closing_shift builds the closing shift from client JSON with ignore_permissions (2026-10-19)
+
+`closing_processing/creation.py` `submit_closing_shift(closing_shift)` is
+whitelisted, does `frappe.get_doc(json.loads(closing_shift))`, sets
+`flags.ignore_permissions = True`, then saves and submits. Every field comes
+from the client, and nothing checks that the caller owns the opening shift
+or is assigned to its POS Profile. `validate()` only rejects a second close
+of the same opening shift and a non-Open opening shift. Any logged-in user
+could submit a closing shift (with their own figures) for another user's
+open shift by calling the method directly. Suggested fix: rebuild the doc
+server-side from the opening shift (as `make_closing_shift_from_opening`
+does), accept only the closing amounts from the client, and check the
+caller (shift owner, or `get_authorized_pos_profile()` / a supervisor
+role). Found during section 65; tracked next to section 63.
+
+## 67. TRACKED, NOT YET FIXED -- two test_workspace_gift_card tests are out of date (2026-10-20)
+
+`test_migration_chain_runs_gift_card_workspace_patch` and
+`test_migration_chain_runs_submission_ledger_workspace_patch` read
+`hooks.py` as text and expect `add_gift_card_to_workspace.execute` /
+`add_submission_ledger_to_workspace.execute` in it. Release `cd5eba17`
+(15.33.0) moved those patches out of `after_migrate` into `patches.txt` on
+purpose (running them on every migrate rewrote the workspace and wiped user
+customisations; see the comment above `after_migrate = []`). The tests were
+never updated, so they fail 2/4. The `patches.txt` half of each test passes.
+Not a code fault: on staging both patches are in Patch Log (2026-08-05) and
+the workspace has both links. Fails the same with section 68's change
+stashed. Fix later: drop the `hooks.py` assertion (or assert the path is
+*not* in `after_migrate`).
+
+## 68. Upload Stock Check report: export one catalog upload, limited to the user's warehouses (2026-10-20)
+
+**Request.** After each catalog upload, staff need an Excel export of that
+upload only, to compare with their own sheet, showing only the warehouses
+their existing Warehouse User Permissions allow. No new permission rules.
+
+**Found first.** There is no upload script. Staging and production use four
+manual steps: Data Import of parent styles, then variants, then Item Prices
+(Standard Selling), then a Stock Reconciliation for quantities. Only the
+Stock Reconciliation carries warehouse and quantity, so **one upload = one
+submitted Stock Reconciliation**. Staging has no Warehouse User Permissions
+(production has them).
+
+**Built.**
+- New Script Report `Upload Stock Check`
+  (`posawesome/posawesome/report/upload_stock_check/`), module POSAwesome,
+  roles Stock User / Stock Manager / Item Manager / System Manager. Not
+  added to any workspace. Columns: Item Code (Barcode), Parent Style Code,
+  Item Name, Description (HTML stripped), Brand, Size, Colour (`Color`,
+  falling back to `Colour`), Season, Collection, Price, Quantity, Upload
+  Date and Time (posting date + time).
+- `ref_doctype` is **Item**, not Stock Reconciliation: Frappe requires
+  report permission on the ref_doctype to run and export permission to
+  export, and Stock Reconciliation is Stock Manager-only. The automatic
+  Desk User role has report + export on Item.
+- Upload picker is a **Select**, filled by whitelisted `get_uploads()`
+  (guarded by `get_report_doc()`, max 200, newest first), labelled
+  `MAT-RECO-2026-00001 · 05-08-2026 13:07 · 1414 items`. A Link filter
+  wouldn't work: `validate_filters_permissions` re-checks read on Stock
+  Reconciliation. The filter is widened to `col-md-8` in `onload` (the
+  default `col-md-2` cut the label to the number; measured at 1400/1100/390px).
+- Warehouses: `get_user_permissions()["Warehouse"]`, counting entries with
+  no Applicable For or Applicable For = Stock Reconciliation (Frappe's own
+  `db_query.py` rule). None counting = unrestricted (Frappe default).
+  Applied server-side to every run, export and the picker.
+- Price: today's Standard Selling price, picked like ERPNext's
+  `get_item_price` (stock UOM or blank, no customer/supplier/batch, valid
+  today, newest Valid From). Quantity is the upload's own row qty.
+- Season/Collection are guarded with `meta.has_field` (hand-made per site,
+  not in fixtures).
+- "Upload Stock Check" button on submitted Stock Reconciliations
+  (`api/stock_reconciliation.js`, `doctype_js`) for managers; opens the
+  report pre-filtered.
+
+**Tests.** `test_upload_stock_check.py`, 10 tests on `IntegrationTestCase`
+(real users, User Permissions and rows, rolled back). The old
+`FrappeTestCase` triggers the app-wide test-record preload that crashes on
+"Standard Buying" (section 53). With the warehouse filter disabled, 3
+tests fail (store user rows, export, picker).
+
+**Verified on staging** (throwaway users, deleted): Store A (`Test - S`)
+-> picker lists the upload, 1414 rows, Excel via the menu 1414 rows + 12
+columns; Store B (`Stores - S`) -> empty picker, 0 rows, header-only Excel
+even when the upload is sent directly; both get 403 on the Stock
+Reconciliation form/API; both find "Report Upload Stock Check" via Ctrl+K;
+the manager button opens the report filtered with 1414 rows. Frappe v16 also
+shows the report in its auto-generated module sidebar (in-memory, no
+workspace record). Opening the report logs `Filter missing` until an upload
+is picked: Frappe's standard required-filter behaviour.
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend:
+`test_upload_stock_check` 10/10, `test_pos_awesome_branding` 3/3,
+`test_api_imports` 4/4, `test_invoice_reporting_fields` 25/25,
+`test_workspace_gift_card` 2/4 (section 67). `bench build` exit 0;
+`migrate` twice, exit 0, no name collision before, report unchanged after.
+
+**Production deploy.** `bench migrate` (creates the report), `bench build
+--app posawesome`, restart. Store users need one of the four roles (or add
+theirs via Role Permission for Page and Report). Users with no Warehouse
+User Permission see all warehouses.
+
+## 69. Upload Stock Check: Warehouse filter (2026-10-20)
+
+**Request.** A Warehouse filter for convenience: store users get their
+permitted warehouse pre-selected and only that one; admins and Stock/System
+Managers get all warehouses, blank = all. The section 68 server-side
+warehouse check stays as it is.
+
+**Rule chosen: User Permission, not role.** Options come from the same
+`get_permitted_warehouses()` the server check uses, so the filter never lists
+a warehouse that would return no rows. A user with Warehouse User
+Permissions gets only those (group permissions expanded, non-group only); a
+user with none (Administrator, managers in the current setup) gets every
+enabled, non-group warehouse. One permitted warehouse = the only option,
+pre-selected; several = those plus blank ("all of mine"). A manager later
+given a Warehouse User Permission gets the store-user behaviour.
+
+**Built.**
+- `get_warehouses()` (whitelisted, report access check first, no input).
+- `narrow_to_chosen(permitted, warehouse)`: the choice only narrows; a
+  warehouse outside the permitted set gives an empty set (no rows, empty
+  picker, header-only Excel), never more. Used by `execute()` and
+  `get_uploads(warehouse=None)`.
+- JS: Warehouse first (`col-md-4`), Upload (`col-md-8`). Changing Warehouse
+  reloads the Upload list and counts, keeps the upload if still listed,
+  then one refresh; options are filled with `set_input` so loading them
+  doesn't start a run. Warehouse labels are HTML-escaped (Frappe's Select
+  renders labels as HTML). The helper lives on the report object, not as a
+  top-level `const`, since report scripts run as global script code.
+
+**Tests.** 6 new (16 total): store user gets only theirs; two-warehouse user
+gets both; unrestricted gets every enabled non-group (group and disabled
+excluded); a chosen warehouse narrows rows and upload counts; a
+non-permitted choice returns nothing (rows, picker, Excel); no report role
+-> refused. Mutations: choice widening access -> 1 failure; choice ignored
+-> 2 failures.
+
+**Verified on staging** (throwaway store user on `Test - S` and a
+System/Stock Manager, deleted): store -> only `Test - S`, selected, 1414
+rows, Excel 1414 x 12; admin -> blank + 100 warehouses, blank 1414 rows,
+`Stores - S` empties the Upload list and clears the grid, `Test - S` 1414
+rows and Excel 1414 x 12, back to blank keeps the upload; the Stock
+Reconciliation button opens with Warehouse blank, 1414 rows. One row at
+1400/1100px, stacked on a phone. Frappe doesn't show filter descriptions,
+so "No uploads found" is not visible (already true before).
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_upload_stock_check` 16/16, `test_api_imports` 4/4. `bench build` exit
+0. Migrate N/A (report JSON unchanged).
+
+**Production deploy.** Pull, `bench build --app posawesome`, restart, staff
+hard-refresh. No migrate needed (running it is harmless).
+
+## 70. Style Name and MRP No VAT as Report View columns per invoice line; why picked Report View columns don't stay (2026-10-25)
+
+**Request.** Two more Sales Invoice line columns for Report View: Style Name
+(Item `custom_style_name`) and MRP No VAT (Price List Rate with VAT taken
+out, before discount). Also: why picked columns in Report View don't stay.
+
+**Found first (live, staging; ERPNext 16.26).**
+- No existing Sales Invoice Item field holds MRP without VAT (checked every
+  rate/price/tax field and all `posa_*`; `tax_rate`/`tax_amount` are the UAE
+  test leftovers, always 0). Price List Rate equals the Item Price on 126 of
+  127 submitted lines (one `Consulting` line has 0).
+- `Item-custom_style_name` exists only on production, made by hand: Data,
+  label "Style Name".
+- Offline invoices sync through `submit_invoice_outbox_entry` ->
+  `submit_invoice`, a real Sales Invoice save, so the validate hook covers
+  them.
+- **Picked columns not staying.** Report View saves picked columns per user,
+  per doctype, under the "Report" key of `__UserSettings` -- but the browser
+  only writes them to the Redis cache hash `_user_settings`; the hourly
+  `sync_user_settings` job copies that to the database. `frappe.clear_cache()`
+  deletes every non-persistent key (`_user_settings` isn't in
+  `persistent_cache_keys`), so `bench migrate` / `clear-cache`, a Redis
+  cache restart (`save ""`, `appendonly no`) or an `allkeys-lru` eviction
+  before the sync throws the change away and the older database copy comes
+  back. Also: settings are saved only after a render with rows, never inside
+  a saved report (needs Save), and a column for a field missing on the site
+  is dropped. Nothing in POS Awesome touches user settings; staging has no
+  Client Scripts, List View Settings or saved reports on Sales Invoice.
+  Fix chosen: a saved report (Report View -> Save As), made by hand on
+  production after deploy -- not shipped in git.
+
+**Built.**
+- Sales Invoice Item fields (read-only): `posa_item_style_name` (Data,
+  "Style Name", after `posa_item_vat`, Description section) and
+  `posa_item_mrp_excl_vat` (Currency, options `currency`, "MRP No VAT",
+  after `price_list_rate`, main pricing section). Hand-added to the
+  fixtures. **No Item custom field is shipped** (the guard test now covers
+  `custom_style_name` too).
+- `set_invoice_reporting_fields`: Style Name copied like Season/Collection
+  (optional Item field, trimmed, blank stays blank, untouched when absent).
+  New `set_line_mrp_excl_vat` / `mrp_excl_vat()`: `price_list_rate / (1 +
+  sum of the line's tax-inclusive VAT rates / 100)`, the line's Item Tax
+  Template rate overriding the tax row (`"N/A"` = not applicable), as
+  ERPNext's `determine_exclusive_rate` does. Exclusive-price, untaxed and
+  zero-rated lines keep the Price List Rate; "Actual" charges ignored.
+  Inclusive taxes other than "On Net Total" (not used) -> blank + logged.
+  Per unit, positive on returns, stored to 6 decimals.
+- Patch `backfill_invoice_style_name_and_mrp_excl_vat`: creates the two
+  fields from the fixture; Style Name by SQL from each Item's *current*
+  value (skipped with a note unless the Item field and its column exist);
+  MRP No VAT computed in Python with the same `mrp_excl_vat()` from stored
+  Price List Rate, `item_tax_rate` and tax rows, 500 invoices at a time,
+  one UPDATE per distinct value, lines already correct skipped. Reports
+  invoices with no Price List Rate and unsupported inclusive taxes.
+  Idempotent.
+
+**Verified on staging.** Backfill: all 138 lines equal an independent SQL
+from ERPNext's stored per-line VAT rate (117 with breakdown, 21 untaxed);
+Style Name on the 3 test items, trimmed, blank item blank; reported only
+ACC-SINV-2026-00064 (Price List Rate 0). Re-run: 0 updates. Hook on
+ERPNext's real recalculation of all 117 submitted invoices: 127/127 lines
+match. Real draft insert (rolled back): 139.30 -> 132.666667, 90.70 at 30%
+off -> 86.380952, 203.40 at 55% off -> 193.714286; line VAT still sums to
+total taxes (14.02). With `Item-custom_style_name` deleted: invoice still
+saves, Style Name untouched, backfill skips with a note (field restored).
+Report View's own query: one row per line with both columns.
+
+**Staging-only test setup (not in git).** `Item-custom_style_name` (Data,
+"Style Name", after `custom_collection`) created by hand on staging; values:
+`30410232030043` "PLEATED MIDI DRESS", `35210232030015` "  CROPPED BLAZER "
+(spaces deliberate), `35210232030014` blank, `30440222030023` "WOOL COAT".
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_invoice_reporting_fields` 35/35, `test_invoice_line_backfill` 11/11,
+`test_offline_sync_invoices` 4/4, `test_customer_credit_invoice_fields` 2/2.
+`test_invoices`, `test_submitted_invoice_shift_security`,
+`test_invoice_cancel_hooks` and `test_gift_card_invoice_fields` fail
+identically with these changes stashed (stale imports/assertion) --
+pre-existing. `bench build` N/A (no frontend files). Migrate twice, exit 0,
+field anchors unchanged.
+
+**Production deploy.**
+1. `bench --site <prod-site> backup --with-files`
+2. Collision check -- must return no rows:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE fieldname IN ('posa_item_style_name','posa_item_mrp_excl_vat');"
+   ```
+3. Inclusive taxes in use -- expect only "On Net Total" rows:
+   ```
+   bench --site <prod-site> mariadb -e "SELECT charge_type, rate, COUNT(*) FROM \`tabSales Taxes and Charges\` WHERE parenttype='Sales Invoice' AND included_in_print_rate=1 GROUP BY 1,2;"
+   ```
+4. Optional, for timing: `SELECT COUNT(*) FROM \`tabSales Invoice Item\`;`
+5. `cd apps/posawesome && git pull upstream stable`
+6. `bench --site <prod-site> migrate` outside trading hours -- read the
+   backfill's output (and Error Log "Style Name / MRP No VAT backfill:
+   lines to review").
+7. `bench restart` (no `bench build`: no frontend change).
+8. Report View -> Pick Columns -> Sales Invoice Item: Style Name, MRP No
+   VAT; spot-check one line (MRP / 1.05). Then Menu -> Save As to make the
+   fixed-columns saved report.
+
+## 71. "Bulk Add Values" button on the Item Attribute form (2026-10-27)
+
+**Request.** New catalog uploads bring new Size / Color values. Data Import
+on Item Attribute isn't safe in v16 (can drop or overwrite rows) and the
+values were being added with a console script. The inventory manager needs
+to add them herself from the form, safely.
+
+**Found first (live, staging; ERPNext 16.26).**
+- Item Attribute permissions: standard DocPerm for **Item Manager only**
+  (read/write/create/delete). No Custom DocPerm, Client/Server Script,
+  Property Setter or Custom Field on Item Attribute / Item Attribute Value.
+  **System Manager has no permission**; only Administrator bypasses.
+  Decision (user): Item Manager only, no permission change.
+- `track_changes` = 1. Color 928 values, Size 82, all non-numeric; abbr ==
+  value on every Color/Size row. No variant uses a value missing from its
+  attribute (ERPNext's `on_update` would otherwise block every save).
+  Allow Rename Attribute Value = 0.
+
+**Built.**
+- `api/item_attribute.js` (via `doctype_js`): "Bulk Add Values" button for
+  saved, non-numeric attributes when `frm.perm[0].write`; asks to save
+  first if the form is dirty. Dialog: paste -> **Check** (preview) ->
+  **Add N Values** -> "N added, M already existed" -> reload. Editing the
+  text resets to Check; Add re-checks if the text differs from what was
+  previewed. All values escaped.
+- `api/item_attribute_bulk.py`: `preview_bulk_attribute_values` and
+  `add_bulk_attribute_values` (POST). Both: doctype + doc `write` check,
+  numeric refused, max 2,000 lines / 400,000 characters. Lines: NBSP ->
+  space, trimmed, inner space runs collapsed, case kept; rejected if empty,
+  > 140 characters or containing a tab (echoed cut to 160). Duplicates in
+  the paste collapse case-insensitively (first spelling wins). Skipped if
+  the value matches an existing value or abbr (case-insensitive); a new
+  value whose abbr (= value) matches an existing abbr is reported as an
+  abbr clash. Add reloads the doc `for_update`, recomputes everything,
+  appends only, and calls a normal `doc.save()` (permissions, ERPNext
+  validation, one Version row) inside a savepoint rolled back on any error.
+- Note: `doc.save()` rewrites every child row, so existing rows' `modified`
+  changes (content, name and idx don't) -- the same as the form's Save.
+  Frappe writes no Version rows while tests run (`ignore_version =
+  frappe.in_test`); the Version test patches that off.
+
+**Verified on staging** (real Item Manager user, rolled back): Size add
+0.34s, Color (928) 0.55s, Color +2,000 values 1.97s; re-runs added 0;
+existing rows unchanged. Form script: `getdoctype` returns ERPNext's own
+Item Attribute script plus ours; Stock Reconciliation's still loads. No
+headless browser run: libnss3 can't be fetched without root (`apt-get
+update`), and staging has developer mode off so `bench browse --user` is
+refused. **User's own staging test (2026-10-27):** Check, Add, second run
+adds 0, tab line rejected; button shows on Size / Color / Test Size for an
+Item Manager and not for a user without Item Manager. Test rows cleaned up.
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_item_attribute_bulk` 18/18, `test_upload_stock_check` 16/16. ERPNext's
+`test_item_attribute` fails test discovery (duplicate "Standard Buying"
+Price List test record) identically with these changes stashed --
+pre-existing. `bench build` exit 0. Migrate twice, exit 0, no fixture drift.
+
+**Production deploy.**
+1. Snapshot, then `bench --site site1.local backup --with-files`
+2. Orphan check -- must return no rows:
+   ```
+   bench --site site1.local mariadb -e "SET SQL_BIG_SELECTS=1; SELECT iva.attribute, COUNT(*) FROM \`tabItem Variant Attribute\` iva JOIN tabItem i ON i.name=iva.parent LEFT JOIN \`tabItem Attribute Value\` v ON v.parent=iva.attribute AND v.attribute_value=iva.attribute_value WHERE i.variant_of<>'' AND v.name IS NULL GROUP BY iva.attribute;"
+   ```
+3. Inventory manager has Item Manager:
+   `bench --site site1.local mariadb -e "SELECT parent FROM \`tabHas Role\` WHERE role='Item Manager' AND parenttype='User';"`
+4. `cd apps/posawesome && git remote -v` then `git pull <remote> stable`
+5. `bench build --app posawesome`, `bench --site site1.local migrate`
+6. `sudo supervisorctl restart all`
+7. As the inventory manager: Item Attribute "Size" -> Bulk Add Values ->
+   Check a short test list -> Add -> check the form's version history.
+
+## 72. Store-to-store transfers: Destination Store, auto-share, End Transit check, Incoming Transfers (2026-10-28)
+
+**Request.** Make store-to-store transfers safe for store staff on top of
+ERPNext's own Add to Transit / End Transit (not replacing it). Decisions
+(user): a Stock Manager may return a shortage to the sending store, nobody
+else; email via site config `posa_transit_email`, off by default.
+
+**Found first (live, staging; ERPNext 16.26.2).**
+- No "Final Destination" field in v16; End Transit leaves Target Warehouse
+  empty. Add to Transit auto-fills the transit warehouse only from the
+  **source Warehouse's** Default In-Transit Warehouse (`set_transit_warehouse`
+  requires `from_warehouse`, so its Company branch never runs).
+- End Transit (`make_stock_in_entry` -> `get_mapped_doc`) needs **read** on the
+  sent entry. A receiver limited by Warehouse User Permissions to own store +
+  transit can't read it (the sender's store is on its rows); a DocShare
+  passes (`has_permission` -> `false_if_not_shared`).
+- Scan Barcode only searches Item Barcode / Serial / Batch / Warehouse, never
+  Item Code. Staging: all 1,414 variants have exactly one barcode row equal
+  to the Item Code; none missing/duplicated/colliding.
+- Repeat scans made one row per scan: the scanner matches a row's Source
+  Warehouse against `last_scanned_warehouse` or else the item's default
+  warehouse (all 2,016 Swan Item Defaults = "Stores - S").
+- `purpose` is read-only `fetch_from: stock_entry_type.purpose`, re-fetched
+  on every save, so a client can't pair a type with another purpose.
+- "No permission for Stock Settings" popup on every new Stock Entry for a
+  user whose Warehouse permissions don't include Stock Settings' Default
+  Warehouse (ERPNext's `stock_entry.js` reads `sample_retention_warehouse`;
+  the Single doc's `default_warehouse` link fails the user-permission check).
+  Pre-existing, not changed.
+- Staging has no "POS User" role (production has it as a site-made role).
+
+**Built.**
+- Custom Field `Stock Entry-posa_destination_store` "Destination Store"
+  (Warehouse; hand-added to `custom_field.json` + the hooks fixture list;
+  after `add_to_transit` in the unlabeled, non-collapsible section; required
+  and shown only on a sending transit entry; `ignore_user_permissions` so a
+  sender can pick another store; `no_copy`; list view + filter; indexed).
+- `api/stock_transit.py` via `doc_events["Stock Entry"]`:
+  `validate` -- destination required, same company, not group/disabled/
+  Transit, not the source; every row leaving a Transit warehouse must be End
+  Transit of a submitted sent row (row link, item and warehouse checked
+  against the DB) received into that row's Destination Store, or (Stock
+  Manager only) back into the row's source; Stock Manager may also write off
+  with a Material Issue; entries without a destination keep ERPNext's
+  behaviour. `on_submit` -- share read-only (`add_docshare`,
+  `ignore_share_permission`) with receivers = enabled System Users with a
+  Warehouse User Permission for the destination (all doctypes or Stock
+  Entry) whose roles read Stock Entry, minus the sender; bell notification
+  `type: "Alert"` (never emails); optional email when `posa_transit_email`
+  is set, failures logged not raised; warning if nobody qualifies. Shares stay.
+- `api/stock_entry.js` (doctype_js): Destination Store query set in
+  `refresh` (ERPNext's `onload` resets every Warehouse field's query); fills
+  `last_scanned_warehouse` from Default Source Warehouse on sending entries
+  so repeat scans merge; a user-scanned warehouse is left alone; our value
+  is cleared before save so a stale one is never stored.
+- Script Report "Incoming Transfers" (Stock User/Stock Manager/System
+  Manager; rows limited server-side to the user's permitted stores) +
+  shortcut on the POS Awesome workspace (live workspace matched the JSON
+  before re-import; `modified` bumped).
+
+**Verified on staging** (two throwaway users set up like the real store
+users: POS User, POS Manager, Sales User, Sales Manager, Accounts Manager,
+Customer + Stock User; Warehouse own store + transit; POS Profile; **no
+Company permission**): send with 3+2 scans (2 rows, qty 3 and 2), missing
+Destination Store refused, bell + share to the receiver, report lists it,
+End Transit into transit refused with "must be received into Stores - S",
+4 of 5 received (80%, 1 unit stays in transit), plain transfer out of transit
+refused, sender's shortage return refused, Stock Manager's return accepted.
+User Permission Stock Entry Type = Material Transfer blocks Material
+Receipt/Issue and keeps transfers working (tried on one user, removed).
+Residual gap: Delivery Note / Sales Invoice (Update Stock) can still take
+stock from a Transit warehouse (draft saved, rolled back) -- not fixed.
+
+**Regression check.** Frontend 257/257, 1373/1373. Backend
+`test_stock_transit` 19/19 (17 fail with the rules disabled),
+`test_api_imports` 4/4, `test_upload_stock_check` 16/16, plus 8 other
+modules reading hooks/fixtures/workspace. `test_workspace_gift_card` (2
+failures) and `test_invoice_cancel_hooks` (2 errors) fail identically with
+these changes stashed -- pre-existing. `bench build` exit 0. Migrate twice,
+exit 0, identical.
+
+**Production deploy** (covers sections 72-76; one deploy). Site `site1.local`.
+
+*Before pulling*
+1. Snapshot, then `bench --site site1.local backup --with-files`.
+2. Name checks -- must return no rows:
+   ```
+   bench --site site1.local mariadb -e "SELECT name FROM tabReport WHERE name='Incoming Transfers'; SELECT name FROM \`tabCustom Field\` WHERE name='Stock Entry-posa_destination_store';"
+   ```
+3. Workspace drift -- the live "POS Awesome" workspace must match git before
+   migrate re-imports it (migrate deletes and recreates it):
+   ```
+   bench --site site1.local mariadb -e "SELECT md5(content), modified FROM tabWorkspace WHERE name='POS Awesome'; SELECT COUNT(*) FROM \`tabWorkspace Link\` WHERE parent='POS Awesome'; SELECT label FROM \`tabWorkspace Shortcut\` WHERE parent='POS Awesome';"
+   ```
+   Compare with the previous release's `pos_awesome.json` (22 links, shortcut
+   "POS Awesome App"). If it differs, stop: someone edited it on the site.
+4. Open transit entries -- they keep ERPNext's old behaviour (no Destination
+   Store, no share, not in Incoming Transfers):
+   ```
+   bench --site site1.local mariadb -e "SELECT name, per_transferred FROM \`tabStock Entry\` WHERE add_to_transit=1 AND docstatus=1 AND per_transferred<100;"
+   ```
+5. Stock that is in a Transit warehouse today can afterwards only leave with
+   End Transit (or a Stock Manager's Material Issue):
+   ```
+   bench --site site1.local mariadb -e "SELECT b.warehouse, COUNT(*) items, SUM(b.actual_qty) qty FROM tabBin b JOIN tabWarehouse w ON w.name=b.warehouse WHERE w.warehouse_type='Transit' AND b.actual_qty<>0 GROUP BY b.warehouse;"
+   ```
+5a. Existing Property Setters on Stock Settings -- step 16 adds two and its
+    undo deletes them, so note anything already there (it must not be
+    deleted by that undo, and an existing `ignore_user_permissions` one means
+    step 16 is partly done already):
+    ```
+    bench --site site1.local mariadb -e "SELECT name, field_name, property, value, modified, owner FROM \`tabProperty Setter\` WHERE doc_type='Stock Settings';"
+    ```
+5b. Existing "Is Default" on Warehouse permissions -- Frappe allows one Is
+    Default per user, so step 13 fails for a user who already has one on a
+    different warehouse (or on the transit warehouse, which must not be the
+    default). Note every row and fix it in step 13 rather than adding a second:
+    ```
+    bench --site site1.local mariadb -e "SELECT user, for_value, applicable_for, apply_to_all_doctypes, modified, owner FROM \`tabUser Permission\` WHERE allow='Warehouse' AND is_default=1 ORDER BY user;"
+    ```
+    Also check for a site-wide or user default warehouse that would compete
+    with it:
+    ```
+    bench --site site1.local mariadb -e "SELECT parent, defkey, defvalue FROM tabDefaultValue WHERE defkey IN ('warehouse','default_warehouse') ORDER BY parent;"
+    ```
+
+*Code*
+6. `cd apps/posawesome && git remote -v`, then `git pull <remote> stable`.
+7. `bench build --app posawesome`
+8. `bench --site site1.local migrate` (adds the Destination Store field, the
+   Incoming Transfers report and the workspace shortcut).
+9. `sudo supervisorctl restart all`
+
+*Setup (by hand, after the code is live)*
+10. **Transit warehouse.** One warehouse per company, e.g. "Goods In Transit -
+    SI": Warehouse Type = `Transit`, not a group, not disabled. (ERPNext
+    creates one with each company; check it exists.)
+11. **Each store warehouse:** Warehouse > the store > "Default In-Transit
+    Warehouse" = the transit warehouse. Add to Transit only reads this field
+    on the source warehouse (never the Company's).
+12. **Store users** (roles today: POS User, POS Manager, Sales User, Sales
+    Manager, Accounts Manager, Customer): add the role **Stock User**.
+    No Company User Permission is needed.
+13. **Store users' Warehouse permissions** (Desk > User Permission), each with
+    Allow = `Warehouse` and Apply To All Document Types ticked:
+    - their own store: **Is Default ticked** -- so new Sales Invoices,
+      Delivery Notes and Stock Entries start from their store instead of the
+      item default ("Head Office - SI"), and End Transit fills their store;
+    - the transit warehouse: **Is Default not ticked**.
+    Frappe allows one Is Default per user. Users reload the page (or log out
+    and in) to pick it up. Check -- each store user must have exactly one
+    `is_default = 1` row, their own store:
+    ```
+    bench --site site1.local mariadb -e "SELECT user, for_value, is_default, apply_to_all_doctypes FROM \`tabUser Permission\` WHERE allow='Warehouse' ORDER BY user, is_default DESC;"
+    ```
+14. **Material Transfer only.** For each store user one more User Permission:
+    - User: the store user
+    - Allow: `Stock Entry Type`
+    - For Value: `Material Transfer`
+    - Apply To All Document Types: ticked (Applicable For left empty)
+    - Is Default and Hide Descendants: not ticked
+    Not for Stock Managers (they write shortages off with a Material Issue).
+    Tested on staging: Material Receipt and Material Issue are refused,
+    Material Transfer and End Transit still work, other types' existing entries
+    disappear from the user's lists. It can't be bypassed through the API:
+    Stock Entry's `purpose` is read-only `fetch_from: stock_entry_type.purpose`
+    and re-fetched on every save. POS is unaffected (only Stock Entry links to
+    Stock Entry Type). Check:
+    `bench --site site1.local mariadb -e "SELECT user, for_value, apply_to_all_doctypes FROM \`tabUser Permission\` WHERE allow='Stock Entry Type';"`
+15. **"Insufficient Permission for Loyalty Program" popup** (Desk Sales Invoice
+    for a loyalty customer): Role Permission Manager > Document Type
+    `Loyalty Program` > Add a New Rule > Role `Sales User`, Level 0 > tick
+    **Read** only. Exposes the program's settings read-only (tiers, collection
+    factor, conversion factor, expiry, expense account, cost center, company,
+    customer group/territory); no customer data. Undo: Role Permission Manager >
+    `Loyalty Program` > "Reset to Default" (no custom rules existed before).
+16. **"No permission for Stock Settings" popup** (every new Stock Entry): a
+    role rule does NOT fix it -- store users already have Read through Sales
+    User. Frappe refuses because Stock Settings' "Default Warehouse" points at
+    a warehouse the user has no Warehouse permission for. Fix: two Property
+    Setters that make Stock Settings' **Default Warehouse** and **Sample
+    Retention Warehouse** ignore User Permissions. Customize Form can't do it
+    ("Single DocTypes cannot be customized"), so create them in Desk >
+    Property Setter > New, one per field:
+    | Field | Record 1 | Record 2 |
+    |---|---|---|
+    | Doc Type | `Stock Settings` | `Stock Settings` |
+    | Applied On | `DocField` | `DocField` |
+    | Field Name | `default_warehouse` | `sample_retention_warehouse` |
+    | Property | `ignore_user_permissions` | `ignore_user_permissions` |
+    | Property Type | `Check` | `Check` |
+    | Value | `1` | `1` |
+    | Row Name, Module | empty | empty |
+    | Is System Generated | not ticked | not ticked |
+    | Record name (automatic) | `Stock Settings-default_warehouse-ignore_user_permissions` | `Stock Settings-sample_retention_warehouse-ignore_user_permissions` |
+    Console equivalent (`bench --site site1.local console`):
+    `from frappe.custom.doctype.property_setter.property_setter import make_property_setter`, then
+    `make_property_setter("Stock Settings", "default_warehouse", "ignore_user_permissions", 1, "Check")`,
+    the same for `sample_retention_warehouse`, then `frappe.db.commit()`.
+    No migrate needed: saving a Property Setter clears that doctype's cache
+    itself; users reload the page. It survives migrate (a database record;
+    POS Awesome's fixtures only sync Property Setters they list by name).
+    Saving a new one replaces an existing Property Setter for the same field
+    and property (see step 5a). Check:
+    ```
+    bench --site site1.local mariadb -e "SELECT name, doctype_or_field, field_name, property, property_type, value, is_system_generated FROM \`tabProperty Setter\` WHERE doc_type='Stock Settings' AND property='ignore_user_permissions';"
+    ```
+    Two rows, value 1. Exposes Stock Settings read-only to users who already
+    have the Read role (valuation method, negative-stock flag, default
+    warehouse names, the configured roles); nothing writable. Undo: delete
+    the two records in Desk > Property Setter (or, in the console,
+    `frappe.delete_doc("Property Setter", "<record name>")` for each, then
+    `frappe.db.commit()`); the same query then returns no rows.
+
+*First-store test* -- see section 76.
+
+## 73. No selling or delivering from a Transit warehouse (2026-10-28)
+
+**Request.** Section 72's live test found that a store user (Sales User /
+Stock User / Accounts Manager) could save a Delivery Note or a Sales Invoice
+with Update Stock that takes goods from "Goods In Transit". Decision (user):
+refuse it for everyone, Stock Manager and Administrator included; shortages
+are handled with a Material Issue or a return.
+
+**Built.** `stock_transit.validate_no_sale_from_transit`, added to
+`doc_events` `validate` of Delivery Note, Sales Invoice and POS Invoice
+(after `invoice.validate` -- the existing value became a list). Refuses any
+`items` or `packed_items` row whose `warehouse` has Warehouse Type Transit:
+"Row N: <warehouse> is a transit warehouse. Goods in transit can't be sold or
+delivered until the receiving store takes them in with End Transit. Choose a
+store warehouse." Skipped: returns (they put stock back) and a Sales Invoice
+without Update Stock (no stock moves; its Delivery Note is checked). Only
+reads cached Warehouse docs: 0.007 ms per call for 1 row, 0.15 ms for 100
+rows, 0 DB queries warm; a full Sales Invoice `validate` is ~240 ms.
+
+**Verified on staging** (store-like user: POS User, POS Manager, Sales User,
+Sales Manager, Accounts Manager, Customer, Stock User; Warehouse own store +
+transit; POS Profile; no Company permission):
+- Refused for the store user and Administrator: Delivery Note, Sales Invoice
+  with Update Stock, POS Sales Invoice (`is_pos`), and the ERPNext POS Invoice
+  doctype (POS Settings is in "Sales Invoice" mode; flipped to "POS Invoice"
+  inside a rolled-back transaction to test it).
+- Through POS Awesome (`update_invoice` -> `submit_invoice`, terminal unlocked
+  with `activate_verified_cashier` for a test session id): normal sale,
+  store-credit return and background-job submit all work. A row that names
+  the transit warehouse is put back to the profile's own warehouse by the
+  POS path, so POS only reaches transit if a POS Profile's warehouse is a
+  transit warehouse -- tested (profile warehouse set to transit, reverted):
+  refused with the message above.
+- Normal Sales Invoice with Update Stock, Delivery Note and a credit note from
+  a store warehouse still submit.
+
+**Pre-existing, not changed:** `submit_in_background_job`'s `finally` block
+deletes `frappe.flags` keys with `hasattr`/`delattr`; on Frappe's `_dict`,
+`hasattr` is always true, so a background submit with no submission ledger
+(no `posa_client_request_id`) raises `KeyError: 'posa_owned_submission_ledger'`
+after the work is done and the job rolls back. The POS screen always sends a
+request id, so the normal path works.
+
+**Regression check.** See the report for this change (frontend suite,
+backend modules, no build/migrate needed: Python and hooks only).
+
+## 74. Every other way to take stock out of transit (2026-10-28)
+
+**Request.** Extend section 73 to Purchase Receipt / Purchase Invoice returns,
+then check every document type that can take stock out of a warehouse. Same
+rules: server-side, no role exemption, clear message, negligible cost.
+
+**Survey** (ERPNext 16.26.2: every `make_sl_entries` caller -- the stock,
+selling, buying and subcontracting controllers, Stock Entry, Stock
+Reconciliation, Asset Capitalization; store roles = POS User, POS Manager,
+Sales User, Sales Manager, Accounts Manager, Customer, Stock User):
+
+| Document | Store role can use it | Takes stock out of | Now |
+|---|---|---|---|
+| Stock Entry (all purposes; also Work Order, Job Card, Asset Repair, Subcontracting Inward, Material Request, Pick List -> Stock Entry) | Stock User | row `s_warehouse` | blocked since section 72 (Stock Manager Material Issue write-off only) |
+| Delivery Note, Sales Invoice (Update Stock), POS Invoice | yes | rows `warehouse`, `packed_items`; on an internal-transfer **return**, `target_warehouse` | blocked (the return case is new) |
+| Purchase Receipt | Stock User | on return rows `warehouse` + `rejected_warehouse`; internal transfer `from_warehouse`; old subcontracting `supplier_warehouse` | **blocked** |
+| Purchase Invoice (Update Stock) | Accounts Manager | same as Purchase Receipt | **blocked** |
+| Subcontracting Receipt | Stock User | `supplier_warehouse` (supplied items); on return rows `warehouse` + `rejected_warehouse` | **blocked** |
+| Stock Reservation Entry | Sales User, Stock User | holds stock; ERPNext then refuses End Transit ("Reserved Stock") | **blocked** |
+| Stock Reconciliation | no (Stock Manager) | can lower or raise | **blocked** (write-offs are a Material Issue) |
+| Asset Capitalization | no (Manufacturing/Quality Manager) | `stock_items.warehouse` | **blocked** |
+| Landed Cost Voucher, Asset Movement, Pick List, Material Request, Sales/Purchase/Subcontracting Order, Packing Slip, Quality Inspection, Serial and Batch Bundle | -- | no stock moves of their own | nothing to do |
+| POS Invoice Merge Log | Sales User/Manager | its Sales Invoice | covered by the Sales Invoice check |
+| Cancelling a document that put stock **into** transit | the owner | reverses into transit's stock | not blocked: cancelling an unreceived transfer is the sender's undo; a partly received one can't be cancelled (ERPNext's stock check refuses it -- tested) |
+
+Not blocked, by design: stock coming **into** transit (a Purchase Receipt into
+it, a return whose `from_warehouse` is transit, a Delivery Note whose
+`target_warehouse` is transit). Blocking `from_warehouse` = transit also closes
+ERPNext's internal-customer/supplier transfer through a transit warehouse;
+store transfers use Stock Entry, so nothing in use is affected.
+
+**Built.** `validate_no_sale_from_transit` became
+`validate_no_stock_out_of_transit`, wired to `validate` of Delivery Note,
+Sales Invoice, POS Invoice, Purchase Receipt, Purchase Invoice,
+Subcontracting Receipt, Stock Reservation Entry, Stock Reconciliation and
+Asset Capitalization. `_fields_taking_stock_out(doc)` lists exactly the fields
+per doctype and return/non-return; each distinct warehouse is looked up once
+(cached doc); the message is built only on refusal: "Row 1 (Rejected
+Warehouse): Goods In Transit - S is a transit warehouse. Goods in transit can
+only leave it with End Transit, so they can't be returned or moved from
+there. Choose a store warehouse." Cost: 0.003-0.011 ms for 1 row, 0.05-0.10 ms
+for 100 rows, 0 DB queries.
+
+**Verified on staging** (store-like user, own store + transit, no Company
+permission): refused -- Delivery Note, Sales Invoice with Update Stock,
+Purchase Receipt return, Purchase Invoice return with Update Stock (purchases
+made and rolled back); Stock Reconciliation refused for Administrator too.
+Still working -- POS sale, POS store-credit return, POS background-job submit,
+Desk Sales Invoice + credit note, Delivery Note, Purchase Receipt into
+transit. Subcontracting Receipt, Stock Reservation, Asset Capitalization and
+the internal-transfer fields are unit-tested only (staging has no
+subcontracting setup and stock reservation is off).
+
+**Housekeeping.** The leftover opening shift POSA-OS-26-0000035 was closed
+through POS Awesome's own `make_closing_shift_from_opening` ->
+`submit_closing_shift` (closing shift POSA-CS-26-0000031; expected amounts,
+Cash 70.000).
+
+## 75. End Transit: linked rows must come from transit; button hidden from non-receivers; clearer store message (2026-10-28)
+
+**Found (staging, store-like sender, rolled back).** End Transit rows whose
+Source Warehouse was changed to the sender's own store (Target = transit),
+keeping `against_stock_entry`/`ste_detail`, saved and submitted: ERPNext's
+`update_transferred_qty` counted them, the sent entry showed 100% received,
+the destination lost End Transit, and nothing arrived. Section 72's rule only
+looked at rows leaving a Transit warehouse.
+
+**Built.**
+- `validate_rows_leaving_transit` now also checks every row ERPNext counts as
+  received (`against_stock_entry`/`ste_detail` on a Material Transfer with
+  `outgoing_stock_entry`): it must match the sent row's item and take the
+  goods from that row's Transit warehouse. No role exemption. "Row 1: a row
+  received with End Transit must take the goods from Goods In Transit - S,
+  where transfer MAT-STE-... sent them." A Stock Manager's shortage return
+  (from transit to the sending store) still passes.
+- `stock_entry.js` `refresh`: removes ERPNext's End Transit button unless the
+  user has Stock Manager, has no Warehouse restriction for Stock Entry, or has
+  a Warehouse permission for the Destination Store (entries without one keep
+  ERPNext's behaviour). Cancel and "Received Stock Entries" untouched.
+- `stock_entry.js` `before_save`: if a Warehouse link (header or row, the
+  same fields Frappe checks: Link to Warehouse without
+  `ignore_user_permissions`) holds a warehouse outside the user's permissions
+  (`frappe.defaults.get_user_permissions()`, the same list the server uses,
+  descendants included), shows "Store Not Allowed" naming the field, the
+  allowed warehouses and how to send to another store, instead of Frappe's
+  "You need the 'create' permission on Stock Entry". Frappe checks create
+  permission before any server hook, so the server can't reword it; API and
+  import callers still get Frappe's text. Not reworded either: ERPNext's item
+  lookup on a row that already holds such a warehouse ("You need the 'read'
+  permission on Stock Entry new-stock-entry-...").
+
+**Verified in the browser** (MAT-STE-2026-00011, viewed only): sender sees
+View + Cancel, no End Transit; receiver and a store-restricted Stock Manager
+see End Transit (receiver's opens the receiving form). "Received Stock
+Entries" still shows for the sender on a received entry (MAT-STE-2026-00008).
+
+**Regression.** Frontend 257/257, 1373/1373 (a run during `bench build` had
+two timing failures; clean on re-run). `test_stock_transit` 33/33 (4 fail with
+the new rule disabled). `bench build` exit 0.
+
+## 76. End Transit header label; the two store popups; first-store test plan (2026-10-28)
+
+**Label.** With "Is Default" on the store user's Warehouse permission, Frappe
+fills every Warehouse field of a new form with it, so End Transit opened with
+"Default Source Warehouse" = the receiver's own store while its rows come from
+transit. `stock_entry.js` `show_transit_as_source` (refresh): on a draft entry
+with `outgoing_stock_entry`, if the rows linked to the sent entry share one
+Source Warehouse, show it in the header. Set directly (`frm.doc` +
+`refresh_field`) because ERPNext's `from_warehouse` handler would rewrite every
+row's Source Warehouse. Display only: rows, stock and the server checks are
+unchanged. Browser-checked (store users with Is Default; transit.manager with
+Is Default on Test - S for the test, reverted): receiver full receipt, receiver
+partial receipt and a Stock Manager returning the shortage to the sending store
+all open and save with "Goods In Transit - S"; ledger: transit -> store.
+
+**Popups** (store user, own store + transit, Is Default; browser, four states,
+all restored -- no Custom DocPerm or Property Setter left):
+| | "No permission for Stock Settings" | "Insufficient Permission for Loyalty Program" |
+|---|---|---|
+| as is | shows | shows |
+| Stock User Read on both (Role Permission Manager) | **still shows** | gone |
+| Stock Settings Default/Sample Retention Warehouse `ignore_user_permissions`; Sales User Read on Loyalty Program | gone | gone |
+| restored | shows | shows |
+Stock Settings: store users already read it through Sales User; Frappe refuses
+because `default_warehouse` links to a warehouse outside their Warehouse
+permissions (`has_user_permission` checks a Single's link fields too). Loyalty
+Program: only System Manager could read it; Sales User fits (selling feature,
+every store user has it) better than Stock User. Setup and undo: section 72
+deploy steps 15-16.
+
+**First-store test** (after the section 72 setup; stores A and B, one store
+user each, plus a Stock Manager):
+1. A: Stock Entry > + Add > Stock Entry Type "Material Transfer" > tick "Add to
+   Transit". "Default Source Warehouse" = A (filled), "Default Target
+   Warehouse" = the transit warehouse (filled). "Destination Store" = B. Scan
+   two items, one twice: two rows, qty 2 and 1. Save, Submit.
+2. A on the submitted entry: buttons View and Cancel, no "End Transit".
+3. B: bell "Incoming transfer MAT-STE-... from A"; POS Awesome > Incoming
+   Transfers lists it at 0%. Open it: "End Transit" is there.
+4. B: End Transit -> "Default Source Warehouse" shows the transit warehouse,
+   "Default Target Warehouse" B. Lower one row by 1 (a shortage). Save, Submit.
+   The sent entry shows less than 100% and stays on Incoming Transfers.
+5. Stock Manager: on the sent entry, End Transit, "Default Target Warehouse" =
+   A (return the shortage), Save, Submit -> 100%, gone from Incoming Transfers.
+6. B: Delivery Note with a row from the transit warehouse -> refused "Goods
+   Still in Transit".
+7. A and B: Desk Sales Invoice (Update Stock) -> "Set Source Warehouse" = own
+   store, no Loyalty / Stock Settings popups; a normal POS sale at each store.
+8. Stock Ledger for the items: A -> transit -> B, and transit -> A for the
+   returned unit; transit back to its starting quantity.
+Rollback if needed: `git checkout <previous stable commit>` in apps/posawesome,
+`bench build --app posawesome`, `bench --site site1.local migrate`, restart.
+The Destination Store column stays (harmless, unused); the setup steps can stay
+or be undone one by one (each step lists its undo).
+
+## 77. Shift security: `check_opening_shift` and `create_opening_voucher` (2026-10-28)
+
+**Found.** Both whitelisted in `api/shifts.py`, so any logged-in user could call
+them directly:
+- `check_opening_shift(user)` used the `user` sent by the browser. Asking for
+  another cashier returned their open shift (opening balances), their store's
+  full POS Profile (176 fields, accounts included) and the Company record
+  (shown on staging inside a rolled-back transaction).
+- `create_opening_voucher` never checked the caller was allowed on the POS
+  Profile: an unassigned user opened a submitted, open shift on another
+  store's profile with any opening amounts (rolled back). They could not sell
+  on it (invoice APIs check the profile), but the false shift and amounts
+  would show in that store's shift lists and closing figures.
+
+**Built.**
+- `check_opening_shift(user=None)`: ignores the argument and uses the
+  logged-in user (`pos_access.get_authenticated_pos_user`; Guest refused). Both
+  POS screen callers (`usePosShift.ts`, `PayView.vue`) already send
+  `frappe.session.user`, so nothing changes for them.
+- `create_opening_voucher`: `pos_access.get_authorized_pos_profile(pos_profile,
+  company)` first (logged in, POS Profile read permission incl. User
+  Permissions, enabled, company matches, assigned unless a POS Profile
+  manager); the shift takes `pos_profile` and `company` from the profile. When
+  Frappe's own read check refuses, its "You need the 'read' permission ..." is
+  replaced with "You can't open a shift on POS Profile X: your account isn't
+  allowed to use it. Ask a manager to check your POS Profile and Warehouse
+  permissions."; pos_access's own messages (not assigned / disabled / other
+  company) pass through.
+- `api/test_shifts.py` (7): open then resume own shift (with and without a
+  user argument); another user's name ignored; unassigned cashier refused;
+  other store's user refused with the clear message; company mismatch refused;
+  manager (POS Manager + Accounts Manager, no restriction) allowed on two
+  profiles; POS Manager alone refused. 6 of 7 fail against the old code.
+
+**Live (staging browser).** Store-like user: opening dialog -> open -> terminal
+unlock -> reload resumes the same shift; `check_opening_shift(user=<someone
+else>)` returns their own; closed (closing-screen calls), opening dialog shown
+again. Manager (not assigned): opened. Other store's user: refused with the
+clear message. All test shifts closed, setup reverted.
+
+**Good to know.**
+- POS Awesome counts Sales Manager and Accounts Manager as POS Profile managers
+  (`pos_access.POS_PROFILE_MANAGER_ROLES`). Store users have both, so the
+  assignment check does not apply to them: their **POS Profile and Warehouse
+  User Permissions** keep them to their store.
+- Closing a shift saves the POS Opening Shift, which only **Sales Manager** and
+  **System Manager** may write (POS Opening Shift permissions). A store role
+  without Sales Manager could open shifts but not close them -- keep that in
+  any new store role.
+- POS Manager alone cannot read POS Profile (ERPNext: Accounts Manager /
+  Accounts User only), so such a user can no longer open a shift; they could
+  not sell before either.
+
+**Production deploy** (Python only; a separate night from section 72).
+1. Read-only check -- store users without a POS Profile permission (should
+   return no rows apart from people meant to work across stores):
+   ```
+   bench --site site1.local mariadb -e "SELECT u.name FROM tabUser u JOIN \`tabHas Role\` r ON r.parent=u.name AND r.role='Sales User' WHERE u.enabled=1 AND u.user_type='System User' AND NOT EXISTS (SELECT 1 FROM \`tabUser Permission\` p WHERE p.user=u.name AND p.allow='POS Profile');"
+   ```
+2. Ask open cashiers to finish their sales (a restart drops requests in flight).
+3. `cd apps/posawesome && git remote -v`, then `git pull <remote> stable`.
+   (`stable` also carries anything pushed before it -- deploy section 72 first.)
+4. `sudo supervisorctl restart all`.
+   No `bench migrate` (no doctype, fixture or patch) and no `bench build` (no
+   frontend file) are needed.
+5. Check: a store user reloads the POS -- an open shift resumes; one with no
+   shift sees the opening dialog, opens, and later closes as usual.
+Rollback: `git checkout <previous stable commit>` in apps/posawesome, then
+`sudo supervisorctl restart all`. Nothing in the database changes.
+
+## 78. Payment screen: card overpayments, split payments with partial payment off, fill the remaining amount (2026-10-29)
+
+Three commits on `develop-swan`, in this order: `9eea959a`, `76c85f95`,
+`6bea1869`. Not yet on `stable` -- the user is testing the first two by hand
+on staging and will say when to cherry-pick, in order.
+
+**Precision parity.** Staging System Settings had Currency Precision **2**;
+production has **3** (Float Precision 3, Banker's Rounding on both). The
+server rounds every Currency field with that setting
+(`frappe/model/meta.py` `get_field_precision`), while the POS screen uses
+the profile's `posa_decimal_precision` (3), so staging was saving typed
+3-decimal amounts and VAT splits at 2 decimals (e.g. net 9.520 / tax 0.480
+instead of 9.524 / 0.476). Staging set to 3 / 3 on 2026-10-29. Production's
+own Test Pos profile has `posa_decimal_precision` 2; the four store profiles
+have 3. See the standing check added to CLAUDE.md's final regression check.
+
+**`9eea959a` -- card overpayments.**
+- Found: typing into a non-Default line only reset the Default line (floored
+  at 0), so Visa clicked for the full 100 then Mastercard 20 left 120 paid.
+  At submit a card-only overpayment was turned into `paid_change` -- cash
+  handed out of a drawer that took none.
+- Built: submit is blocked when the excess over what's due is larger than
+  the cash taken ("Over by X: card payments exceed the amount due, and change
+  can only be given from cash. Correct <lines>."); the card-only ->
+  `paid_change` rule is gone; the summary shows "Over by X" in red. After a
+  cashier edit, only cash lines and untouched system amounts (Default
+  prefill) move; a card line the cashier typed or clicked never does.
+  Cash 120 + a card of 20 on 100 settles to Cash 80.
+- Cash line = Mode of Payment type Cash, the profile's
+  `posa_cash_mode_of_payment`, or a name containing "cash"
+  (`isCashLikePaymentLine`). Swan: only Cash; Visa, Master Card, Maal are Bank.
+- Upstream (defendicon) never auto-adjusts other lines on a typed edit;
+  both of our auto-adjust branches came from our own `6ac45e54` / `392add72`
+  (section 30).
+
+**`76c85f95` -- split payments with partial payment off (upstream `72fdbbea`).**
+- Found: with `posa_allow_partial_payment` off, submit compared the cash line
+  alone with the total ("Cash payment cannot be less than invoice total ..."),
+  so Cash 80 + Visa 20 on 100 was refused. It matched cash by name only and
+  kept just the last cash line. Production: only MAX&Co has partial payment
+  off. Reproduced on staging (Test Pos switched off, then back on).
+- Built: upstream's fix, cherry-picked (Dennis Igah co-author): the rule is
+  removed; the check below it sums all lines + loyalty + customer credit +
+  gift cards + write-off and still refuses a real underpayment ("The amount
+  paid is not complete"). The server only uses partial payment for the
+  write-off limit (`creation.py`), so neither check is a server boundary.
+- Bug #3 of section 30 (several "cash"-named methods) is still open; this
+  removed one name-only check but not the heuristic itself.
+
+**`6bea1869` -- fill the remaining amount.**
+- Workflow: staff charge the card machine first, then enter each slip.
+  Clicking a method used to fill the full amount and zero the rest.
+- Built: a click fills only what's still owed when another line holds a
+  staff-entered amount (typed, clicked, or focus-filled); amounts the screen
+  put there itself are cleared first; staff-entered lines never change; with
+  no staff-entered line it fills the full amount as before. Focusing an empty
+  Amount box follows the same rule. What's due nets off loyalty, customer
+  credit and gift cards (a full click used to ignore gift cards). Remaining
+  and the Remaining/Change figure are computed in whole baisa
+  (`cashTender.ts` `subtractAmounts`): 139.300 - 80.000 = 59.300. The figure
+  next to Paid: Remaining (red; green at 0.000), Change, Over by (red).
+  Returns and credit sales keep the plain full-amount fill.
+- ERPNext's own POS fills the remainder on click when the box is empty and
+  never touches other lines; upstream still zeroes the others.
+
+**Checks.** Each commit: full `vitest run` (last: 259/259 files, 1461/1461),
+`bench build` exit 0, no migrate needed (no doctype/fixture/print format),
+backend `invoice_processing.test_payment` 4/4, `test_payments` 9/9,
+`pos_closing_shift` 9/9, `invoice_processing.test_creation` 8 errors as
+before (pre-existing). New tests were each confirmed to fail against the old
+code. Live browser test not possible this session: headless Chromium crashes
+on the POS page in this WSL setup (signal 5), so the user is testing by hand.
+
+**Production deploy** (after the user's go): cherry-pick the three commits to
+`stable` in order, pull, `bench build --app posawesome`, restart. No migrate.
+
+## 79. Clear payments, per-line remove, cash handed back in full; Amount boxes; closing-shift finding (2026-11-01)
+
+Two more commits on `develop-swan` after section 78, not yet on `stable`.
+
+**`53bcd343` -- Clear payments, per-line x, stricter overpayment guard.**
+- Found: after cards were filled in, a customer switching to all cash had no
+  quick way back -- clicking Cash did nothing (cards already covered the
+  total) and typing Cash 139.300 left the cards in place: Paid 278.600,
+  Change 139.300, and the `9eea959a` guard let it through because the
+  excess was no larger than the cash taken.
+- Built: "Clear payments" (Payment Methods header) sets every line to 0 and
+  forgets staff entries; an x on each line holding an amount sets just that
+  line to 0 and forgets it. Sales only (hidden for returns and credit
+  sales); loyalty, customer credit and gift card redemptions untouched.
+  Submit is also blocked when the change would be equal to or more than all
+  the cash taken ("Over by X: cash would be handed back in full. Reduce a
+  card amount or remove the cash."), shown as "Over by" in red
+  (`cashTender.ts` `getOverpaymentBlock`). Cash 10 + Visa 100 on 100 is now
+  blocked (the `9eea959a` test was updated); Cash 120 alone (Change 20) and
+  Cash 150 + Visa 50 (Change 100) still pass.
+- The 139.300 sequence (click Visa, type 80, click Maal = 59.300, click Cash
+  = no change) is a permanent test under Cash, Visa and Master Card Default.
+
+**`7a2e9595` -- Amount boxes on the payment and closing shift screens.**
+- Payment screen: 0 shows as an empty box; focus fills what's still owed
+  (empty box only), then selects the whole value -- typing replaces it, Tab
+  or Enter keeps it. The first mouseup after a click is cancelled, since it
+  would otherwise move the caret and undo the selection.
+- Closing shift: 0 shows as an empty box; focus selects the value (the box
+  is `type="number"`, so jsdom can't hold a selection -- tests check that
+  `select()` runs; the real highlight is on the manual checklist). An empty
+  closing amount is stored as 0, never blank or null, in three places: on
+  leaving the box, in `useClosingShift.hasValidClosingAmounts()` before the
+  close is checked and sent, and server-side in
+  `POSClosingShift.update_payment_reconciliation()` (runs in `validate`,
+  before Frappe's mandatory check). Before, an empty box silently blocked
+  Submit.
+- The closing amount rule (from upstream) allowed only 2 decimals, flagging
+  correct OMR counts like 12.345; it now follows the currency precision
+  passed in from `ClosingDialog` (forwarding covered by a wiring test).
+
+**Checks.** Each commit: full `vitest run` (last: 260/260 files, 1517/1517),
+`bench build` exit 0, no migrate (no doctype JSON, fixture or print
+format). Backend: `test_pos_closing_shift` 10/10 (new test: blank/null
+closing amount saved as 0), `closing_processing.test_z_report` 3/3,
+`test_z_report_vat` 8/8, `test_cash_movement_integration` 2/2,
+`test_same_shift_exchange` 5/5, `test_overview_loyalty` 4/4,
+`invoice_processing.test_payment` 4/4, `test_payments` 9/9,
+`invoice_processing.test_creation` 8 errors as before. Each new test was
+confirmed to fail against the old code. Live browser test still not possible
+here (headless Chromium crashes on the POS page); the user tests by hand.
+
+**Found, not fixed -- closing another cashier's shift.**
+`closing_processing/creation.py`:
+- `submit_closing_shift(closing_shift)` is whitelisted, builds the whole POS
+  Closing Shift from the JSON the browser sends and saves/submits it with
+  `ignore_permissions=True`. `POSClosingShift.validate` only checks the
+  opening shift is Open and not already closed -- not who is calling. Any
+  logged-in user could close another cashier's open shift, with figures of
+  their choosing.
+- `make_closing_shift_from_opening(opening_shift)` trusts the opening shift
+  dict from the browser (including `user` and opening amounts) and submits
+  that shift's printed draft invoices as a side effect, for any shift name.
+- Same class of gap as section 77 (opening a shift). Also found while
+  checking: `get_pos_invoices` (Desk closing form) submitted printed drafts
+  and returned full invoices for any shift, and pasted its `doctype`
+  argument into the SQL table name (`` `tab{doctype}` ``) -- an injected
+  value reached the SQL (confirmed by the test's syntax error against the
+  old code); `get_payments_entries` listed any shift's Payment Entries
+  (`frappe.get_all` skips permissions).
+
+**`e229b637` -- closing amount placeholder.** The Closing Amount boxes used
+"Edit" as a single-line label; they now show a faint 0 at the currency
+precision ("0.000") and keep an accessible name ("Closing amount for
+<mode>"). No other money box used "Edit". (The payment screen has no such
+placeholder -- it shows the "Amount" label; not built there.)
+
+**`1d8bfdfc` -- fixed: only a shift's own cashier or a POS supervisor may
+close it.**
+- Decision (user): "manager" = POS Awesome Supervisor or System Manager.
+  Sales Manager is not enough -- closing writes POS Opening Shift, which only
+  Sales Manager / System Manager may write, so every cashier who can close a
+  shift at all has Sales Manager; using it would let any same-store cashier
+  close a colleague's shift.
+- `closing_processing/access.py` `authorize_shift_close()` runs first in all
+  four whitelisted methods: signed in, opening shift exists and is Open,
+  `get_authorized_pos_profile` for its profile, caller is the shift's user or
+  a supervisor. The same owner-or-supervisor check runs in
+  `POSClosingShift.validate` (`check_closer`), so the Desk form follows it;
+  `company` is reset from the opening shift there too.
+- `make_closing_shift_from_opening` builds from the stored opening shift;
+  `submit_closing_shift` takes user / POS Profile / company / opening shift
+  from it (user and pos_profile were already `fetch_from`, so only company
+  was spoofable); `get_pos_invoices` accepts only Sales Invoice or POS
+  Invoice. Internal callers (overview, creation) use the unchecked
+  `fetch_shift_invoices` / `fetch_shift_payment_entries`.
+- Effect to know: a manager who closes leftover shifts in Desk needs the
+  **POS Awesome Supervisor** role (or System Manager); Sales Manager alone is
+  refused. A cashier whose POS Profile assignment was removed while their
+  shift was open must have it closed by a supervisor.
+- Not changed: the owner's closing figures (expected amounts, transactions)
+  still come from the browser; `get_closing_shift_overview` still only checks
+  POS Profile access (read-only figures).
+- Tests: `closing_processing/test_closing_security.py` (11). Against the old
+  code 8 fail (2 another cashier refused, 4 other store's supervisor refused,
+  5 Guest refused, 6 company spoof, 7 stored opening amounts, 8 closed shift
+  can't be prepared, 9 doctype limit, 11 Desk form rule); 1, 3, 10 pass both
+  ways. Existing tests that patched `get_pos_invoices` / `get_payments_entries`
+  on overview/creation now patch the `fetch_*` names.
+- Checks: frontend 260/260 files, 1519/1519; closing modules all pass
+  (`test_closing_security` 11/11, `test_pos_closing_shift` 10/10, Z Report
+  3/3, VAT 8/8, item counts 7/7, line discounts 2/2, cash movements 2/2,
+  same-shift exchange 5/5, overview loyalty 4/4), `test_shifts` 7/7,
+  `test_payment` 4/4, `test_payments` 9/9; `test_creation` 8 errors and
+  `test_submitted_invoice_shift_security` 1 import error, both identical
+  without this change. No build or migrate needed (Python only).
+- Cherry-picks cleanly onto `stable` alone, and in order after the payment
+  commits (checked in a throwaway worktree).
+
+**Before deploying `1d8bfdfc` to production**, read-only:
+```
+bench --site site1.local mariadb -e "SELECT u.name FROM tabUser u JOIN \`tabHas Role\` r ON r.parent=u.name AND r.role='Sales User' WHERE u.enabled=1 AND u.user_type='System User' AND NOT EXISTS (SELECT 1 FROM \`tabUser Permission\` p WHERE p.user=u.name AND p.allow='POS Profile');"
+bench --site site1.local mariadb -e "SELECT u.name, GROUP_CONCAT(DISTINCT r.role) roles, GROUP_CONCAT(DISTINCT p.for_value) profiles FROM tabUser u JOIN \`tabHas Role\` r ON r.parent=u.name AND r.role IN ('POS Awesome Supervisor','System Manager') LEFT JOIN \`tabUser Permission\` p ON p.user=u.name AND p.allow='POS Profile' WHERE u.enabled=1 GROUP BY u.name;"
+```
+The first should list no store users (only people meant to work across
+stores); the second shows who may close others' shifts, and on which stores.
+
+**Cherry-pick order to `stable`** (when the user says go): `1d8bfdfc` may go
+first on its own (security fix, Python only: pull + restart). Payment
+commits, in order: `9eea959a`, `76c85f95`, `6bea1869`, `53bcd343`,
+`7a2e9595`, `e229b637` (pull, `bench build --app posawesome`, restart; no
+migrate). Docs commits: `e7100e66`, `e2e81d39` and the one adding this.
+
+## 80. Closing variance rule; everything on `stable`; the one-night deploy (2026-11-01)
+
+**`ed28d06f` (develop-swan) = `da0a0402` (stable) -- a closing off by more
+than the POS Profile's tolerance needs a reason.**
+- Found: a closing whose count didn't match the expected amount submitted
+  silently. Not blocked outright on purpose: a hard block only pushes the
+  cashier to type the expected figure and hides the shortage (standard
+  ERPNext and upstream record the difference and never block).
+- Decisions (user): tolerance per POS Profile, default 0.500; over it a
+  reason is required; supervisor approval is a POS Profile tick box, default
+  off; applies to every payment method.
+- Fields: POS Profile `posa_closing_variance_tolerance` (Currency, 0.5) and
+  `posa_closing_variance_needs_supervisor` (Check, 0), hand-added to
+  `fixtures/custom_field.json` (+108 lines) and listed in `hooks.py`;
+  POS Closing Shift `posa_variance_reason` (Small Text) and
+  `posa_variance_approved_by` (Link User, read only) in the doctype JSON,
+  "Modes of Payment" section.
+- Server (`POSClosingShift.validate`, so POS and Desk alike):
+  `refresh_expected_amounts()` rebuilds the expected amounts from the
+  shift's own invoices, Payment Entries and cash movements
+  (`creation.build_closing_shift`, split out of
+  `make_closing_shift_from_opening` with no side effects) -- the browser's or
+  form's expected figures are ignored, closing the gap `1d8bfdfc` left; a
+  dropped payment row counts as 0. `check_closing_variance()`: any method off
+  by more than the tolerance (either way, whole baisa) needs a reason; with
+  the tick box on, the signed-in user or the terminal's active PIN cashier
+  must be a POS supervisor (`closing_variance_approver`, the below-cost
+  override's rule) and is stored as the approver. The error names the
+  methods, never amounts.
+- Screen: the Close Shift confirmation lists the methods that are off
+  ("Cash: short 2.350"; names only on Hide Expected Amount profiles), asks for
+  the reason, says when a supervisor must be switched in, and keeps Close
+  Shift disabled until satisfied (`utils/closingVariance.ts`).
+- Z Report: Variance Reason (escaped with `|e`; Frappe's XSS filter also
+  strips script on save) and Approved By under Cash Balance.
+- Field placement: the first migrate put the two POS Profile fields in
+  "Sales and Purchase Flows" -- three other custom fields also use
+  `insert_after: hide_expected_amount`, so the order behind it isn't fixed.
+  Re-anchored on `posa_language` (nothing else anchors on it); two further
+  migrates both left them in "Sales and Return Controls", between POS
+  Language and `posa_column_break_112`.
+- Tests: `closing_processing/test_closing_variance.py` (12), 9 fail against
+  the old server code, including the tampered-expected-amount test.
+  `test_closing_security` 6 and 11 now count right (they had counted 0
+  against a real expected 5, which the new rule refuses; what they check is
+  unchanged). Frontend: `closingVariance.spec.ts` (6), 6 new in
+  `closeShiftConfirmDialog.spec.ts`, wiring in
+  `closingDialogConfirmWiring.spec.ts`; reverting the dialog fails 4,
+  reverting ClosingDialog fails 3.
+- Checks: frontend 261/261 files, 1533/1533; `bench build` exit 0; migrate
+  exit 0 three times (layout identical on runs 2 and 3); all closing modules
+  pass; `test_creation` 8 errors and `test_submitted_invoice_shift_security`
+  1 import error as before. Hand-tested by the user on staging.
+
+**`stable` now** (GitHub, tip `da0a0402`): `d4790c72` plus, in order,
+`919c542c` (transfers, section 72), `81e9c509` (shift security, 77),
+`da312652` (= `1d8bfdfc`, closing access), `626dee4b` (= `9eea959a`),
+`a831b6ef` (= `76c85f95`), `6c07bf82` (= `6bea1869`), `7de49327`
+(= `53bcd343`), `bf7b6e9a` (= `7a2e9595`), `133a6b9a` (= `e229b637`),
+`da0a0402` (= `ed28d06f`). Its code equals develop-swan's (`git diff` shows
+only CLAUDE.md and PROGRESS_NOTES.md). This replaces the cherry-pick order in
+section 79.
+
+**Production deploy, one night** (site `site1.local`; from `d4790c72` to
+`da0a0402`). Needs build (frontend, Stock Entry form), migrate (section 72
+fixture/report/workspace, the variance fields, the Z Report) and restart.
+
+*Before*
+1. Ask cashiers to finish sales and close shifts. Snapshot, then
+   `bench --site site1.local backup --with-files`.
+2. `cd apps/posawesome && git status -sb && git log -1 --oneline` -- must be
+   `d4790c72`, no local changes.
+3. Precision parity: System Settings currency/float precision 3 and Banker's
+   Rounding.
+4. Section 72 pre-checks, steps 2-5b (name checks, workspace drift, open
+   transit entries, stock in transit, Stock Settings Property Setters,
+   existing Is Default warehouse permissions).
+5. Section 79 queries: store users without a POS Profile User Permission
+   (expect none); who has POS Awesome Supervisor / System Manager and on
+   which stores -- give POS Awesome Supervisor to anyone who closes others'
+   shifts or approves variances; open shifts.
+6. Tell the stores: a closing off by more than 0.500 on any method now asks
+   for a reason.
+
+*Code*
+7. `git pull <remote> stable`, then `git log -1 --oneline` -- must be
+   `da0a0402 feat: a closing off by more than the POS Profile's tolerance needs a reason`.
+8. `source ~/.nvm/nvm.sh && nvm use 24 && bench build --app posawesome`
+   (exit 0).
+9. Migrate **twice**, both exit 0:
+   `bench --site site1.local migrate` then again.
+10. Field placement, after each migrate (`bench --site site1.local console`):
+    ```
+    f = frappe.get_meta("POS Profile").fields
+    sec = None
+    for i, x in enumerate(f):
+        if x.fieldtype == "Section Break": sec = x.label
+        if x.fieldname in ("posa_closing_variance_tolerance", "posa_closing_variance_needs_supervisor"):
+            print(x.fieldname, "|", sec, "| after", f[i-1].fieldname, "| default", x.default)
+    ```
+    Expected, the same both times:
+    ```
+    posa_closing_variance_tolerance | Sales and Return Controls | after posa_language | default 0.5
+    posa_closing_variance_needs_supervisor | Sales and Return Controls | after posa_closing_variance_tolerance | default 0
+    ```
+    Also in Desk: a POS Profile > "Sales and Return Controls" shows Closing
+    Variance Tolerance (0.500) and Closing Variance Needs Supervisor Approval
+    (unticked) below POS Language.
+11. Z Report re-imported with the new lines:
+    ```
+    bench --site site1.local mariadb -e "SELECT INSTR(html,'variance_reason')>0 FROM \`tabPrint Format\` WHERE name='Z Report'"
+    ```
+    Returns 1.
+12. `sudo supervisorctl restart all`.
+
+*Transfer setup* -- section 72 steps 10-16 (transit warehouse, Default
+In-Transit Warehouse, Stock User role, Warehouse permissions with one Is
+Default, Material Transfer permission, Loyalty Program read, the two Stock
+Settings Property Setters); users reload.
+
+*Post-deploy tests*: a sale (Remaining 0.000 green); a split on 139.300
+(Visa 80, click Maal = 59.300, click Cash = no change; cards full + Cash
+139.300 = "Over by 139.300", refused; Clear payments then Cash = 139.300);
+MAX&Co Cash 80 + Visa 20 submits, Cash 80 alone refused; shift resumes on
+reload, another store's profile refused; own close (empty box shows 0.000,
+saves as 0), a same-store cashier refused in Desk, a supervisor closes in
+Desk; closing off by < 0.500 closes without a reason, by > 0.500 asks for
+one and the Z Report prints it; the Z Report after each close; the section 76
+first-store transfer test.
+
+*Rollback*: `git checkout d4790c72`, build, migrate, restart. Left behind and
+harmless: Destination Store column, Incoming Transfers report record, the
+variance columns. Restore the backup only if data is damaged (loses every
+sale since).
+
+## 81. Closing screen and Z Report cash: opening float, change, blind count; everything on `stable` (2026-11-01)
+
+Three commits on `develop-swan`, cherry-picked to `stable` in order:
+`110c1e06` = `96da961e`, `f46ac2c3` = `9eba210a`, `d488f070` = `e1b7b60a`.
+Hand-tested by the user on staging before the cherry-pick.
+
+**Found** (while writing the cashier guide): the Closing POS Shift overview
+card "Expected Cash" and the "Cash Drawer Snapshot" didn't match Payment
+Reconciliation, the figure the closing variance rule (section 80) checks.
+Staging shift: 20.000 opening, a 139.300 sale paid 150.000 cash, 10.700
+change -- reconciliation 159.300 (right), card 150.000 on the old code.
+Two separate gaps, both from upstream (`cd5eba17`, release 15.33.0):
+- the overview never added the opening float;
+- it took off change only when paid back through an overpayment Payment
+  Entry, never an invoice's own `change_amount`. ERPNext stores the cash
+  payment row as the amount tendered (150.000) and books the ledger net
+  (GL Cash debit 139.300).
+A cashier counting by the card was told "Cash: short ..." and asked for a
+reason. The Z Report's Cash Balance was always right; its Today's Payments
+(and the screen's Payments by Mode) printed cash tendered, 150.000, so the
+payment totals didn't add up to Net Sales.
+
+**`110c1e06` -- opening float on the card; blind count safeguard.**
+- `get_closing_shift_overview` returns `cash_expected.opening_amount` and
+  `cash_taken`; the card caption reads "Opening X + cash taken Y"
+  (`useClosingSummary.ts`; the overview normalizer in `useClosingShift.ts`
+  keeps the two fields).
+- On a POS Profile with Hide Expected Amount the overview hides the Expected
+  Cash card, the Cash Drawer Snapshot and Payments by Mode (`ShiftOverview.vue`
+  `hideExpectedAmounts`, forwarded by `ClosingDialog.vue`). No store uses
+  blind count today. Screen only: the overview and closing endpoints still
+  return the figures to anyone on that profile, as before.
+- The hand test failed on this commit alone: card 170.000 (= 150.000 + 20.000)
+  against 159.300 -- the change gap above.
+
+**`f46ac2c3` -- the card reads the reconciliation build.** The card no
+longer adds its own sum: `drawer_cash_expected()` (overview.py) reads the
+Cash row of `creation.build_closing_shift` -- the build Payment
+Reconciliation and `POSClosingShift.refresh_expected_amounts` use -- so the
+two can't disagree (change, cash movements, returns, cash refunds, cash
+Payment Entries, split payments). Imported inside the function: creation is
+only needed for this figure, and `test_overview_loyalty` loads overview.py
+with a stubbed frappe. Foreign-currency cash rows of the snapshot stay; the
+company-currency row takes the rest.
+
+**`d488f070` -- cash in Today's Payments and Payments by Mode is net of
+change.** Each sale's change comes off its cash row, only when the invoice
+has a cash row (amount > 0) in the profile's cash mode
+(`posa_cash_mode_of_payment` or "Cash") -- the reconciliation's rule; change
+with no cash row (pre-`9eea959a` card-only overpayments) comes off nothing.
+Z Report: `get_shift_invoice_rows` also reads `change_amount`;
+`get_payment_mode_counts(..., change_by_invoice, cash_mode_of_payment)`.
+Overview: the same in the invoice loop, skipped when the change went out
+through an overpayment Payment Entry (still taken off further down). No
+print-format change. Cash Balance, VAT, sales totals and counts unchanged.
+A reprint of an older Z Report now prints cash net of change too, so it can
+be lower than the paper printed that day.
+
+**Tests.**
+- `test_cash_movement_integration` (6): `_overview_and_reconciliation()`
+  runs the real overview and the real `build_closing_shift` on the same
+  mocked shift. The hand-test case fails on `110c1e06` (170.0 != 159.3);
+  split payments with change + credit return + cash refund + movement fails
+  (80 != 70); Payments by Mode 150 != 139.3 and 60 != 50 on `f46ac2c3`;
+  change without a cash row; movements only; opening float + movement.
+- `test_z_report_cash_net_of_change` (5): hand-test case, split, change
+  without a cash row, returns untouched, Z Report end to end (150.0 != 139.3
+  on `f46ac2c3`); the payment-row SQL is answered from a fixture.
+- `closingExpectedCash.spec.ts` (7) and a wiring test in
+  `closingDialogConfirmWiring.spec.ts`: caption, card hidden on blind count,
+  normalizer, ShiftOverview hides the two sections, ClosingDialog forwards
+  the flag. Reverting the frontend fails all 8.
+- `test_pos_closing_shift` (three loyalty / printed-invoice tests) and
+  `test_overview_loyalty` stub `drawer_cash_expected`.
+- The `AttributeError: module 'frappe' has no attribute 'model'` printed
+  after `test_overview_loyalty` is pre-existing (same on `21c5e94b`).
+
+**Checks** (each commit): frontend 262/262 files, 1541/1541; `bench build`
+exit 0 (`110c1e06`; the other two are Python only); no migrate; backend in
+isolation -- `test_cash_movement_integration` 6/6,
+`test_z_report_cash_net_of_change` 5/5, `test_z_report` 3/3,
+`test_z_report_vat` 8/8, `test_z_report_item_counts` 7/7,
+`test_z_report_line_discounts` 2/2, `test_pos_closing_shift` 10/10,
+`test_closing_variance` 12/12, `test_overview_loyalty` 4/4,
+`test_same_shift_exchange` 5/5, `test_closing_security` 11/11, `test_shifts`
+7/7. Live, read-only on staging shift `POSA-OS-26-0000041`: card 159.300,
+Payments by Mode 139.300, Z Report rendered in memory (closing built and
+marked submitted without saving, rolled back): Today's Payments
+`Cash 1 / 139.300`, Cash Balance 20.000 / 159.300.
+
+**`stable` now** (GitHub, tip `e1b7b60a`): section 80's list, then
+`96da961e` (= `110c1e06`), `9eba210a` (= `f46ac2c3`), `e1b7b60a`
+(= `d488f070`). `git diff stable develop-swan` shows only CLAUDE.md and
+PROGRESS_NOTES.md.
+
+**Production deploy, one night** -- section 80's plan with these changes
+(site `site1.local`; from `d4790c72` to `e1b7b60a`). Still needs build,
+migrate (twice) and restart: the build for `110c1e06` and earlier frontend
+commits, the migrates for section 72 / section 80 items. These three commits
+add no migrate of their own.
+- *Before*, add: (a) invoices with change but no cash row, read-only --
+  nothing comes off cash for them, so list them for the record:
+  ```
+  bench --site site1.local mariadb -e "SELECT si.name, si.posting_date, si.change_amount FROM \`tabSales Invoice\` si WHERE si.docstatus=1 AND si.change_amount>0 AND NOT EXISTS (SELECT 1 FROM \`tabSales Invoice Payment\` p WHERE p.parent=si.name AND p.mode_of_payment=COALESCE((SELECT pp.posa_cash_mode_of_payment FROM \`tabPOS Profile\` pp WHERE pp.name=si.pos_profile),'Cash') AND p.amount>0);"
+  ```
+  (b) tell the stores: the closing screen's Expected Cash now includes the
+  opening cash and is the drawer figure; Today's Payments shows cash net of
+  change; a reprint of an old Z Report can show less cash than the paper.
+- Step 7: `git log -1 --oneline` must be
+  `e1b7b60a fix: cash in Today's Payments and Payments by Mode is net of change`.
+- Steps 8-12 unchanged (build, migrate twice with the field-placement and
+  Z Report checks, restart).
+- *Post-deploy tests*, add after section 80's list, on one store with a
+  20.000 opening float and a cash sale given change (e.g. 139.300 paid
+  150.000):
+  1. Close Shift overview: Expected Cash = 159.300, caption "Opening 20.000 +
+     cash taken 139.300"; Cash Drawer Snapshot 159.300; Payment
+     Reconciliation Cash Expected Amount 159.300.
+  2. Payments by Mode: Cash 139.300; Change Returned 10.700.
+  3. Counting 159.300 closes without a reason.
+  4. Z Report: Today's Payments `Cash 1 / 139.300`, Net Sales 139.300, Cash
+     Balance Opening 20.000 / Expected 159.300 / Difference 0.000.
+  5. A split (Visa + Cash with change): Payments by Mode and the Z Report
+     show the card in full and cash net of change; the card still equals the
+     Cash Expected Amount.
+- *Rollback* unchanged: `git checkout d4790c72`, build, migrate, restart.
+
+## 82. Epson TM-T88V left edge (QZ printable width); opening shift shows only the cash float; everything on `stable` (2026-11-02)
+
+Two commits on `develop-swan`, cherry-picked to `stable` in order:
+`f7623756` = `060bc356`, `71ca7e23` = `aa3376b6`. Both hand-tested by the
+user on staging (the Epson at Test Pos for the first) before the
+cherry-pick.
+
+**Epson TM-T88V: clipped left edge and a small, faint Z Report.** Same
+print format and QZ config as the Bixolon, which printed fine. Read from
+QZ Tray 2.2.5's own Java source (`PrintHTML.java`, `WebApp.java`):
+`printHtmlViaQz` sends `size {80mm, height: null}` and zero margins, so QZ
+prints on the driver's *default* paper, forces the zero margins (the
+qz-tray JS always sends `margins`, so the driver's own margins are never
+used) and scales the whole page to fit one sheet of it. Two causes:
+- Small Z Report: Epson's default paper was "Roll Paper 80 x 297 mm"; the
+  Z Report is longer, so QZ shrank it to fit 297 mm. Fixed on the Epson PC,
+  no code: Printing Defaults > paper "Roll Paper 80 x 3276 mm".
+- Clipped left edge ("Total Sales" -> "al Sales", receipts too): QZ draws
+  from the paper's left edge; the TM-T88V prints 72 mm of the 80 mm paper,
+  so about 4 mm is lost.
+
+**`f7623756` -- QZ printable width on the POS Profile.** New field
+`posa_qz_printable_width` (Float, "QZ Printable Width (mm)", Printing and
+Delivery, after QZ Tray Printer Name), hand-added to `custom_field.json`;
+`posa_receipt_logo` re-anchored after it so no two fields share an
+`insert_after` (the ordering trap in `insert_receipt_logo_field_in_print_chain`).
+Blank/0 = the QZ config exactly as before (Bixolon). 72 = 4 mm left and
+right margins and a 76 mm render width (the formats' `body` width), so QZ
+scales 76 -> 72 mm (95%) into the printable area. Read in
+`printDocumentViaQz` from `uiStore.posProfile`, like the profile's default
+printer, so it covers receipts, reprints, the Z Report and Z Report History;
+barcode labels call `printHtmlViaQz` directly and are untouched. Printer
+selection unchanged (`getActiveProfile()` split out of
+`getProfileDefaultPrinterName()`, same results). Tests: 5 in
+`qzTray.spec.ts`, incl. a wiring test (fails when the profile read is
+removed). Migrate twice: field in place, idempotent.
+
+**`71ca7e23` -- opening shift shows only the cash float.**
+- Found: every amount box started at a real 0 staff had to delete;
+  clicking into an untouched box and out turned it red (its rule read
+  `.length` of the number 0 -- confirmed in a real Vuetify 3.12.6 mount);
+  an emptied box (`""`) failed the required `amount` check on the server.
+- Shows the profile's cash mode (`posa_cash_mode_of_payment`, else the mode
+  named "Cash" -- the closing's rule) plus any other Cash-type mode
+  ("Dollar Cash float"); a profile with neither shows every mode.
+- Every mode is still sent, the hidden ones as 0: Payment Reconciliation,
+  the Z Report Cash Balance and the variance rule see the same rows as
+  before (a mode missing from the opening only gets a reconciliation row
+  if it had sales).
+- Box empty with a faint 0.000 (profile decimal precision, else system
+  currency precision); empty is sent as 0. The closing boxes' number rule
+  moved to `utils/closingAmount.ts` (`amountInputRule`) and is shared.
+- Design: 520 px dialog, "Open Shift" / "Start your shift", a summary line
+  when there is one company and profile (pickers otherwise), one
+  "Opening float" box with the hint "Cash in the drawer at the start of the
+  shift.", "Open Shift" button. English only. Checked in Chromium, light and
+  dark.
+- `get_opening_dialog_data` also returns each profile's cash mode and
+  decimal precision and each payment mode's type (own profiles only, test
+  added).
+- Tests: `openingDialogCashOnly.spec.ts` (11; three deliberate breakages each
+  fail it), `test_shifts` 8/8.
+
+**Cash decided by Mode of Payment type** (read-only audit; production had
+Maal as type Cash on MAX&Co and Max Demo, now Bank like Visa and Master
+Card). By type: the payment screen's `isCashLikePaymentLine` (auto-adjust
+of lines, the change-from-cash guard, quick-cash tenders) and, with no
+profile cash mode set (all production profiles), the change Payment
+Entries in `payment.py` (first Cash-type line on the invoice). By profile
+cash mode or the name "Cash" only: Payment Reconciliation, Expected Cash,
+variance rule, Z Report, net-of-change, Cash Movement. Dashboards read the
+current type, so Maal is now card for all dates. Past invoices keep "Cash"
+on their stored Maal lines; nothing in closing reads it.
+
+**Checks.** Frontend 263/263 files, 1557/1557; `bench build` exit 0; migrate
+twice for `f7623756` (none for `71ca7e23`); backend in isolation --
+`test_shifts` 8/8, `test_closing_variance` 12/12, `test_closing_security`
+11/11, `test_pos_closing_shift` 10/10, `test_z_report` 3/3,
+`test_z_report_cash_net_of_change` 5/5, `test_cash_movement_integration` 6/6,
+`test_print_assets` 4/4 and the POS Profile field modules for the fixture.
+
+**`stable` now** (GitHub, tip `aa3376b6`): section 81's list, then
+`060bc356` (= `f7623756`), `aa3376b6` (= `71ca7e23`). `git diff stable
+develop-swan` shows only CLAUDE.md and PROGRESS_NOTES.md.
+
+**Production deploy, one night** -- sections 80-81's plan with these
+changes (site `site1.local`; from `d4790c72` to `aa3376b6`).
+- *Before*, add:
+  (a) Mode types -- only "Cash" may be type Cash:
+  ```
+  bench --site site1.local mariadb -e "SELECT name, type FROM \`tabMode of Payment\` WHERE enabled=1 ORDER BY type, name;"
+  ```
+  (b) Change Payment Entries recorded as Maal while it was type Cash
+  (ordinary Maal sales never create one), read-only, for the record:
+  ```
+  bench --site site1.local mariadb -e "SELECT name, posting_date, payment_type, paid_amount, reference_no FROM \`tabPayment Entry\` WHERE mode_of_payment='Maal' AND docstatus=1;"
+  ```
+  (c) Name check for the new field (expect no row):
+  ```
+  bench --site site1.local mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE name='POS Profile-posa_qz_printable_width';"
+  ```
+  (d) Each **Epson** PC: Printers > EPSON TM-T88V Receipt > Printer
+  properties > Advanced > **Printing Defaults** > Paper Size
+  "Roll Paper 80 x 3276 mm" (Printing Defaults, not Printing Preferences --
+  QZ reads the default). Bixolon PCs: no change.
+  (e) Tell the stores: the opening screen asks only for the Opening float;
+  leave it empty for 0.
+- Step 7: `git log -1 --oneline` must be
+  `aa3376b6 feat: opening shift shows only the cash float, as an empty box like the closing counts`.
+- Step 10, add after each migrate (same console session):
+  ```
+  f = frappe.get_meta("POS Profile").fields
+  sec = None
+  for i, x in enumerate(f):
+      if x.fieldtype == "Section Break": sec = x.label
+      if x.fieldname in ("posa_qz_printable_width", "posa_receipt_logo"):
+          print(x.fieldname, "|", sec, "| after", f[i-1].fieldname)
+  ```
+  Expected, the same both times:
+  ```
+  posa_qz_printable_width | Printing and Delivery | after posa_qz_printer_name
+  posa_receipt_logo | Printing and Delivery | after posa_qz_printable_width
+  ```
+- Step 12 restart also loads the new `shifts.py`.
+- *After restart*: each Epson store's POS Profile > Printing and Delivery >
+  QZ Printable Width (mm) = **72**. The **Bixolon** store's profile stays
+  **blank**. Tills hard-refresh (new build, new profile, Maal's new type).
+- *Post-deploy tests*, add:
+  1. Opening screen (a user with no open shift): "Open Shift", "Start your
+     shift", one **Opening float** box, empty with a faint **0.000** and
+     the hint; click in and out -- **no red border**. Enter the float and
+     Open Shift.
+  2. Desk > that POS Opening Shift: Cash = the float, Visa, Master Card and
+     Maal **saved as 0**.
+  3. At close: Payment Reconciliation **still lists every mode** (card
+     modes opening 0), Expected Cash includes the float; Z Report Cash
+     Balance as before.
+  4. Epson store: a receipt and a Z Report reprint -- "Payment", "Opening",
+     "Total Returns" whole, right-hand figures whole, Z Report normal size.
+  5. Bixolon store: receipt and Z Report exactly as before.
+- *Rollback* unchanged (`git checkout d4790c72`, build, migrate, restart);
+  the `posa_qz_printable_width` column is left behind and harmless. The
+  Epson paper setting can stay.
+
+## 83. Credit Change on sales behind a POS Profile tick box (on `stable`); payment rows holding money marked, opening focus off the Cash button (2026-11-03)
+
+Owner report after production moved `d4790c72` -> `aa3376b6`: an editable
+"Credit Change" box next to "Paid Change" on overpaid sales, and a bright
+cyan Cash button on opening the Payments screen while the money sat on Visa.
+
+**Credit Change** -- upstream (release `cd5eba17`), not from our commits;
+`626dee4b` only hid it for card overpayments. Anything typed in it became a
+real customer advance (`payment.py`, "Receive" Payment Entry), against Swan
+policy that credit comes only from returns. `4883be10` (stable `343dcc32`):
+new POS Profile tick box **Allow Credit Change on Sales**
+(`posa_allow_credit_change_on_sales`, Check, default 0, Sales and Return
+Controls after `posa_closing_variance_needs_supervisor`, hand-added to
+`custom_field.json`). Off: the box is read-only on sales and
+`submit_invoice` rejects `credit_change > 0` on a non-return invoice
+("Credit Change is not allowed on a sale..."), read from the server-resolved
+profile, after the replay check and before the ledger. On: as before.
+Returns unchanged. Tests: `test_creation` +5, `paymentSummary.spec` +3.
+Hand-tested OK on staging. Known, pre-existing: any server error on submit
+shows as "Connection problem... Network request failed" (Frappe's 417
+handler passes no status to `api.callEnvelope`), and the outbox resends it.
+
+**Cash highlight** -- regression from `bf7b6e9a`: an empty Amount box is an
+input with Vuetify's `.v-text-field input { opacity: 0 }`, which
+`keyboardNavigation.isElementVisible` reads as hidden, so
+`focusFirstPaymentTarget` skipped Cash's Amount box and focused the Cash
+*button*; theme.css's `.v-btn.bg-primary:focus` rule painted it cyan
+(`:focus`, not `:focus-visible`, so also when opened by mouse). Confirmed in
+headless Chromium on staging (Cash first, Visa default). `e4e1c0fc` (not on
+`stable` yet): every line with an amount (what its Amount box shows; a
+return's refund line too) gets a success-colour left border, a tick and a
+bold amount (#2e7d32 light, #4caf50 dark); on open the focus goes to the
+Amount box of the line holding money (Default first, found by test id via
+`utils/paymentOpeningFocus.ts`), else the payment root (`tabindex="-1"`),
+never a button; a credit-only return still focuses Submit. Live-checked
+light and dark: Visa's Amount box focused with 25.000 selected, highlight
+follows split and cash-only payments, Tab still shows the button focus.
+Tests: `paymentOpeningFocus.spec.ts` (14).
+
+**Checks** (`e4e1c0fc`): frontend 264/264 files, 1574/1574; `bench build`
+exit 0; no backend, fixture or doctype change.
+
+**Production for `343dcc32`** (from `aa3376b6`): backup; name check (no
+row) `SELECT name FROM tabCustom Field WHERE
+name='POS Profile-posa_allow_credit_change_on_sales'`; `git pull <remote>
+stable` -> `343dcc32`; build; migrate twice; field check expects
+`posa_allow_credit_change_on_sales | Sales and Return Controls | after
+posa_closing_variance_needs_supervisor | default 0`; restart; hard-refresh
+tills. Rollback: `git checkout aa3376b6`, build, migrate, restart.
+
+## 84. Returns and exchanges: 15-day window enforced on the server, 3-month credit expiry, scan-to-return, credit on after a return (2026-11-04, `35677c5e` on `develop-swan`, NOT on `stable`)
+
+**Status (2026-11-04).** Committed as `35677c5e`. Owner hand-tested "credit on
+after a return"; the rest (15-day window, Return Valid Until, credit expiry,
+receipt barcode, Returns screen) is still being tested -- do not promote to
+`stable` until the owner confirms.
+
+**Found on staging before building.** With Enable Return Validity on and 15
+days, a return against a 90-day-old invoice (ACC-SINV-2026-00001, 5 Aug) was
+accepted: `_validate_return_window` read the original's
+`posa_return_valid_upto`, which is empty on every one of the 114 staging
+sales, and skipped when empty. That date came from the browser (a date
+picker on Payments, shown empty because it got YYYY-MM-DD with a dd-MM-yyyy
+format) and the server kept any value sent. Submitting an existing draft
+never re-ran the check. "Return without Invoice" off only hid the button.
+No credit expiry existed anywhere. After a return the customer reset to
+the profile default ("Test Pos" has none), and "Use Customer Balance" had
+to be switched on by hand. Enter in the Returns Invoice ID box did nothing
+(`search_invoices_by_enter` was never bound).
+
+**Return window** (`invoice_processing/utils.py`): deadline = original
+`posting_date` + days (`get_return_deadline`), checked against today's
+server date (a back-dated return can't reopen it), message "This invoice is
+older than 15 days and cannot be returned." Day 15 after the sale is the
+last allowed day. Days are ignored when Enable is off; Enable with 0 days
+= same day only (unchanged). Run in `update_invoice` and again in
+`submit_invoice`. `_set_return_valid_upto` always overwrites the sale's
+date (cleared when off). `returns.py` flags expired invoices with the same
+rule, so the Returns screen stops before loading one. New
+`_guard_return_without_invoice` refuses an unlinked return when the profile
+has it off. Payments shows "Return/Exchange valid until: <date>" as text.
+
+**Credit expiry** (`payments.py`): `CUSTOMER_CREDIT_VALIDITY_MONTHS = 3`;
+invoice credit (credit notes and credit change on a sale) past
+`posting_date + 3 months` is left out of `get_available_credit`; the last
+day still works. `include_expired=1` returns `{credit, expired}`; Payments
+uses it to show "Store credit of X OMR has expired (expired on D) and can't
+be used. Store credit is valid for 3 months." Advances (Payment Entries,
+M-Pesa) don't expire. New `_validate_customer_credit_sources` in
+`submit_invoice`: every "Invoice" row redeemed must be one of the
+customer's unexpired rows and not more than its balance, and needs
+`customer_credit_redemption_requested` (before, `redeeming_customer_credit`
+booked a JE against any credit-note name sent, and leaving the flag off
+skipped all-or-nothing). Expired credit stays in the GL as a liability; no
+write-off is made.
+
+**Scan to return.** `print_barcode.py`: Code 128 as inline SVG, Jinja
+methods `code128_svg` and `invoice_scan_code` (hooks `jinja`). Only the
+number part is encoded ("2026-00210"): the full name is 264 modules and did
+not decode at 171-180 dpi (Epson TM-T88V, 95% QZ scale); 165 modules
+decoded at 171, 180 and 203 dpi (zxing on Chromium renders). Returns
+focuses Invoice ID on open; Enter searches; a single result whose name is,
+or ends with "-" + the typed value, is loaded at once. Print format "Swan
+Sales Invoice" (DB only, CRLF lines) got, after the Reference line, on
+sales only: the barcode and "Return/Exchange valid until: <date>" (+ Arabic).
+Backup: `sites/staging.local/private/backups/print_format_swan_sales_invoice_before_exchange_20261103.json`.
+
+**Credit on after a return.** A return with no money moved arms
+`customersStore.armExchangeCredit(customer)` and re-selects that customer
+(after a tick, so the cart clear's reset comes first); the next Payments
+open for that customer switches "Use Customer Balance" on once
+(`takeExchangeCredit`). Selecting another customer clears it. Online only.
+
+**Live on staging** (headless Chromium, throwaway cashier, disabled after,
+not deleted: it is `posa_cashier` on the two invoices): old invoice ->
+message; ACC-SINV-2026-00165 by Enter -> loaded, return ACC-SINV-2026-00209
+(-10.000); new sale opened for "test disc", credit 90.820 applied, Visa
+48.480; ACC-SINV-2026-00210 receipt: "Exchange Value -90.820", barcode,
+valid until 18-11-2026; six JEs 90.820 total; Exchanges Today 90.82.
+
+**Checks.** vitest 264/264 files, 1581/1581; vue-tsc clean; `bench build`
+exit 0; migrate exit 0 (no doctype/fixture file changed; print format
+survived). Backend: test_payments 12/12, test_print_barcode 4/4,
+invoice_processing.test_utils 12/12, test_payment 4/4, test_creation 85 run
+with the same 8 pre-existing errors, test_same_shift_exchange 5/5,
+test_pos_closing_shift 10/10, test_customer_credit_invoice_fields 2/2,
+test_return_generic_customer_credit_guard 8/8, test_z_report 3/3,
+test_offline_sync_invoices 4/4, test_stored_value 2/2, test_gift_cards
+14/14, test_m_pesa_security 15/15, test_api_imports 4/4;
+test_submitted_invoice_shift_security fails identically before and after
+(stub lacks `add_days`). New tests fail on the old code.
+
+**Open.** 63 of 114 staging sales are to a shared customer; their returns
+must use Return without Invoice, which has no original and so no 15-day
+check. `get_available_credit` and `get_invoice_for_return` have no POS
+Profile access check (pre-existing). Desk "Create > Return" skips the POS
+checks and copies the payments as a full refund.
+
+## 85. Wrong customer on a sale: duplicate-name investigation; Edit Invoice typing fix and searchable Customer picker (2026-11-04, `8ea09e60` on `develop-swan`, NOT on `stable`)
+
+**Incident.** A cashier could not create a customer whose name already
+existed (different mobile), so she picked the existing customer -- another
+person -- and the sale (and any later credit note) went to the wrong account.
+
+**Found (staging, read-only, changes rolled back).**
+- ERPNext 16 does *not* block duplicate names under Customer Naming By =
+  Customer Name: it renames the new one "Name - 1". POS Awesome blocks
+  them itself (`customers._find_duplicate_customer_records`) unless the
+  POS Profile has **Allow Duplicate Customer Names**
+  (`posa_allow_duplicate_customer_names`). The block shows a browser
+  confirm "An existing customer matches these details: X. Select it
+  instead?" -- OK silently selects the *existing* customer. Mobile, email
+  and tax ID still block with the setting on. Mobile is optional.
+- Naming Series (Option A) tested in-process: duplicate names get
+  `CUST-YYYY-#####` IDs; search by mobile, credit, returns, loyalty,
+  receipt, Z Report and the rewards portal (keyed by
+  `source_customer_id`, matched by mobile + portal code) all work. Only
+  offline customer creation assumes ID == name (`UpdateCustomer.vue`
+  placeholder name; `offline/customers.ts` rewrites queued invoices whose
+  customer equals that name, and invoice sync continues even if the
+  customer failed to sync). Not changed.
+- Data Import runs with `flags.in_import`, so a same-name row fails with
+  DuplicateEntryError instead of getting "- 1"; never import with
+  "Update Existing Records" keyed by name; dedupe by mobile (last 8 digits).
+- Owner then ticked Allow Duplicate Customer Names on staging "Test Pos".
+
+**Fixing a wrong customer on a submitted invoice.** Desk Cancel -> Amend
+fails with "POSA Client Request ID must be unique": the field has
+`no_copy: 1`, but Frappe's Desk `copy_doc(doc, from_amend)` copies no_copy
+fields on amend by design (`create_new.js`). Not changed; the POS route is
+Invoice Management -> pencil (Edit Invoice), which cancels and re-submits
+with a new request ID. It is refused once the shift is closed (the POS
+Closing Shift link blocks the cancel -- confirmed live), after 24 hours,
+for returns and for credit/gift-card payments. The corrected invoice goes
+into the *editor's* open shift (`trusted_invoice_shift_reassignment`).
+
+**`8ea09e60`.**
+- Edit Invoice boxes could not be typed into with a mouse:
+  `handleEditModalClick` called `setEditKeyboardTarget` without
+  `focusRoot: false`, so every click moved focus back to the dialog card
+  (upstream 15.33.0). Click-then-Enter was the only workaround.
+- Customer is a v-autocomplete (name or mobile; result shows name, mobile,
+  ID if different; saves the ID; picked customer's mobile shown as a hint;
+  matches first; current name selected on focus). While the list is open,
+  Enter/arrows/Escape go to the list, not the dialog's capture-phase
+  navigation. `customersStore.lookupCustomers()` is a read-only search
+  that leaves the main customer box's results alone.
+- Server `_validate_corrected_customer`: a changed customer must exist,
+  be enabled and be in the profile's customer groups (an unknown name
+  used to crash with a TypeError, an empty one passed). The dialog shows
+  the server's message.
+- Live (headless Chromium, throwaway cashier): click-and-type works;
+  mobile 93876228 -> "sanju" picked with Enter; 00215 -> 00215-2 on sanju;
+  stock, GL, loyalty (139 points moved), Z Report (counted once), rewards
+  sync all correct.
+
+## 86. Edit Invoice for POS supervisors only (2026-11-04, `22e37d32` on `develop-swan`, NOT on `stable`)
+
+- Load/preview/submit need a **POS Awesome Supervisor**: the signed-in
+  user or the till's active cashier switched in by PIN (same rule as the
+  closing variance and the below-cost override). Otherwise
+  PermissionError "Only a POS supervisor can edit a submitted invoice.
+  Switch the till to a POS supervisor with their PIN, or sign in as one,
+  then try again." Checked inside the locked submit step, before the
+  cancel, after the existing rules. Managers without the role are refused.
+- New Custom Field **Edit Authorized By** (`posa_edit_authorized_by`,
+  Link User, read-only, no_copy, shown only when set) on Sales Invoice and
+  POS Invoice after `posa_client_request_id` (top customer section);
+  hand-added to `custom_field.json` and the hooks fixture list. Needs
+  migrate (staging: twice, second run no change, 357 Custom Fields).
+- POS: grey pencil with the message as tooltip when only a supervisor is
+  missing; a click re-asks the server. A refused click shows the message
+  twice (toast + Frappe's own box) -- cosmetic, left.
+- The till stays switched to the supervisor after an edit until someone
+  switches back; a one-time "supervisor PIN for this edit" prompt does not
+  exist (about a day of work).
+- Role holders on staging: Administrator, Aziz (somratsam2@gmail.com),
+  posa-e2e-credit-gap@test.invalid, posa-exch-test@test.invalid (disabled).
+- Live: cashier -> grey pencil, load/preview/submit API all 403 with the
+  message; till switched by PIN to a throwaway supervisor -> 00216 ->
+  00216-1, `posa_edit_authorized_by` = that supervisor.
+
+**Checks** (each commit's tree tested before committing, in a scratch
+worktree; staged tree hash identical to the tested one):
+`35677c5e` vitest 264/264 files, 1581/1581; `8ea09e60` 266/266, 1599/1599;
+`22e37d32` 267/267, 1605/1605. Backend: test_print_barcode 4/4,
+test_payments 12/12, invoice_processing.test_utils 12/12,
+invoice_processing.test_creation 85 run with the same 8 pre-existing
+errors, test_submitted_invoice_edit_customer 9/9 (also run against the
+`8ea09e60` module), test_submitted_invoice_edit_supervisor 13/13,
+test_pos_access 12/12, test_employees 21/21, test_terminal_state 5/5;
+test_submitted_invoice_shift_security fails as before (stub lacks
+`add_days`). `bench build` exit 0; migrate twice exit 0.
+
+**Stable.** `upstream/stable` = `3c4fc998` (has everything up to
+`e4e1c0fc`). On a detached copy of stable each of these applies cleanly
+and passes vitest: (1) alone 264/1581, (3) alone 265/1580, (2)+(3)
+267/1598, all three 267/1605 (code identical to `develop-swan`). (3) does
+not call anything from (2), but promote (2) with (3): without (2)
+supervisors can't type in the Edit dialog. Order: `35677c5e` (when
+confirmed), `8ea09e60`, `22e37d32`.
+
+**Open (not fixed).**
+- Cancelling an invoice paid with customer credit leaves its credit
+  Journal Entries submitted when Accounts Settings "Unlink Payment on
+  Cancellation of Invoice" is on (staging: on): ERPNext unlinks them
+  before `cancel_posawesome_credit_journal_entries` runs. Check production
+  and fix separately.
+- Staging System Settings Currency/Float Precision are 2 again (last
+  Version, 2026-10-29, set 3; no Version for the change back). Set to 3
+  before testing money on staging.
+- `FrappeTestCase` modules crash on staging ("Standard Buying" Price
+  List); new backend tests use `unittest.TestCase`.
+- The rewards sync never removes cancelled invoices from the portal.
+- `search_customers` takes customer groups from the client's profile JSON
+  (pre-existing).
+- Staging test data: ACC-SINV-2026-00213-2 and -00214 are the owner's;
+  throwaway invoices 00213/00215/00216 chains and shifts
+  POSA-OS-26-0000048/49 cancelled; posa-tmp-editprobe@ and
+  posa-tmp-editsuper@test.invalid disabled (linked from cancelled docs, so
+  not deleted).
+
+## 87. Store credit bigger than the sale: used up to the sale, the rest stays on the same credit note with a BALANCE voucher; change only from cash (2026-11-09, `60dc14d3` on `develop-swan`, `e2f9d460` on `stable`)
+
+**Business rule (approved).** No block when the credit is worth more than
+the sale: the customer buys the cheaper item and keeps the rest as credit.
+Applies to every credit note however it was issued (same-shift exchange,
+voucher, supervisor lost-voucher route). Store policy: no refunds.
+
+**What happens.**
+- Credit covers the sale up to what it still needs after loyalty points and
+  gift cards. The soonest-expiring credit is used first (advances last), so
+  only the one that expires last is used in part. The rest stays on the
+  **same credit note**: same voucher code (the code is an HMAC of the invoice
+  name, so it can't change), same expiry (3 months from the return; using
+  part of it does not restart the clock). No minimum remainder. The cashier
+  can't type the credit down.
+- A return of a sale paid partly by credit (case 2) already gave the whole
+  value back as one new credit note with a fresh 3-month expiry (kept, by
+  decision) -- verified on staging (89.600 = 73.000 credit + 16.600 Visa).
+- Mechanics: the existing credit Journal Entry simply carries the part
+  amount; the credit note's outstanding goes e.g. -50 -> -5. No new
+  documents or accounts. Z Report needs no change: Credit Redeemed is the
+  part used, Left as Store Credit the rest (staging: 139.300 issued, 73.000
+  redeemed, 66.300 left, takings 0).
+
+**Payments.** Blue message on top and a blue line under the voucher box
+("Credit X · Sale Y · Credit note for Z"; one message when a voucher is
+scanned, not green then another). On every submit key a confirmation
+`CreditRemainderDialog.vue` "Issue a credit note for Z and submit?":
+cross / Escape close it and stay on Payments, **Add more items** (focused, so
+Enter never submits) goes back to the cart, **Issue credit note and submit**
+is the only thing that submits. No option spends the whole credit.
+
+**BALANCE voucher.** After such a sale the credit note's voucher always
+prints (after the receipt when one prints, also on plain Submit and on the
+Exchange route): the normal voucher template with barcode and code, a
+"BALANCE · رصيد" banner and "Used X on sale Y. Remaining Z." (print setting
+`balance_for` = the sale; Jinja method `credit_voucher_balance_use` reads the
+redemption JE). Recorded first as a Comment with the PIN cashier
+(`record_credit_note_reprint(..., balance_for=)`); a later reprint is a
+normal DUPLICATE showing what is left. Voucher text now "Any amount not used
+stays on this voucher". The "Swan Sales Invoice" DB record is unchanged: the
+credit note goes through its existing voucher switch.
+
+**Bug found in the user's hand test, fixed before commit.** After an
+exchange, "Use Customer Balance" was switched on only the first time
+Payments opened (`takeExchangeCredit` used it up) and Payments is rebuilt on
+every opening, so Cancel Payment / back to the cart / "Add more items" and
+reopening lost the credit and the sale went through as a normal sale
+(staging 00326/00327: 48.600 left untouched, 27.500 paid by Visa).
+`customersStore.isCreditOn/setCreditOn` now keep it on for the customer's
+sale until switched off, the customer changes or the sale is submitted
+(also when the cashier switched it on by hand). A page reload mid-exchange
+still forgets it: the cashier switches it on (same-shift credit needs no
+voucher). Reproduced and re-tested in headless Chromium (staging 00328-00335).
+
+**Change only from cash (server, `_validate_change_only_from_cash`, on the
+saved draft).** Real gap before, verified on staging (rolled back): gift
+card 141.750 + credit 139.300 on a 141.750 sale was accepted with a 139.300
+payout; credit 139.300 with no cash and 50.000 change was paid out. Now:
+credit can't exceed what the sale still needs, change paid can't exceed the
+cash taken nor the overpayment, an overpayment must be covered by cash.
+Gift card was also counted twice in
+`_correct_outstanding_amount_for_pending_credit_change` -- fixed.
+
+**is_pos guard.** A return refunding no money is booked with `is_pos` 0 on
+the server too (`_mark_no_money_return_off_pos`); with `is_pos` 1 ERPNext
+posts the credit against the original sale while the return keeps its own
+negative outstanding, so `get_available_credit` listed it twice (seen in a
+rolled-back simulation; no real staging return affected).
+
+**Rounding.** POS and server add each credit note's balance rounded to the
+currency (no longer raw-sum-then-round), so the two always agree.
+
+**Staging System Settings (found, restored).** `bench run-tests` runs
+ERPNext's test bootstrap (`erpnext/tests/utils.py` `update_system_settings`),
+which saves System Settings with precision 2 and time zone Asia/Kolkata --
+why staging kept losing precision 3 after section 78. A direct
+`tabSingles` update is not enough (`doc.precision()` reads `tabDefaultValue`).
+Restored Asia/Muscat, 3/3; see CLAUDE.md.
+
+**Checks.** vitest 279/279 files, 1738/1738 (Node 24). Backend in isolation:
+test_credit_voucher 51/51, invoice_processing.test_creation 113 run with the
+same 8 pre-existing errors (identical names to the unchanged code),
+invoice_processing.test_payment 4/4, invoice_processing.test_utils 12/12,
+test_payments 12/12, test_offline_sync_invoices 4/4,
+test_return_generic_customer_credit_guard 8/8, test_stored_value 2/2,
+test_sales_breakdown 6/6, test_z_report 3/3; test_invoices,
+test_invoice_cancel_hooks, test_submitted_invoice_shift_security and
+test_pos_invoice_submission_ledger fail identically on the unchanged code.
+`bench build` exit 0; migrate twice exit 0 (no field). Staging end-to-end
+(rolled back) for part use, refusals, legit cash change, is_pos guard and
+the BALANCE print; user's hand tests all passed.
+
+**Cleanup note.** Disabling the throwaway cashier
+`posa-tmp-editprobe@test.invalid` also deleted all its 13 unsubmitted drafts
+(00273-00336 range), 11 of them left from earlier sessions; drafts only.
+
+**Production deploy** (site `site1.local`; from `08664307` to `e2f9d460`).
+No new field, no fixture, no print format record change. `hooks.py` has a
+new Jinja method: the cache must be cleared (migrate does it; `clear-cache`
+is enough). Rollback: `git checkout 08664307`, build, clear-cache, restart;
+part-used credit notes stay valid under the old code (used in full on a sale
+of at least what is left).
+
+## 88. Bank offer rates in the discount reason prompt (2026-11-09, `d0a0d97d` on `develop-swan`, `6d96c985` on `stable`)
+
+**Request.** Staff type the Disc % first, then pick the reason, and mix up
+which bank goes with which rate. Reminder only: nothing fills in or changes a
+discount; the receipt and Z Report don't read the rate.
+
+**Built.**
+- POS Discount Reason **Offer %** (`offer_percentage`, Percent, after
+  `enabled`, in list view). Percent columns are NOT NULL in Frappe, so
+  "blank" is stored as 0 = no fixed rate. Validated 0-100; "Not recorded"
+  always 0. Sent to the till with the reason list (boot data,
+  `get_cashier_discount_reasons`), so offline tills use the list cached at
+  shift opening.
+- Patch `set_pos_discount_reason_offer_rates`: NBO Sadara 20, NBO Infinite /
+  Platinum 20, OAB Elite / Infinite 20, OAB Credit Card 10, Bank Dhofar Al
+  Riadah 20, Bank Muscat Private Banking 20, Bank Muscat Asalah 15, Bank
+  Muscat Al Jawhar 10, Bank Muscat Oman Air Platinum 10. Fills only a blank
+  rate on a reason with exactly that name (a manager's rate is kept, a
+  renamed/missing reason skipped), `update_modified=False`.
+- Cart: ⓘ next to the Disc % title (`DiscountOfferRates.vue`, only where the
+  store asks for reasons, not on returns): read-only list "NBO Sadara · 20%"
+  plus "No fixed rate: ...". It sits in the header cell's end padding: the
+  column is 80-108px and inside the content box it clipped "Disc %"
+  (measured in headless Chromium). Vuetify's hidden hover sort arrow is
+  rendered only while sorted by Disc % to make room; the button stops click
+  and Enter/Space so they don't sort.
+- Reason prompt: a rate chip on each reason; reasons matching the line's
+  Disc % first, with a green ✓ chip. Picking (or Enter on) a reason whose
+  rate differs shows an orange line "NBO Sadara is usually 20%; this line
+  has 15%." with **Change %** (focused) and **Keep**. Keep records the
+  reason with the % as typed. Change % records nothing and goes back to the
+  line's Disc % editor; the pick is kept client-side (`_discount_reason_hint`,
+  not in the payload allowlist) and preselected when the prompt reopens. On
+  the Pay check, Change % = back to the cart. "Also use for N other lines"
+  checks those lines' % too.
+
+**Checks.** vitest 280/280 files, 1759/1759 (Node 24); new
+`discountOfferRates.spec.ts` mutation-checked (warning gate, header key stop,
+other-lines check). Backend in isolation: test_discount_reasons 34/34,
+test_shifts 8/8, test_offline_sync_invoices 4/4, test_print_assets 4/4,
+test_z_report_line_discounts 2/2, test_z_report 3/3. `bench build` exit 0;
+migrate twice exit 0 (patch logged once, nothing changed on the second run).
+System Settings verified 3/3, Asia/Muscat afterwards. Live (headless Chromium,
+throwaway cashier deleted afterwards, no invoice or draft created): header at
+1100-1920px, rates list, chips/order for 15% and 20%, Change % -> editor ->
+20 -> NBO Sadara preselected -> Enter, Keep at 390px. The cart table's
+horizontal overflow at <=1440px (113px at 1100) is the same with and without
+the ⓘ -- pre-existing, not touched.
+
+**Hand tests.** All of the user's hand tests on staging passed.
+
+**Production deploy** (site `site1.local`; from `e2f9d460` to `6d96c985`).
+Backup; pull `stable`; `bench --site site1.local migrate` once (adds Offer %
+and runs `set_pos_discount_reason_offer_rates`, which fills the nine rates);
+`bench build --app posawesome`; `bench restart`. Check the Offer % column in
+the POS Discount Reason list: a reason renamed on production is skipped by
+the patch and gets its rate by hand in Desk. Tills see the rates on their next
+online page load. No fixture, no print format, no receipt change.
+Rollback: `git checkout e2f9d460`, build, restart; the extra column stays and
+is ignored by the old code.
+
+## 89. Discount reason prompt in two steps: select, then Confirm (2026-11-10, `7262f2f7` on `develop-swan`, `c36be0f1` on `stable`)
+
+**Request.** A single tap recorded a reason at once, so a mis-tap went
+straight onto the line. Also, the green ✓ on a matching rate chip looked like
+a selection.
+
+**Built** (`DiscountReasonDialog.vue` only; no backend, doctype, patch or
+fixture change).
+- A tap only **selects**. The selected reason gets flat primary, a ring, bold
+  text and a ✓ in front of its name. Only that one reason has the ✓, never a
+  rate match. Another tap changes the selection, and nothing is recorded
+  until **Confirm**.
+- Confirm reads "Confirm: Bank Muscat Asalah · 15%" (or "Confirm: Staff"
+  with no rate). It wraps instead of clipping and is disabled with nothing
+  selected.
+- Rate match = green chip only (✓ removed from the chip). When some reasons
+  match the typed Disc %, the others are dimmed (opacity 0.55, still
+  tappable, never dimmed while selected). Nothing is dimmed when no reason
+  matches.
+- The orange "X is usually 20%; this line has 15%" line (Change % / Keep)
+  now shows **as soon as** an off-rate reason is selected, including a
+  preselected one and right after ticking "Also use for N other lines".
+  Confirm stays disabled while it shows. `warningFor` state removed: the
+  warning comes from the selection.
+- Keyboard: Enter on a reason that isn't selected selects it, and a second
+  Enter confirms. Enter on a warning/footer button presses that button.
+  Enter elsewhere confirms the selection (nothing happens with none
+  selected).
+- Result contract unchanged: `{ reason, applyToOthers }`, so the cart, Pay
+  check and server need no change.
+
+**Checks.** vitest 280/280 files, 1765/1765 (Node 24). Backend in isolation:
+test_discount_reasons 34/34, test_invoice_reporting_fields 35/35. System
+Settings verified 3/3, Asia/Muscat afterwards (`doc.precision("grand_total")
+== 3`). `bench build --app posawesome` exit 0. No migrate needed (nothing
+doctype/fixture/print-format-shaped touched). Security: reason names and
+the Confirm label are rendered with `{{ }}` text interpolation, no
+`v-html`. Enter selection looks the name up in the loaded reason list.
+The server still checks the reason exists (`sanitize_discount_reason_payload`,
+`frappe.db.exists`). No new whitelisted method.
+
+**Hand tests.** All of the user's hand tests on staging passed.
+
+**Production deploy** (site `site1.local`; from `6d96c985` to `c36be0f1`).
+Pull `stable`; `bench build --app posawesome`; `bench restart`. No migrate:
+the diff is the one .vue file plus two spec files. Tills get the new prompt
+on their next online page load.
+Rollback: `git checkout 6d96c985`, build, restart.
+
+## 90. Sales by Cashier (2026-11-10, `cc338683` on `develop-swan`, `d03403d7` on `stable`)
+
+**Request.** An in-POS report like the old Cegid "Total tax incl. sales by
+Saleperson": one bar per cashier with its value, store and period at the top,
+two periods to compare. Every PIN-unlocked cashier of the store sees the full
+report for their own store; never another store; no role check.
+
+**Built.**
+- Menu item **Sales by Cashier** ("Each cashier's sales for a period"), right
+  under Z Report History, shown only when the POS Profile switch is on.
+- Dialog `components/pos/reports/SalesByCashierDialog.vue` (+ `SalesByCashierBars.vue`,
+  `SalesByCashierChange.vue`, `utils/salesByCashierPeriods.ts`): presets Today /
+  Yesterday / This week (week starts on System Settings' first day) / This
+  month (default) / Last month / Custom; compare with Previous period (same
+  days one step back: 1-10 Nov -> 1-10 Oct) / Same period last year / Custom.
+  Flat CSS bars of Net with the value on each bar, Others and Cashier not
+  recorded last in grey; table Gross / Returns / Net / Sales / Avg basket
+  (Gross / Sales); store total line "Store total X = shown cashiers Y +
+  Others Z (+ Cashier not recorded)". Phone (<600px): full screen, cards
+  instead of the table. Closes itself when the till locks or another PIN
+  unlocks it. Never touches the cart.
+- API `posawesome.posawesome.api.sales_by_cashier.get_sales_by_cashier` (POST
+  only). Checks in order: `get_authorized_pos_profile` -> switch on ->
+  `get_active_terminal_cashier` (unlocked, PIN cashier assigned and enabled)
+  -> periods (From <= To, at most 366 days). Refusals come back as
+  `{allowed: false, reason}` (popup message dropped) so the till shows them in
+  the dialog. Counts submitted Sales Invoices of the profile **with a shift**
+  (`posa_pos_opening_shift`), by posting date, `base_grand_total` like the Z
+  Report. Only cashiers on the POS Profile User list and not ticked hidden get
+  a bar; hidden, former staff, deleted and test users -> Others (or, with
+  "Hide", no row); blank cashier -> Cashier not recorded. Store total always
+  includes everyone. No user ids in the response. Each opening is logged in
+  Activity Log ("Sales by Cashier opened at <store> by <PIN cashier>",
+  content "Till login: <session user>"), and at least once per 30 minutes of
+  use even if a client never says "opened".
+- Custom Fields (hand-added to `custom_field.json` + `hooks.py`):
+  `POS Profile-posa_enable_sales_by_cashier` (Check, 0, after
+  `posa_allow_credit_change_on_sales`, section Sales and Return Controls),
+  `POS Profile-posa_sales_by_cashier_hidden` (Select Group into Others / Hide,
+  default Group into Others, shown when the switch is on),
+  `POS Profile User-posa_hide_in_sales_by_cashier` (Check, 0, grid column).
+- **Arabic, for review:** `posawesome/translations/ar.csv` lines 1833-1874 are
+  draft translations (not reviewed by a native speaker). Not added because
+  core Frappe/ERPNext already translate them: From, To, New, Yesterday, This
+  month, Others. Existing rows touched by this screen that read badly:
+  "Hide" = "يخفي", "Cashier" = "أمين الصندوق" (staff say كاشير).
+
+**Checks.** vitest 284/284 files, 1790/1790 (Node 24); new specs
+mutation-checked (Navbar forwarding). Backend in isolation:
+test_sales_by_cashier 20/20 (mutation-checked: shift filter, hide tick),
+test_terminal_state 5/5, test_employees 21/21, test_dashboard_access 4/4,
+test_invoice_reporting_fields 35/35, test_discount_reasons 34/34,
+test_z_report 3/3, test_z_report_layout 6/6. System Settings 3/3,
+Asia/Muscat, `doc.precision("grand_total") == 3` afterwards. `bench build`
+exit 0 (vue-tsc, vite, Chrome 109 CSS audit). Migrate twice exit 0, field
+positions identical after the second run. Live (headless Chromium, throwaway
+cashier with no POS role, deleted afterwards, no invoice created): 1920,
+1280, 1024, 768, 390px single and compare, no horizontal overflow, cart
+unchanged after every close, dialog closed on lock; figures equal an
+independent SQL sum (Test Pos 1-10 Nov: 2,373.095); Administrator ticked
+hidden -> into Others, total unchanged; Hide mode; injected cashier list
+ignored; other store refused for a PIN cashier not assigned there. 14
+Activity Log rows from the live test were kept.
+
+**v2 design (2026-11-10, same commit): full-screen view.**
+Built from the approved mock-up (`/home/aziz/mockups/sales-by-cashier/index.html`,
+outside the repo). Frontend only: server code byte-identical to v1, no new
+field, no new library, no migrate.
+- `SalesByCashierDialog.vue` is now a full-screen `v-dialog` with
+  "← Back to till". Till (>=1280px): header with presets, range pill and
+  compare switch; four tiles (Net sales, Sales, Avg basket (before returns),
+  Returns); ranked bars; side panel (store summary or the tapped cashier).
+  Tablet (600-1279px): no side panel, compare switch in the controls row,
+  detail in a bottom sheet. Phone (<600px): chips open a period sheet
+  (presets, one-month calendar, compare switch, Period 1/2 tabs).
+- `SalesByCashierBars.vue`: initials avatar, Net value at the bar end, share
+  %; leader marked; Others / Cashier not recorded striped grey under a
+  dashed line. Compare = bullet bars: Period 1 bar, Period 2 marker, values
+  in their own column ("P2 ..."), change badge. Bars grow from zero on open
+  (55ms stagger), morph on reload, rows slide to their new rank
+  (TransitionGroup). Reduced motion (system setting) -> drawn at once, no
+  transitions.
+- `SalesByCashierCalendar.vue`: two-month range calendar (one on phone),
+  dd-mm-yyyy readouts whatever the browser language, first tap / last tap
+  with hover preview, days after today disabled, more than 366 days refused
+  with "Choose a period of one year or less.", weeks start on System
+  Settings' first day.
+- `SalesByCashierDetail.vue` (side panel and sheet), `SalesByCashierChange.vue`
+  restyled as a pill. Esc / tap outside close a calendar or sheet before the
+  view (dialog persistent while one is open). Colours come from the app's
+  Vuetify light and dark themes.
+- Rules unchanged: Net on the bars, Avg basket = Gross / Sales, Others and
+  Cashier not recorded, reconciliation line, till sales only, auto-close on
+  lock or PIN switch, opening logged.
+- Arabic for review: `ar.csv` lines 1875-1932 (new strings, month names,
+  weekday abbreviations), same status as lines 1833-1874.
+- Checks: vitest 285/285 files, 1801/1801 (new calendar spec; dialog spec
+  rewritten; Esc/persistent and reduced-motion tests mutation-checked).
+  Backend: test_sales_by_cashier 20/20, test_terminal_state 5/5,
+  test_employees 21/21; System Settings 3 / Asia/Muscat afterwards. `bench
+  build` exit 0, Chrome 109 CSS audit passed. Migrate twice exit 0, fields
+  unchanged. Live (throwaway cashier with no POS role, deleted afterwards,
+  no invoice created): 1920, 1280, 1024, 768, 390px x dark/light x
+  single/compare, no horizontal overflow, cart unchanged after every close,
+  view closed on lock. Screenshots: `/home/aziz/screenshots/sales-by-cashier-v2/`.
+- Deploy for this part alone: build + restart. The feature as a whole (v1 +
+  v2) still needs one migrate for the three fields.
+
+**Hand tests.** All of the user's hand tests on staging passed (v1 and the
+full-screen design).
+
+**Production deploy** (not done; site `site1.local`; from `c36be0f1` to
+`d03403d7`). One migrate, for the three Custom Fields (no patch, no data
+change). Backup with files; maintenance mode on; read-only name check
+(`SELECT name FROM \`tabCustom Field\` WHERE fieldname IN
+('posa_enable_sales_by_cashier', 'posa_sales_by_cashier_hidden',
+'posa_hide_in_sales_by_cashier')` -> no rows); `git pull --ff-only upstream
+stable` in apps/posawesome; migrate; build with Node 24; clear-cache;
+`sudo supervisorctl restart all`; maintenance off. Then per store: tick "Hide
+in Sales by Cashier" for Administrator and the shared terminal login under
+Applicable for Users, leave "Hidden cashiers" on Group into Others, and turn
+on "Enable Sales by Cashier" when the store is ready (default off, so nothing
+shows before that). Rollback: `git checkout c36be0f1`, build, restart; the
+three fields stay and the old code ignores them.
+
+## 91. X Report (mid-shift): approved plan, ON HOLD (2026-11-11, plan only, nothing built)
+
+**Request.** A report of the current open shift's figures at any time,
+without closing it, so staff can check sales and the cash in the drawer
+mid-day. It must never change anything: no closing, no closing record, no
+counters, no print status. Figures must agree with the Z Report.
+
+**Status.** Approved, ON HOLD. No code written; build starts only when the
+user says so.
+
+### What the investigation found
+- `creation.build_closing_shift(opening)` returns an **unsaved** POS Closing
+  Shift (`frappe.new_doc`, its docstring: "No side effects") with
+  `pos_transactions`, `grand_total`, `net_total`, taxes and
+  `payment_reconciliation` (opening and expected per mode, cash net of
+  change, cash movements). It reads invoices with `submit_printed=0`.
+- Parity on staging (read-only, rolled back): the 12 latest closed shifts
+  rebuilt with `build_closing_shift` from their opening shift matched the
+  stored closing on grand total, net total, the invoice list and the expected
+  amount of every payment mode -- **12/12**; POS Closing Shift count 58 before
+  and after.
+- **Write paths to avoid**: `make_closing_shift_from_opening` and
+  `fetch_shift_invoices(..., submit_printed=1)` both call
+  `submit_printed_invoices`, which submits the shift's printed drafts. The X
+  Report must never call them. (`delete_draft_invoices` runs only on closing
+  submit.)
+- **Printed-drafts mismatch**: at closing, drafts with `posa_is_printed = 1`
+  are submitted first, so they are in the Z Report but not in an earlier X
+  Report. Unprinted drafts (held carts) never count (deleted at closing when
+  `posa_allow_delete` is on). Staging has drafts in several open shifts.
+- **Blind count**: POS Profile `hide_expected_amount` hides Expected Cash on
+  the closing screen, client-side only today (section 81; no store uses it).
+  The X Report must enforce it on the server.
+- `get_z_report_data(name)` needs a submitted closing; the "Z Report" print
+  format is bound to POS Closing Shift (`get_z_report_data(doc.name)` inside
+  the template), so the X paper can't use it. `printHtmlViaQz(html)`
+  (qzTray.ts) already prints ready HTML silently.
+- The till's own shift comes from `shifts.check_opening_shift`: the session
+  user's latest Open shift.
+
+### Decisions (user, 2026-11-11)
+- Every PIN-unlocked cashier assigned to the POS Profile may run it; **no role
+  check**.
+- **No Activity Log entry** (the report writes nothing at all).
+- Paper: a **thick border box** (not a solid black band), "X REPORT" and
+  "NOT A CLOSING REPORT" at **top and bottom**.
+- **Menu only** (under Z Report History); no button on the closing screen.
+- **v1** = the Z Report rows + printed-drafts warning + unsynced-sales
+  warning + opening float and expected cash.
+- **No new field, no migrate**; deploy = build + restart.
+
+### Where it lives
+Menu item **X Report**, subtitle "Current shift figures, without closing",
+right under Z Report History (above Sales by Cashier). Opens an on-screen
+receipt-style view (dialog; full screen on a phone) with **Refresh** and
+**Print**; it does not print by itself.
+
+### Server design and authorization
+New `posawesome/posawesome/api/x_report.py`, whitelisted
+`get_x_report(pos_profile)` (POST):
+1. `get_authorized_pos_profile(pos_profile)` -- this store only.
+2. `get_active_terminal_cashier(profile)` -- unlocked till, PIN cashier
+   assigned to the profile and enabled; locked -> refusal.
+3. Shift found **on the server**: the session user's latest POS Opening Shift
+   with docstatus 1, status Open, this POS Profile (same rule as
+   `check_opening_shift`). The client sends no shift name. None -> refusal
+   "no_shift".
+4. `closing = build_closing_shift(opening.as_dict())` -- never saved,
+   inserted or submitted.
+5. `data = build_shift_report_data(closing)` (below), plus: store name, shift
+   number, opening time (`period_start_date`), PIN cashier's full name,
+   printed-at (server time), printed drafts (count and amount: docstatus 0,
+   `posa_is_printed` 1, this shift -- read-only query).
+6. Blind count: when the profile has `hide_expected_amount`, the reply leaves
+   out Expected cash **and** the Cash line under payments (float + cash taken
+   would reveal it); the screen and paper print "Expected cash hidden (blind
+   count)".
+7. Returns the data and the rendered paper HTML
+   (`frappe.render_template("posawesome/templates/print/x_report.html", ...)`).
+   Expected refusals come back as `{allowed: false, reason}` like Sales by
+   Cashier (no Frappe popup). No Activity Log, no write of any kind.
+
+### Z Report refactor
+Split `z_report.get_z_report_data` into
+`build_shift_report_data(doc)` (all calculations, unchanged) and the existing
+`get_z_report_data(name)` (authorization + docstatus check + call). Z passes
+the stored submitted closing; X passes the in-memory one. Regression test:
+for every submitted closing on staging, the Z dataset after the refactor is
+**byte-identical** to before (JSON dump compare); the existing 31 Z Report
+tests still pass. The "Z Report" print format is **not** touched.
+
+### Paper template
+`posawesome/templates/print/x_report.html` (a file, not a Print Format
+record -- no migrate): same 76mm styles, section order and labels as the Z
+Report ("Today's Operations", "Today's Payments", "Customer Credit",
+"Takings", "Cash Balance", "Additional Information"), with no Closing #, no
+Actual Closing / Difference / Variance / Approved By. A parity test checks X
+has the same sections and figures as Z for the same shift.
+
+### Wireframes
+On screen:
+```
+┌────────────────────────────────────────────────────┐
+│ X Report                                        ✕  │
+│ ▌X REPORT · NOT A CLOSING REPORT · shift still open│  ← amber band
+│ Swan Galleria · Shift 0058                         │
+│ Opened 07-11-2026 21:11 · Cashier now: Aziz        │
+│ Figures at 11-11-2026 14:32                        │
+├────────────────────────────────────────────────────┤
+│ ⚠ 2 printed sales are still drafts (139.300 OMR).  │
+│   They will be counted at closing.                 │
+│ ⚠ 1 sale on this till is waiting to sync.          │
+│ TODAY'S OPERATIONS   (Z rows: Gross Sales, of which │
+│   exchanges, Returns, Net Sales, counts, items,     │
+│   Discounts Granted)                                │
+│ TODAY'S PAYMENTS     (cash net of change)           │
+│ CUSTOMER CREDIT      (Issued, Redeemed, Left)       │
+│ CASH IN DRAWER       Opening float / Expected now   │
+│ ADDITIONAL INFORMATION (VAT etc.)                   │
+├────────────────────────────────────────────────────┤
+│ [↻ Refresh]                          [🖨 Print]     │
+└────────────────────────────────────────────────────┘
+```
+Paper (76mm, thick border box per the decision):
+```
+╔══════════════════════════════╗
+║          X  REPORT           ║
+║  *** NOT A CLOSING REPORT ***║
+╚══════════════════════════════╝
+       Shift still open
+Store            Swan Galleria
+Shift            0058 (open)
+Opened           07-11-2026 21:11
+Cashier          Aziz
+Printed          11-11-2026 14:32
+- - - - - - - - - - - - - - - -
+TODAY'S OPERATIONS     (same rows as Z)
+TODAY'S PAYMENTS       (same rows, cash net of change)
+CUSTOMER CREDIT        (same rows)
+CASH IN DRAWER
+ Opening float           50.000
+ Expected now           662.400
+ADDITIONAL INFORMATION (VAT etc., same rows)
+- - - - - - - - - - - - - - - -
+Printed drafts not counted yet:
+ 2 sales            139.300 OMR
+Sales waiting to sync on this till: 1
+Figures so far. The Z Report at
+closing is the final record.
+╔══════════════════════════════╗
+║          X  REPORT           ║
+║  *** NOT A CLOSING REPORT ***║
+╚══════════════════════════════╝
+```
+The unsynced-sales count comes from the till's offline queue (an integer
+added to the printed HTML on the till, escaped); it is informational only.
+
+### Failure cases
+- Mismatch with the Z Report at closing: only from sales after the X was
+  printed, printed drafts (warned), unsynced offline sales (warned).
+- No open shift / shift closed meanwhile: "There is no open shift on this
+  till." -- nothing to print.
+- Till locked: server refusal "Unlock the till with your PIN to see this
+  report."; the view closes when the till locks.
+- Offline: "This report needs a connection to the server."
+- PIN switch: the view closes; reopening shows the new cashier.
+- QZ Tray unavailable: the existing browser-print fallback.
+
+### Test plan
+Backend: Z dataset byte-identical before/after the refactor on all submitted
+staging closings; X dataset from `build_closing_shift(opening)` equals the
+stored Z for closed shifts; **no INSERT/UPDATE/DELETE** during an X call
+(record every SQL statement), closing count, shift status, invoice docstatus
+and `posa_is_printed` unchanged; printed drafts counted in the warning, not
+the figures; access (other store, locked till, no PIN cashier, unassigned
+cashier, no open shift, client-sent shift name ignored); blind count leaves
+Expected cash and the Cash line out of the reply. Frontend: menu item and
+caller wiring (Navbar, Pos), sections and labels, warnings, Print calls
+`printHtmlViaQz` with the server HTML and falls back, Refresh, no-shift /
+locked / offline / error states, close on lock or PIN switch, cart untouched.
+Live: X Report on staging, then close that shift and compare with its Z
+Report line by line. Full 6-item regression check.
+
+### Ranked ideas (value vs effort)
+1. Z Report rows -- v1. 2. Printed-drafts warning -- v1. 3. Unsynced-sales
+warning -- v1. 4. Opening float and expected cash -- v1. 5. Cash paid in/out
+as its own line -- v1.1. 6. Held carts count ("not in these figures") --
+v1.1. 7. Discounts by discount reason -- v2. 8. Per-cashier split (link to
+Sales by Cashier) -- v2. 9. Sales by hour so far -- v2.
+
+**Deploy (when built).** Build + restart only; no migrate, no new field.
+
+## 92. Item Selling Price: Standard Selling price on the Item, for Stock Balance's Add Column (2026-11-11, `b24b7888` on `develop-swan`, `c4ca2cfa` on `stable`)
+
+**Request.** The selling price as a column in ERPNext's own Stock Balance,
+picked like the Sales Invoice report fields (sections 54/70): the Item
+carries its Standard Selling price and stays in sync whenever an Item Price
+is created, changed or deleted. Cost is not tracked; Valuation Rate is 0 on
+purpose. (A separate "Stock Balance with Price" report was proposed first,
+then put on hold in favour of this.)
+
+**Found first (live, staging; ERPNext 16.26).**
+- Stock Balance is a Script Report, so its column menu item is **Add Column**
+  (Report View calls it Pick Columns). It offers every value field of each
+  Link column's doctype -- Item via `item_code` -- including hidden ones, and
+  reads it with `frappe.desk.query_report.get_data_for_custom_field`
+  (`frappe.get_list`, Item read permission). Picked columns are not saved
+  unless the report is saved with Save As; with a picked column the report
+  runs live instead of as a prepared report.
+- One selling list, Standard Selling, on both POS Profiles: 1,420 prices, one
+  per item, all on variants and in the stock UOM, no customer/batch/end-date
+  prices. VAT 5% inclusive. 7 items hold stock with no price (test items).
+- **Item.standard_rate ("Standard Selling Rate") was rejected.** ERPNext's
+  `get_valuation_rate()` (stock_ledger.py) falls back to Item
+  `valuation_rate`, then `standard_rate`, then a buying price when the item
+  has no ledger entry yet in that warehouse (an entry with valuation 0 stops
+  the chain). Swan has perpetual inventory on. Rolled-back trial, item never
+  in `Stores - S`: a Material Receipt with no rate is refused today ("Valuation
+  Rate ... is required"); with `standard_rate` = 97.65 it was accepted and
+  posted Stock In Hand Dr 97.65 / Stock Adjustment Cr 97.65. Material
+  Transfers stayed at 0 either way. ERPNext also only uses the field when an
+  Item is created (it makes an Item Price).
+- Item Quick Edit (`item_quick_edit.py`) writes the retail price into
+  `standard_rate`, and Data Import can set it: staging item `43649930030014`
+  has 46.4 from the 05-08-2026 Item import. Separate change, later.
+- Frappe v16 Currency columns are `NOT NULL DEFAULT 0`: an item with no price
+  shows 0, not blank (the lowest real price is 10).
+
+**Built.**
+- Custom Field `Item-posa_selling_price` (Currency, "Selling Price",
+  read-only, no_copy, after `sales_uom` on the Sales tab; no insert_after
+  tie). Hand-added to `custom_field.json` + the hooks fixture list. Not in
+  Item Variant Settings, so variants never copy it; Desk's Duplicate skips it.
+- `api/item_selling_price.py`:
+  - `get_standard_selling_prices()`: the picking rule, now shared with
+    Upload Stock Check (its `_get_prices` calls it). Standard Selling, stock
+    UOM or blank, no customer/supplier/batch, valid today, newest Valid From.
+  - `refresh_items(codes=None)`: writes only changed values with
+    `frappe.db.set_value(..., update_modified=False)` -- no Item save, no
+    hooks, no Version, Item `modified` unchanged (POS caches and the rewards
+    sync see no catalog change). Never writes `standard_rate`.
+  - Item Price `after_insert` / `on_update` / `after_delete` ->
+    `on_item_price_change`: the price's item, plus the previous item when the
+    item code or price list was edited. Data Import and Item Quick Edit go
+    through these hooks.
+  - Cron `5 0 * * *` -> `daily_refresh()`: prices whose Valid From / Valid
+    Upto starts or ends a window, item renames, direct database writes.
+- Patch `backfill_item_selling_price`: creates the field from the fixture
+  (patches run before fixture sync), fills every Item, prints a summary and
+  the items that hold stock with no price. Idempotent.
+
+**Verified on staging.** Backfill: 1,420 items priced, 0 mismatches against
+Item Price, 7 stock items without a price (the test items above); Item
+`modified` and Version rows unchanged. Migrate twice, exit 0, field position
+and every Item's value and `modified` identical after the second run. Stock
+Balance via `query_report.run` with the custom column, as Administrator and
+as a store user: 1,421 rows, 1,417 priced, `45240197030024` 50 x 97.65.
+Headless Chromium: Add Column -> Item (Item Code) lists "Selling Price" (and
+ERPNext's "Standard Selling Rate", left as is); the column fills next to
+Balance Qty. The prepared report it generated was deleted.
+
+**Regression check.** Frontend 285/285 files, 1801/1801. Backend in isolation:
+`test_item_selling_price` 11/11 (mutation-checked: hook disabled -> 5 fail;
+`update_modified=False` removed -> 1 fail), `test_upload_stock_check` 20/20,
+`test_api_imports` 4/4, `test_item_quick_edit` 8/8,
+`test_offline_sync_item_prices` 4/4, `test_stock_transit` 39/39,
+`test_invoice_reporting_fields` 35/35, `test_discount_reasons` 34/34,
+`test_item_sale_controls` 30/30 and 10 more modules reading hooks/fixtures;
+`test_gift_card_invoice_fields` (1 failure), `test_invoice_cancel_hooks` (2
+errors), `test_workspace_gift_card` (2 failures) fail identically with these
+changes stashed -- pre-existing. System Settings 3 / Asia/Muscat,
+`doc.precision("grand_total") == 3` afterwards. `bench build` N/A (no
+frontend file). Security: no whitelisted method; ORM filters only; Item is
+readable by 8 roles while Item Price is readable only by Sales/Purchase Master
+Manager, so those roles now see selling prices -- accepted by the user.
+
+**Production deploy** (site `site1.local`; `stable` `d03403d7` -> `c4ca2cfa`).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -- if it is not
+   `d03403d7`, section 90's steps (build) are in this deploy too.
+2. `bench --site site1.local backup --with-files`
+3. Name check -- each must return no rows:
+   ```
+   bench --site site1.local mariadb -e "SELECT name FROM \`tabCustom Field\` WHERE name='Item-posa_selling_price' OR (dt='Item' AND fieldname='posa_selling_price'); SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='tabItem' AND column_name='posa_selling_price'; SELECT name FROM \`tabPatch Log\` WHERE patch LIKE '%backfill_item_selling_price%'; SELECT name FROM \`tabScheduled Job Type\` WHERE method LIKE '%item_selling_price%';"
+   ```
+4. Optional, for the summary: `SELECT COUNT(*) FROM \`tabItem Price\` WHERE price_list='Standard Selling';`
+5. `git pull --ff-only upstream stable`
+6. `bench --site site1.local migrate` -- read the patch's output:
+   `Item Selling Price backfill: <N> items checked, <M> with a Standard
+   Selling price, <K> updated.` (M close to the step 4 count), then
+   `<X> item(s) hold stock but have no price:` with up to 50 item codes if
+   any -- those show 0 until an Item Price is added.
+7. `sudo supervisorctl restart all` (hooks changed; no build for this commit).
+8. Check: `SELECT COUNT(*) FROM \`tabItem Price\` ip JOIN tabItem i ON
+   i.name=ip.item_code WHERE ip.price_list='Standard Selling' AND
+   ROUND(ip.price_list_rate,9)<>ROUND(i.posa_selling_price,9);` -> 0 (unless
+   an item has several Standard Selling prices with different dates);
+   `bench --site site1.local scheduler status` -> enabled (daily refresh).
+9. Stock Balance -> Add Column -> Item (Item Code) -> Selling Price; then
+   Save As for the fixed-columns saved report.
+Rollback: `git checkout d03403d7`, restart; the field stays (values freeze),
+the old code ignores it.
+
+## 93. Sales Invoice List / Report view: Posting Date range at the top, and submitted invoices only for staff (2026-11-11, `f2fe2a14` on `develop-swan`, `58255b8f` on `stable`)
+
+**Request.** (1) One From - To Posting Date range at the top of the Sales
+Invoice List and Report view (like the date search in POS Invoice
+Management); no default range. (2) Staff (Accounts User / Accounts Manager)
+see only submitted invoices there and in the export, whatever the filters;
+System Manager and Administrator still see drafts and cancelled invoices.
+A real lock, not a default filter. A "Submitted only" label for staff.
+
+**Found first (live, staging; Frappe v16 / ERPNext 16.26).**
+- List and Report view both read `frappe.listview_settings["Sales Invoice"]`;
+  `custom_filter_configs` adds fields to the top row (FilterArea
+  `make_standard_filters`, condition from `df.match_type || df.condition`).
+  Two top fields can't share a fieldname, so ERPNext's single-date
+  `posting_date` (in_standard_filter) had to go.
+- Frappe only pushes `=` / `like` / `descendants of` filters back into a top
+  field (`set_standard_filter`): a saved or linked Between range lands under
+  the Filter button, and a single date sent to a DateRange field is dropped
+  (`DateRange.parse`). `set_standard_filter` also overwrites the field's
+  `df.match_type`. Order: init (saved filters applied) -> setup_view
+  (`settings.onload`) -> before_refresh (route options: clear, then add).
+- `permission_query_conditions` is applied by both v16 query paths
+  (`model/db_query.py` and `database/query.py`), for every permission-checked
+  query on the doctype. A lock everywhere would break the POS:
+  `get_draft_invoices` (`invoices.py`) lists held drafts with
+  `frappe.get_list` as the terminal user, and the staging terminal user
+  `testserver@swan.com` holds Accounts User.
+- Desk's list traffic all goes through `frappe.desk.reportview.*` /
+  `frappe.desk.listview.*` (list, report, count, sidebar stats, group-by
+  counts, export, and the client `frappe.db.get_list` / `count`). The
+  background export (`export_in_background`) runs
+  `frappe.desk.reportview.run_report_view_export_job` in a worker with no
+  request, but `frappe.local.job.method` names it. `/api/v2/method/...`
+  does not set `form_dict.cmd`. The POS frontend uses none of these
+  endpoints for Sales Invoice; no ERPNext desk script does either.
+- Neither Accounts role has export permission on Sales Invoice on staging;
+  on production Accounts User does.
+- Production (checked by the user): locked users maxandcooman, swangalleria1,
+  ventiseioman, swangalleriaqcc plus test/demo accounts; exempt
+  Administrator, it.department, Swan.inventory (System Manager). Drafts and
+  cancelled invoices in the last 90 days all from the POS, except 1 desk
+  draft by maxdemo (demo).
+
+**Built.**
+- `api/sales_invoice_list.js`, registered with `doctype_list_js`, so it loads
+  after ERPNext's own list JS and extends its settings (ERPNext's onload
+  still runs first):
+  - Appends a `posting_date` DateRange top field, condition Between.
+  - `moveInitialFilters` (in onload): posting_date `Between` / `=` filters
+    already applied (saved view, saved report) move from under the Filter
+    button into the box; a single date becomes that day to that day.
+  - `wrapAdd`: wraps this list's `filter_area.add()` (both call forms) for
+    links and route options -- ranges/single dates go into the box, the rest
+    pass on with one refresh. Other conditions (>=, <, Timespan) stay under
+    the Filter button.
+  - `widen`: min-width 220px, or the To date is cut off at Frappe's
+    `col-md-2`.
+  - `addSubmittedOnlyLabel`: grey "Submitted only" pill beside the range for
+    users without System Manager (same rule as the server), hover note.
+- Property Setter `Sales Invoice-posting_date-in_standard_filter` = 0,
+  hand-added to `property_setter.json` + the hooks fixture list. Posting Date
+  stays a list column (Report view default columns), in the Filter button
+  and in sorting.
+- `api/sales_invoice_list_lock.py`, registered as Sales Invoice's
+  `permission_query_conditions`: returns ``tabSales Invoice`.`docstatus` = 1``
+  only when the user is not Administrator / System Manager AND the query
+  comes from `frappe.desk.reportview.*` / `frappe.desk.listview.*` (cmd, or
+  the `/method/` request path for v2) or the background export job.
+  Everything else -- POS, link-field search (`frappe.desk.search`), ERPNext
+  reports, `/api/resource`, `frappe.client.get_list` -- is untouched. It
+  locks what the list, report and export show; a draft or cancelled invoice
+  still opens by name.
+- If Frappe renames those endpoints the lock stops applying (fails open:
+  staff see drafts again, nothing breaks); `test_sales_invoice_list_lock`
+  asserts the names Frappe's own JS uses.
+
+**Verified on staging** (headless Chromium; staging 267 submitted incl. 72
+returns, 30 drafts, 9 cancelled). Throwaway Accounts User, with export
+turned on for Accounts User temporarily (`update_permission_property`, as
+on production) and reset afterwards (`reset_perms`, 0 Custom DocPerm as
+before):
+- Range: typed 01-10 Nov -> 152 = SQL with both ends (before the lock);
+  calendar clicks 2 and 9 Nov -> 146; reload keeps the range, 1 list
+  request; single-date link 05 Nov -> 05-05; range link 01-03 Nov -> 18;
+  `>=` stays under Filter; an old saved single date opens as that day.
+- Lock, staff: list 267 ("20 of 267"), range 01-10 Nov 129 (of 152),
+  reload 129, Clear Filters 267 with the label still there, links
+  `docstatus=0` and `status=Cancelled` -> 0, `is_return=1` -> 72, Saved
+  Filter "Status = Draft" from the Saved Filters button -> 0, sidebar status
+  counts without Draft/Cancelled, `frappe.db.count` 267, Report view 267.
+  Excel export all rows: 267 rows, database confirms all docstatus 1, 72
+  returns; range export 129, all submitted. Background export: staging has
+  no outgoing Email Account, so the job failed at `send_report_email` after
+  building the file; the same job body run as the staff user (email step
+  stubbed) gave 267 rows, all submitted. POS `get_draft_invoices` over HTTP
+  as the same user: 30 (unchanged). A cancelled invoice still opens.
+- Administrator: no label, 306, drafts link 30, cancelled 9; their Sales
+  Invoice user settings backed up and restored.
+- Layout: 1920 / 1400 / 1100 / 768px, List and Report: full range readable,
+  label beside it, no overlap, no sideways scroll; phone 390px (filters
+  behind Frappe's toggle): box and label visible, scrollWidth 390.
+
+**Regression check.** Frontend 286/286 files, 1812/1812
+(`salesInvoicePostingDateRange.spec.ts` 11 tests, runs the real JS against
+fakes; mutation-checked: single-date conversion removed -> 2 fail, `wrapAdd`
+off -> 2 fail, exemption removed -> 1 fail). Backend in isolation:
+`test_sales_invoice_list_lock` 9/9 (condition off -> 5 fail; desk-only
+scoping removed -> POS test fails), `test_sales_invoice_posting_date_range`
+4/4 (hook removed -> 2 fail), `test_payment_processing` 35/35,
+`test_payments` 12/12, `test_submitted_invoice_edit_customer` 9/9,
+`test_submitted_invoice_edit_supervisor` 13/13,
+`test_return_generic_customer_credit_guard` 8/8, `test_credit_voucher`
+51/51, `test_pos_access` 12/12, `test_shifts` 8/8,
+`test_offline_sync_invoices` 4/4, `test_invoice_reporting_fields` 35/35,
+`test_api_imports` 4/4, `test_closing_security` 11/11, `test_z_report` 3/3,
+`test_pos_closing_shift` 10/10, plus the hook/fixture modules from section
+92. Fail identically with these changes stashed (pre-existing, to fix next):
+`test_invoices` and `test_submitted_invoice_shift_security` (ImportError in
+their fake frappe), `test_credit_exchange` and
+`test_submitted_invoice_edits_credit_badge` (setup: duplicate "Standard
+Buying" Price List), `test_sales_by_cashier` (1 failure, 4.38 vs 4.375 at
+the bootstrap's precision 2), and `test_gift_card_invoice_fields`,
+`test_invoice_cancel_hooks`, `test_workspace_gift_card` (section 92).
+System Settings restored to 3 / 3 / Asia/Muscat, `precision("grand_total")`
+3. `bench build` exit 0. Migrate twice, exit 0, Sales Invoice Property
+Setters identical. Security: the condition is a fixed string; the request's
+method name is only compared with a fixed prefix; no whitelisted method; the
+label uses `.text()`.
+
+**Production deploy, combined with section 92** (site `site1.local`;
+`stable` `d03403d7` -> `c4ca2cfa` (Selling Price) -> `58255b8f` (this)).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `d03403d7`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name='Item-posa_selling_price' OR (dt='Item' AND fieldname='posa_selling_price');
+   SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='tabItem' AND column_name='posa_selling_price';
+   SELECT name FROM \`tabPatch Log\` WHERE patch LIKE '%backfill_item_selling_price%';
+   SELECT name FROM \`tabScheduled Job Type\` WHERE method LIKE '%item_selling_price%';
+   SELECT name FROM \`tabProperty Setter\` WHERE name='Sales Invoice-posting_date-in_standard_filter' OR (doc_type='Sales Invoice' AND field_name='posting_date' AND property='in_standard_filter');
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype='Sales Invoice' AND script_type='Permission Query';
+   SELECT name FROM \`tabClient Script\` WHERE dt='Sales Invoice' AND view='List' AND enabled=1;"
+   grep -n "Sales Invoice" ~/frappe-bench/apps/*/*/hooks.py | grep -iE "permission_query|list_js"
+   ```
+   (the grep must print nothing before the pull; posawesome adds both after it).
+   Optional, for step 5: `SELECT COUNT(*) FROM \`tabItem Price\` WHERE price_list='Standard Selling';`
+4. `git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `58255b8f`.
+5. `bench --site site1.local migrate` -- exit 0; read
+   `Item Selling Price backfill: <N> items checked, <M> with a Standard
+   Selling price, <K> updated.` (M close to the step 3 count) and the
+   `<X> item(s) hold stock but have no price:` list if any. The Property
+   Setter prints nothing.
+6. No `bench build`: nothing in `d03403d7..58255b8f` touches the POS bundle
+   (`sales_invoice_list.js` is served as is with the DocType meta).
+7. `bench --site site1.local clear-cache` (the list JS is cached with the
+   meta), then `sudo supervisorctl restart all` (new hooks).
+8. Checks:
+   - `SELECT value FROM \`tabProperty Setter\` WHERE name='Sales Invoice-posting_date-in_standard_filter';` -> 0.
+   - `echo 'print(frappe.get_hooks("permission_query_conditions").get("Sales Invoice"))' | bench --site site1.local console`
+     -> `['posawesome.posawesome.api.sales_invoice_list_lock.get_permission_query_conditions']`.
+   - Selling Price: the mismatch query of section 92 -> 0;
+     `bench --site site1.local scheduler status` -> enabled.
+   - Staff login (a demo account, e.g. swangalleriaTest; hard-refresh
+     once): Sales Invoice list shows the Posting Date range and "Submitted
+     only"; total = `SELECT COUNT(*) FROM \`tabSales Invoice\` WHERE docstatus=1`;
+     a range matches the same query with `posting_date BETWEEN`; Report view
+     -> Export (Excel, all rows): Document Status column only "Submitted",
+     row count = that SQL count; Status filter "Draft" -> empty.
+   - it.department: no label; total = all invoices (drafts and cancelled
+     included).
+   - POS: hold an invoice on a terminal and reopen it from Drafts -- still
+     listed. Stock Balance -> Add Column -> Item (Item Code) -> Selling Price.
+Rollback of this commit only: `git checkout c4ca2cfa`, clear-cache, restart;
+then delete the Property Setter `Sales Invoice-posting_date-in_standard_filter`
+to bring back ERPNext's single date at the top. Rollback of both: section 92.
+
+## 94. Customer Store: a Store filter on the Desk Customer list (2026-11-12, `2238955e` on `develop-swan`, `aea4114c` on `stable`)
+
+**Request.** A Store filter at the top of the Desk Customer list: staff pick
+a POS Profile (MAX&Co, Ventisei MO, SWAN GALLERIA MCC, Swan Galleria ...) and
+see the customers that store created. A filter only -- it must not change who
+sees which customers in Desk or the POS; POS search, creation, loyalty and
+credit unchanged. Walk-ins blank; customers a store login creates in Desk
+also get its store; corrections by IT only. (A POS-side customer screen is
+for later.)
+
+**Found first.**
+- Nothing on Customer recorded the store. `create_customer` (customers.py)
+  receives the POS Profile but only checks it via
+  `assert_pos_profile_write_allowed`, which checks existence and company --
+  not that the user is on the profile (the name comes from the client). The
+  customer created during a sale (`update_invoice`, creation.py) sets no
+  store either. `owner` ("Created By") was the only clue.
+- Production: one login per store, each on exactly one POS Profile; 37
+  customers owned by Administrator; store logins have POS Profile User
+  Permissions with Apply To All Document Types = 1. Staging has the same kind
+  of permission on the transit test users.
+- A plain Link to POS Profile on Customer would make Frappe apply those User
+  Permissions to Customer (list, form, link search) -- store logins would see
+  only their store's customers. `ignore_user_permissions` on the field is
+  honoured in all three (db_query `add_user_permissions`, permissions.py
+  `check_user_permission_on_link_fields`, desk/search.py
+  `validate_ignore_user_permissions`, which the Link control passes for the
+  top filter too, so the Store dropdown lists every store).
+- The POS reads customers with `frappe.get_all` (no permissions):
+  `get_customer_names`, `search_customers`, `get_customer_info`.
+
+**Built.**
+- Custom Field `Customer-posa_store` "Store": Link POS Profile, read_only,
+  no_copy, ignore_user_permissions, in_standard_filter, print_hide,
+  insert_after `territory` (main Customer section, not collapsible -- checked
+  live with `frappe.get_meta`; no other field after territory). Hand-added to
+  `custom_field.json` as text (the file is tab-indented; a json.dump rewrite
+  reformatted all 10,000 lines and was reverted).
+- `api/customer_store.py`:
+  - `before_insert` (Customer doc_event): walk-in -> blank; a profile set by
+    the caller is kept only if the creating user is on its POS Profile User
+    list or is System Manager/Administrator; otherwise the user's single
+    store; otherwise blank. Never throws.
+  - `validate` (called from `customer.validate` via `validate_store()`):
+    after creation, a change by anyone but System Manager/Administrator is
+    reverted -- read-only also through the API.
+- `create_customer` and the during-a-sale path pass `posa_store`.
+- Patch `backfill_customer_store`: creates the field from the fixture, then
+  fills blank customers only: walk-in blank; creating user on exactly one
+  POS Profile -> that store; else the first submitted Sales Invoice's
+  `pos_profile`; else blank. `frappe.db.set_value(..., update_modified=False)`:
+  no Version, Customer `modified` unchanged (POS customer delta sync and the
+  rewards sync don't re-download everyone). Prints a summary.
+
+**Verified on staging.** Patch: 53 checked, 34 filled (first invoice, Test
+Pos), 17 no invoice + 2 walk-ins blank; every Customer `modified` and the
+Customer Version count identical before/after both migrates. Headless
+Chromium as a throwaway store login (Accounts User + Sales User, POS Profile
+User on Test Pos, User Permission POS Profile = Test Pos, apply to all):
+top row ID / Customer Name / Customer Group / Territory / Store / Generic;
+all 54 customers listed (one made for store "test 222"); the Store dropdown
+lists both stores (request carries `ignore_user_permissions=1`); picking
+"test 222" -> 1 of 1; Test Pos -> 34; reload keeps it, Clear Filters -> 54;
+the other store's customer opens, Store read-only after Territory; Sales
+Invoice customer picker finds it; Desk-created customer -> Test Pos; POS
+`create_customer` -> Test Pos, and claiming "test 222" -> Test Pos (not on
+it); `frappe.client.set_value` of Store as staff -> unchanged; POS customer
+list for the store login = everyone; 1920/1400/1100/768 and phone 390
+without sideways scroll. The during-a-sale path was not verified live (the
+console call stopped at the POS terminal lock -- cashier PIN); covered by the
+code and `before_insert` tests.
+
+**Regression check.** Frontend 286/286 files, 1812/1812 (no frontend file
+changed; `bench build` N/A). Backend in isolation: `test_customer_store` 9/9
+(mutation-checked: ignore_user_permissions off on the live field -> 4 fail,
+membership check skipped -> 1, read-only guard removed -> 1);
+`test_customer` 12/12 -- it failed 1 with the first version (the guard ran
+on its fake doc); fixed by the separate `validate_store()` and the test now
+expects it (call removed -> fails); `test_customers` 4/4,
+`test_customer_mobile` 14/14, `test_offline_sync_customers` 4/4,
+`test_rewards_sync` 3/3, `test_customer_credit_invoice_fields` 2/2,
+`test_credit_voucher` 51/51, `test_stored_value` 2/2, `test_gift_cards`
+14/14, `test_return_generic_customer_credit_guard` 8/8,
+`test_submitted_invoice_edit_customer` 9/9, `test_pos_access` 12/12,
+`test_overview_loyalty` 4/4, `test_payment_processing` 35/35,
+`test_offline_sync_invoices` 4/4, `test_sales_invoice_list_lock` 9/9,
+`test_sales_invoice_posting_date_range` 4/4, `test_item_selling_price`
+11/11, `test_invoice_reporting_fields` 35/35, `test_api_imports` 4/4 and 5
+hook/fixture modules. The 8 pre-existing failures (section 93) unchanged.
+System Settings restored to 3 / 3 / Asia/Muscat, precision 3. Migrate twice,
+exit 0, idempotent.
+
+**Production deploy: everything not yet on production** (site
+`site1.local`; `stable` `d03403d7` -> `c4ca2cfa` Selling Price (92) ->
+`58255b8f` Sales Invoice range + lock (93) -> `aea4114c` Customer Store
+(94)).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `d03403d7`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name IN ('Item-posa_selling_price','Customer-posa_store') OR (dt='Item' AND fieldname='posa_selling_price') OR (dt='Customer' AND fieldname='posa_store');
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='tabItem' AND column_name='posa_selling_price') OR (table_name='tabCustomer' AND column_name='posa_store'));
+   SELECT name FROM \`tabPatch Log\` WHERE patch LIKE '%backfill_item_selling_price%' OR patch LIKE '%backfill_customer_store%';
+   SELECT name FROM \`tabScheduled Job Type\` WHERE method LIKE '%item_selling_price%';
+   SELECT name FROM \`tabProperty Setter\` WHERE name='Sales Invoice-posting_date-in_standard_filter' OR (doc_type='Sales Invoice' AND field_name='posting_date' AND property='in_standard_filter') OR (doc_type='Customer' AND property='field_order');
+   SELECT name FROM \`tabCustom Field\` WHERE dt='Customer' AND insert_after='territory';
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype IN ('Sales Invoice','Customer') AND script_type='Permission Query';
+   SELECT name FROM \`tabClient Script\` WHERE enabled=1 AND ((dt='Sales Invoice' AND view='List') OR dt='Customer');"
+   grep -n "Sales Invoice\|\"Customer\"" ~/frappe-bench/apps/*/*/hooks.py | grep -iE "permission_query|list_js|before_insert"
+   ```
+   (the grep must print nothing; posawesome adds these after the pull).
+   Optional: `SELECT COUNT(*) FROM \`tabItem Price\` WHERE price_list='Standard Selling';`
+   and note the time, for the Version check in step 8.
+4. `git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `aea4114c`.
+5. `bench --site site1.local migrate` -- exit 0. Two patch summaries:
+   - `Item Selling Price backfill: <N> items checked, <M> with a Standard
+     Selling price, <K> updated.` (M close to the step 3 count), then
+     possibly `<X> item(s) hold stock but have no price:` and their codes.
+   - `Customer Store backfill: <T> customers without a store, <F> filled.`
+     then, in any order, `by creating user: 183`, `by first invoice: 35`,
+     `by no invoice (blank): 9`, `by walk-in (blank): 1`, and per store
+     `MAX&Co: 77`, `Ventisei MO: 36`, `SWAN GALLERIA MCC: 33`,
+     `Swan Galleria: 28`, `Max Demo: 7`, `Swan Galleria T: 16`,
+     `Test Pos: 21` (F = 218, T = 228 per the 11-11 preview; customers
+     added since then shift these a little).
+   The Sales Invoice Property Setter prints nothing.
+6. No `bench build`: nothing in `d03403d7..aea4114c` touches the POS bundle;
+   `sales_invoice_list.js` is served with the DocType meta.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Checks:
+   - Hooks: `echo 'print(frappe.get_hooks("permission_query_conditions").get("Sales Invoice"), frappe.get_hooks("doc_events")["Customer"].get("before_insert"))' | bench --site site1.local console`
+     -> the `sales_invoice_list_lock` and `customer_store.before_insert` paths.
+   - Selling Price: section 92's mismatch query -> 0; `bench --site
+     site1.local scheduler status` -> enabled; Stock Balance -> Add Column ->
+     Item (Item Code) -> Selling Price fills.
+   - Customer Store: `SELECT posa_store, COUNT(*) FROM tabCustomer GROUP BY 1;`
+     matches step 5; `SELECT COUNT(*) FROM tabVersion WHERE ref_doctype='Customer' AND creation > '<step 3 time>';` -> 0.
+   - As a store login (hard-refresh once): Customer list shows Store; the
+     total is every customer; the Store dropdown lists all stores; picking
+     another store shows its customers. Sales Invoice list shows the Posting
+     Date range and "Submitted only"; total = `SELECT COUNT(*) FROM \`tabSales Invoice\` WHERE docstatus=1`;
+     Report view -> Export (Excel, all rows): Document Status only
+     "Submitted", same row count.
+   - As it.department: no "Submitted only"; Sales Invoice total includes
+     drafts and cancelled.
+   - POS at one store: search an existing customer from another store (found),
+     create a new customer -> its Store is that store; hold an invoice and
+     reopen it from Drafts.
+Rollback: Customer Store only -> `git checkout 58255b8f`, clear-cache,
+restart (the field stays with its values; the old code ignores it).
+Sales Invoice work too -> `git checkout c4ca2cfa` and delete the Property
+Setter `Sales Invoice-posting_date-in_standard_filter`. Everything -> section 92.
+
+## 95. Sales credited to: staff performance follows the chosen Sales Person (2026-11-12, `e3d5a32a` on `develop-swan`, `65a32a5e` on `stable`)
+
+**Request.** Sales by Cashier should credit the Sales Person chosen on the
+sale, not only the PIN cashier who rang it up (purpose: staff performance).
+Each Sales Person is linked to the PIN cashier's user. Decisions: returns
+follow the original sale's credited person; past invoices are filled from
+their saved Sales Person by a re-runnable command (the user links Sales
+Persons on production after deploy and will not link "Aziz", so its 56 test
+invoices stay with their PIN cashier); the dropdown keeps using the POS
+Profile's Allowed Sales Persons with a server-side check and never shows
+group headings; only System Manager sets "POS User" on a Sales Person and
+changes the Sales Team of a submitted invoice; the POS dashboard's Staff /
+Cashier Performance uses the same rule; "Rung up by others" in the detail
+panel. Production (user's count): 66 submitted invoices with a Sales Person
+(Aziz 56, Omar 6, Abeer 2, Raifah 1, Maryam 1); Sales Team rows on Customer: 0.
+
+**Found first.**
+- The POS writes one Sales Team row at 100%; `posa_cashier` is the PIN
+  cashier (authoritative, set server-side). Sales Person had no user link
+  (only `employee`).
+- Pre-existing bug: the till's Sales Person list (`get_sales_person_names`)
+  was called without a POS Profile, so the server used the user's FIRST POS
+  Profile User row -- Administrator on Test Pos saw "test 222"'s list.
+  Production logins have one store each, so no visible effect there.
+
+**Built.**
+- Custom Fields (hand-added to `custom_field.json`):
+  `Sales Invoice-posa_credited_user` "Sales Credited To" (Link User) and
+  `-posa_credited_user_name` (Data), both read-only, no_copy, print_hide,
+  allow_on_submit, after `posa_cashier_name`; `Sales Person-posa_user`
+  "POS User" (Link User, unique, after `employee`, hidden on groups,
+  read-only unless System Manager).
+- `api/sales_credit.py`: rules (top-share Sales Team row -> its POS User,
+  else the PIN cashier; a return against an invoice -> the original's
+  credit); `set_credited_user` from `invoice.validate` and
+  `before_update_after_submit` (which first refuses a Sales Team change by
+  anyone but System Manager/Administrator -- contact/incentive edits still
+  allowed; `invoice.js` shows the table read-only to them);
+  `on_update_after_submit` moves submitted returns with a corrected original;
+  `check_pos_sales_team` in both POS submit paths (`update_invoice`,
+  `submit_invoice`): enabled, not a group, on the Allowed list if set --
+  till refuses, offline sync drops the row and writes an Error Log
+  "POS Sales Person dropped on offline sync", Edit Invoice amendments skip;
+  `validate_sales_person` (Sales Person validate): non-System-Manager
+  changes to POS User silently reverted, group/duplicate refused;
+  `refresh_sales_credit` behind `bench --site <site> posa-refresh-sales-credit
+  [--dry-run]` (`posawesome/commands.py`): recomputes every submitted
+  invoice, writes only differences with `update_modified=False`, prints
+  checked/changed/blank/unchanged, moves and unlinked Sales Persons.
+- `sales_by_cashier.py` groups by `COALESCE(NULLIF(posa_credited_user,''),
+  posa_cashier)` and adds `by_others`; `dashboard.py`'s staff report uses the
+  same expression (discount/void and branch sections stay on the PIN
+  cashier). `SalesByCashierDetail.vue`: "Rung up by others: N sales".
+- `utils.fetch_sales_person_names`: enabled and not group only; a profile
+  name from the client is authorized with `get_authorized_pos_profile`
+  (not on it -> empty list). `useInvoiceDetails.ts` sends the till's
+  profile name and respects an empty server list (profile list only as the
+  offline fallback).
+- 11 draft Arabic rows in `ar.csv`.
+
+**Verified on staging.** Refresh: dry run 267 checked / 256 would change
+(blank) / 11 unchanged; real run 256; rerun 0; `modified` and Version counts
+unchanged; one return credited to its original's seller. Headless Chromium:
+POS User editable for Administrator, hidden on "Sales Team", read-only for a
+Sales Master Manager (API change ignored); POS sale by PIN cashier "Tmp
+Cashier" with "_Tmp Seller" (dropdown `_Tmp Seller`, `aziz` -- no group) ->
+ACC-SINV-2026-00354 cashier Tmp Cashier, credited Tmp Seller; return 00355
+(rung by Administrator) -> Tmp Seller; Sales Team changed after submit moved
+both and back, 4 Versions; Sales by Cashier shows Tmp Seller with "Rung up by
+others 1 sale" at 1920/768/390 without sideways scroll; dashboard staff
+report credits the seller. Console: Accounts User changing the Sales Person
+of 00354 -> "Only a System Manager can change the Sales Person of a
+submitted invoice."; incentive edit saves. Throwaway users disabled, PINs
+cleared; 00354/00355 kept.
+
+**Regression check.** Frontend 287/287 files, 1818/1818. Backend in
+isolation: `test_sales_credit` 37/37 (mutation-checked: 7 rule breaks + the
+after-submit guard each caught), `test_sales_by_cashier` 24/24,
+`test_invoice_reporting_fields` 35/35 and `test_discount_reasons` 34/34
+(their validate stub lists gained `set_credited_user`), `test_customers` 4,
+`test_dashboard_access` 4, `test_api_imports` 4, `test_pos_access` 12,
+`test_terminal_state` 5, `test_offline_sync_invoices` 4, `test_payments` 12,
+`test_credit_voucher` 51, `test_customer_credit_invoice_fields` 2,
+`test_return_generic_customer_credit_guard` 8,
+`test_submitted_invoice_edit_customer` 9,
+`test_submitted_invoice_edit_supervisor` 13, `test_sales_invoice_list_lock`
+9, `test_sales_invoice_posting_date_range` 4, `test_invoice_line_backfill`
+11. Pre-existing failures unchanged (same 13 tests with the change stashed).
+`bench build` exit 0; migrate twice, exit 0, idempotent. System Settings
+restored to 3 / 3 / Asia/Muscat.
+
+**Production deploy** (site `site1.local`; `stable` `aea4114c` -> `65a32a5e`).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `aea4114c`.
+   (Older -> sections 92-94 are not on production yet: do section 94's steps
+   3-8 in the same run.)
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows and the greps print nothing:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name IN ('Sales Invoice-posa_credited_user','Sales Invoice-posa_credited_user_name','Sales Person-posa_user') OR (dt='Sales Invoice' AND fieldname IN ('posa_credited_user','posa_credited_user_name')) OR (dt='Sales Person' AND fieldname='posa_user');
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='tabSales Invoice' AND column_name LIKE 'posa_credited_user%') OR (table_name='tabSales Person' AND column_name='posa_user'));
+   SELECT name FROM \`tabProperty Setter\` WHERE doc_type='Sales Person' AND property='field_order';
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype IN ('Sales Invoice','Sales Person') AND doctype_event IN ('Before Save (Submitted Document)','After Save (Submitted Document)','Before Validate','Before Save');
+   SELECT name FROM \`tabClient Script\` WHERE enabled=1 AND dt IN ('Sales Person','Sales Invoice') AND view='Form';"
+   cd ~/frappe-bench && bench --help 2>/dev/null | grep -i "refresh-sales-credit"
+   grep -n "\"Sales Person\"" apps/*/*/hooks.py
+   ```
+4. `git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `65a32a5e`.
+5. `bench --site site1.local migrate` -- exit 0 (3 new fields, no patch).
+6. `bench build --app posawesome` -- exit 0 (POS bundle: Sales by Cashier
+   panel, Sales Person list).
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Fields and hooks:
+   `echo 'm=frappe.get_meta("Sales Invoice"); print(m.get_field("posa_credited_user").allow_on_submit, frappe.get_meta("Sales Person").get_field("posa_user").unique, frappe.get_hooks("doc_events")["Sales Invoice"]["before_update_after_submit"])' | bench --site site1.local console`
+   -> `1 1 [...sales_credit.before_update_after_submit]`.
+9. Dry run: `bench --site site1.local posa-refresh-sales-credit --dry-run`
+   -> "N submitted invoices checked, M would change (M were blank), K
+   unchanged" (K = sales submitted since step 7, already filled), "Credited to someone other than their PIN cashier: 0", and
+   under "Sales Persons on invoices without a POS User": Aziz 56, Omar 6,
+   Abeer 2, Raifah 1, Maryam 1 (plus any since the count).
+10. Real run: `bench --site site1.local posa-refresh-sales-credit` -> same
+    numbers with "changed"; run it again -> "0 changed".
+11. As System Manager, Desk -> Sales Person -> each (not Aziz) -> POS User =
+    that person's PIN cashier user -> Save. Then dry run again -> moves
+    "PIN cashier -> <name>: n", then the real run, then once more -> 0 changed.
+12. Checks: POS Sales by Cashier for a store with a linked seller -> the sale
+    under the seller, "Rung up by others" in the panel; the till's Sales
+    Person dropdown lists only the store's Allowed Sales Persons, no group
+    heading; as a non-System-Manager Desk user, a submitted invoice's Sales
+    Team table is read-only.
+Rollback: `git checkout aea4114c`, `bench build --app posawesome`,
+clear-cache, restart. The 3 fields stay with their values; the old code
+ignores them.
+
+## 96. Staff Sales Performance: managers' Desk report across stores (2026-11-12, `3061fb38` on `develop-swan`, `798693f3` on `stable`)
+
+**Request.** A Desk view for managers of staff performance across all stores,
+with the same credited-person rules as Sales by Cashier (section 95), store
+and date filters, and export. Decisions: report access flexible -- System
+Manager sees all stores; any role added later through "Role Permission for
+Page and Report" sees only its own stores (POS Profile User list or POS
+Profile User Permission), the Stores filter offers only those, enforced on
+the server including export; for now System Manager only. Till sales by
+default. Staff hidden in a store's Sales by Cashier (Administrator, shared
+store logins) are hidden here too, their sales counted in "Others".
+
+**Found first.**
+- The POS dashboard's Staff / Cashier Performance can't do this: it runs
+  inside the POS with a store session, whole months only, no per-store split,
+  user ids, top 20, no export.
+- `frappe.desk.query_report.save_report` ("Save as") makes a Custom Report
+  with no roles; `Report.set_doctype_roles` then gives it the ref doctype's
+  roles (Sales Invoice: Accounts User, Accounts Manager) -- wider than this
+  report's. Role Permission for Page and Report writes a Custom Role that
+  replaces the report's own roles (`Report.is_permitted`).
+- Running a report needs read + report permission on its ref doctype (Sales
+  Invoice) and exporting needs Export on it (`frappe.permissions.can_export`).
+  On staging, by default, nobody but Administrator has Export on Sales Invoice.
+- Frappe's Data formatter doesn't escape HTML; frappe-charts draws axis
+  labels as text and tooltips as HTML.
+
+**Built.** Standard Script Report `posawesome/posawesome/report/staff_sales_performance/`
+(ref doctype Sales Invoice, role System Manager, no Frappe total row):
+- `execute`: checks the report itself first (`is_permitted` -- also covers
+  Save-as copies, export and print, which all call it); stores = requested
+  (each must be allowed, else PermissionError) or all allowed; System
+  Manager/Administrator = every POS Profile of the company, others = POS
+  Profile User rows + POS Profile User Permissions of that company; none ->
+  empty report with a message. One parameterized query grouped by store and
+  `sales_by_cashier.CREDITED_SQL`; till = `posa_pos_opening_shift` set;
+  per store, `_shown_cashiers` decides own row vs "Others"; no cashier ->
+  "Cashier not recorded". Sum raw, round once (sales_by_cashier helpers).
+- Group by Staff: one row per person ("N stores"), stores folded under it
+  (Frappe tree view, collapsed); a single-store person has no copy of itself
+  underneath, so an export doesn't double-count. Group by Staff and store:
+  one flat row each. Bold Total row last (store totals = Sales by Cashier's).
+  Columns: Staff, Store, Gross sales, Returns, Net sales, Sales, Avg basket
+  (gross / sales), Rung up by others, Share of net. Summary tiles and a bar
+  chart (top 15). Tree row ids are not user ids.
+- `get_store_options` (whitelisted, report check first) feeds the Stores
+  MultiSelectList with the user's stores only.
+- Staff and store names escaped in the table formatter; `<`/`>` replaced by
+  `‹`/`›` in chart labels (keeps "MAX&Co" readable on the axis).
+- 13 draft Arabic rows in `ar.csv`.
+
+**Verified on staging.** Store totals equal Sales by Cashier's
+`_fetch_period` (Test Pos 1-12 Nov 2,411.695; 1 Jan-12 Nov 12,620.795).
+Headless Chromium as Administrator at 1920: both stores offered, Total bold,
+tiles and chart, Aziz with two temporary "test 222" rows -> "2 stores" and
+expands to both; CSV export matches the screen; Staff and store / All POS
+sales. A throwaway store user (Accounts User + a throwaway role): before
+access the report, its store list and a Save-as copy refused; the role added
+through the real Role Permission for Page and Report screen (System Manager
+kept); on Test Pos's list -> dropdown and data Test Pos only, "test 222"
+refused in run and export (export path tested in the console past Frappe's
+own Export gate); switched to a User Permission for "test 222" -> only test
+222, Test Pos refused; 1400/768/390 without sideways scroll. A name with an
+HTML tag showed as text, nothing ran. All temporary data removed; report
+back to System Manager only.
+
+**Regression check.** Frontend 287/287 files, 1818/1818. Backend in
+isolation: `test_staff_sales_performance` 16/16 (mutation-checked: all
+stores for everyone, no store refusal, no report check, hidden staff not
+grouped, till ignored -- each caught), `test_sales_credit` 37,
+`test_sales_by_cashier` 24, `test_dashboard_access` 4, `test_api_imports` 4,
+`test_pos_access` 12, `test_sales_invoice_list_lock` 9,
+`test_sales_invoice_posting_date_range` 4, `test_invoice_reporting_fields`
+35, `test_terminal_state` 5, `test_customer_store` 9. `bench build` exit 0;
+migrate twice, exit 0, one report record, unchanged. System Settings
+restored to 3 / 3 / Asia/Muscat.
+
+**Production deploy: sections 95 + 96 together** (site `site1.local`;
+`stable` `aea4114c` -> `65a32a5e` Sales credited to (95) -> `798693f3` Staff
+Sales Performance (96)). Section 95's own deploy steps are replaced by these.
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `aea4114c`.
+   (Older -> sections 92-94 are not on production yet: add section 94's
+   steps 3-8 to this run.)
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- every query returns no rows, the commands print nothing:
+   ```
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name IN ('Sales Invoice-posa_credited_user','Sales Invoice-posa_credited_user_name','Sales Person-posa_user') OR (dt='Sales Invoice' AND fieldname IN ('posa_credited_user','posa_credited_user_name')) OR (dt='Sales Person' AND fieldname='posa_user');
+   SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND ((table_name='tabSales Invoice' AND column_name LIKE 'posa_credited_user%') OR (table_name='tabSales Person' AND column_name='posa_user'));
+   SELECT name FROM \`tabProperty Setter\` WHERE doc_type='Sales Person' AND property='field_order';
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype IN ('Sales Invoice','Sales Person') AND doctype_event IN ('Before Save (Submitted Document)','After Save (Submitted Document)','Before Validate','Before Save');
+   SELECT name FROM \`tabClient Script\` WHERE enabled=1 AND dt IN ('Sales Person','Sales Invoice') AND view='Form';
+   SELECT name, report_type, is_standard FROM \`tabReport\` WHERE name='Staff Sales Performance' OR report_name='Staff Sales Performance';
+   SELECT name FROM \`tabCustom Role\` WHERE report='Staff Sales Performance';"
+   cd ~/frappe-bench
+   bench --help 2>/dev/null | grep -i "refresh-sales-credit"
+   grep -n "\"Sales Person\"" apps/*/*/hooks.py
+   find apps -type d -path "*/report/staff_sales_performance"
+   ```
+   Also note, for step 10 (not a blocker): who may run and export reports on
+   Sales Invoice --
+   `bench --site site1.local mariadb -e "SELECT 'custom' src, role, \`read\`, report, export FROM \`tabCustom DocPerm\` WHERE parent='Sales Invoice' AND permlevel=0 UNION ALL SELECT 'standard', role, \`read\`, report, export FROM tabDocPerm WHERE parent='Sales Invoice' AND permlevel=0;"`
+   (Custom rows, when present, replace the standard ones.)
+4. `cd apps/posawesome && git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `798693f3`.
+5. `bench --site site1.local migrate` -- exit 0 (3 fields, the report; no patch).
+6. `bench build --app posawesome` -- exit 0 (POS bundle: Sales by Cashier
+   panel, Sales Person list).
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Fields, hooks and report:
+   ```
+   echo 'm=frappe.get_meta("Sales Invoice"); r=frappe.get_doc("Report","Staff Sales Performance"); print(m.get_field("posa_credited_user").allow_on_submit, frappe.get_meta("Sales Person").get_field("posa_user").unique, frappe.get_hooks("doc_events")["Sales Invoice"]["before_update_after_submit"], frappe.get_hooks("doc_events")["Sales Person"]["validate"], r.report_type, r.ref_doctype, [x.role for x in r.roles])' | bench --site site1.local console
+   ```
+   -> `1 1 [...sales_credit.before_update_after_submit] [...sales_credit.validate_sales_person] Script Report Sales Invoice ['System Manager']`.
+9. Refresh: `bench --site site1.local posa-refresh-sales-credit --dry-run`
+   -> "N submitted invoices checked, M would change (M were blank), K
+   unchanged" (K = sales since step 7), "Credited to someone other than
+   their PIN cashier: 0", unlinked: Aziz 56, Omar 6, Abeer 2, Raifah 1,
+   Maryam 1 (plus any since). Then the real run
+   `bench --site site1.local posa-refresh-sales-credit` -> same numbers,
+   "changed"; once more -> "0 changed".
+10. Checks:
+    - POS at one store: Sales by Cashier opens with the same figures as
+      before the deploy (nothing linked yet: everyone is their PIN
+      cashier); the detail panel shows "Rung up by others"; the Sales Person
+      dropdown lists only that store's Allowed Sales Persons, no "Sales
+      Team" heading; a sale with a Sales Person submits.
+    - Desk as a user who is not System Manager: a submitted Sales Invoice's
+      Sales Team table is read-only; Sales Person -> POS User read-only.
+    - Desk as System Manager: /app/query-report/Staff Sales Performance
+      (also POS Awesome sidebar -> Reports) -> this month, Till sales, all
+      stores; for one store its Net equals that store's Sales by Cashier
+      for the same dates; Group by "Staff and store" shows one row per
+      person per store; Menu -> Export (CSV) downloads. A System Manager
+      without Accounts User/Manager gets "You don't have permission to get a
+      report on: Sales Invoice" -- the report needs read + report on Sales
+      Invoice (step 3's query).
+    - Store logins: the report is not in their sidebar and the URL says
+      "You don't have access to Report: Staff Sales Performance".
+11. Later, after linking Sales Persons (System Manager, Desk -> Sales Person
+    -> POS User, all but Aziz): dry run -> "PIN cashier -> <name>: n"
+    lines; real run; once more -> 0 changed. To give the report to another
+    role: Role Permission for Page and Report -> Report -> Staff Sales
+    Performance -> tick the role, keep System Manager -> Update; that role
+    also needs read + report on Sales Invoice, and Export to export.
+Rollback: report only -> `git checkout 65a32a5e`, clear-cache, restart,
+then delete the Report "Staff Sales Performance" in Desk (and its Custom
+Role, if one was made). Everything -> `git checkout aea4114c`,
+`bench build --app posawesome`, clear-cache, restart and delete that Report
+too; the 3 fields stay with their values, the old code ignores them.
+
+## 97. Sales Person auto-fill from the PIN cashier (2026-11-14, `7150c5aa` on `develop-swan`, `674d936a` on `stable`)
+
+**Request.** So that ERPNext's own Sales Person reports (Sales Person
+Commission Summary, Sales Person-wise Transaction Summary, Target Variance,
+Gross Profit by Sales Person) cover POS sales, every POS invoice should have
+a Sales Person. Decisions: a chosen Sales Person is kept; none chosen -> the
+PIN cashier's linked Sales Person (Sales Person.posa_user, section 95) at
+100%; none linked -> empty. The auto-fill ignores the store's Allowed Sales
+Persons list (staff covering a shift at another store). Returns against an
+invoice always copy the original's Sales Team, set by the server, whatever
+was picked; returns without an original fall back to the cashier. Edit
+Invoice keeps the original's credit and is never auto-filled; fix the bug
+where the credit moved to the editing supervisor. Backfill as a re-runnable
+command; mismatched returns overwritten to match and listed. No commission
+rates are used.
+
+**Found first.**
+- ERPNext's `make_sales_return` copies `sales_team`, but the POS return
+  (Returns.vue) builds the invoice from scratch without it, and the till's
+  Payments.vue writes `sales_team` only when the dropdown changes.
+- Every POS submit path goes through `invoice_processing/creation.py`
+  `submit_invoice`: foreground, background, offline sync (trusted source
+  "offline_sync") and Edit Invoice (`submitted_invoice_edits.py`, source
+  "submitted_amendment", a `copy_doc` of the original, so its Sales Team
+  comes along). An amendment's `posa_cashier` is the editor, so
+  `set_credited_user` credited the editor when no Sales Person was linked.
+- ERPNext's `calculate_contribution` sets allocated_amount =
+  amount_eligible_for_commission x % and incentives = allocated x
+  commission_rate; `validate_sales_team` refuses a disabled Sales Person.
+
+**Built.**
+- `sales_credit.py`:
+  - `apply_pos_sales_team(invoice_doc, profile_doc)` (replaces the
+    `check_pos_sales_team` call in `submit_invoice`; `update_invoice` still
+    only checks): amendments (source or `amended_from`) untouched; returns
+    against an invoice -> the original's Sales Team rows (empty if any of its
+    Sales Persons is now disabled); otherwise the existing check of a chosen
+    Sales Person, and if none -> `linked_sales_person(posa_cashier)` (enabled,
+    not a group) at 100%.
+  - `original_cashier()` walks `amended_from` to the first invoice's
+    `posa_cashier`; `set_credited_user` and `refresh_sales_credit` use it for
+    amendments.
+  - `fill_pos_sales_team(dry_run)`: submitted Sales Invoices with a POS
+    Profile. Non-returns with an empty team -> cashier's own (amendments: the
+    first invoice's cashier); unlinked stay empty and are counted per
+    cashier. Returns against an invoice -> the original's (expected) team; a
+    different one is overwritten and listed. Writes Sales Team rows directly
+    (allocated amount, commission rate, incentives as ERPNext computes) --
+    the invoice's `modified` and Version history are unchanged, no ledger
+    entries.
+- `commands.py`: `bench --site <site> posa-fill-sales-person [--dry-run]`.
+- Till: on a return against an invoice the Sales Person box is disabled with
+  "A return keeps the original sale's Sales Person." (1 draft Arabic row).
+- `test_creation.py` stubs `sales_credit` (its fake `frappe` has no
+  get_meta/get_all).
+
+**Verified on staging** (headless Chromium, throwaway users AF Cashier ->
+"_AF Cashier SP", AF Plain unlinked, supervisor AF Super -> "_AF Super SP";
+both stores allow only "aziz"): sale with none chosen -> cashier's own at
+100%, allocated net of VAT; its POS return -> box locked with the note,
+original's team at minus; exchange (return then "continue to new sale", paid
+by the credit) -> cashier's own; offline sale through the real offline-sync
+endpoint (the offline screen was blocked by stock of the test item) with the
+"Sales Team" heading picked -> dropped and logged, cashier's own used; Edit
+Invoice of an unlinked cashier's sale -> credit stays with AF Plain, no
+Sales Person; of a linked one -> team kept, allocated recalculated after a
+discount; AF Cashier selling at "test 222" -> own Sales Person; chosen
+"aziz" kept, its credit-note return copied it. ERPNext's Commission Summary
+lists the same invoices as Staff Sales Performance (5 sales, 1 return; the
+difference in amount is VAT). Real runs on staging: fill 278 checked, 119
+changed (97 filled, 22 returns, 0 overwritten); refresh 3 changed (Edit
+Invoice amendments back to the original cashier); second runs 0.
+
+**Regression check.** Frontend 288/288 files, 1821/1821. Backend in
+isolation: `test_sales_credit` 51/51 (mutation-checked: no auto-fill,
+returns not copied, amendments filled, credit to editor, fill keeping wrong
+returns, disabled own Sales Person used -- each caught),
+`test_staff_sales_performance` 16, `test_sales_by_cashier` 24,
+`test_invoice_reporting_fields` 35, `test_discount_reasons` 34,
+`test_offline_sync_invoices` 4, `test_submitted_invoice_edit_customer` 9,
+`test_submitted_invoice_edit_supervisor` 13, `test_credit_voucher` 51,
+`test_return_generic_customer_credit_guard` 8, `test_payments` 12,
+`test_api_imports` 4, `test_pos_access` 12, `test_dashboard_access` 4,
+`test_customer_credit_invoice_fields` 2, `test_sales_invoice_list_lock` 9,
+`test_invoice_line_backfill` 11; `test_creation` 8 errors, the same 8 with
+the change stashed; `test_invoices`, `test_submitted_invoice_shift_security`
+fail as before. `bench build` exit 0. No migrate (no doctype, fixture or
+print format). System Settings restored to 3 / 3 / Asia/Muscat.
+
+**Notes.** An amendment now counts as "Rung up by others" under the original
+seller (its PIN cashier is the editor). A return of a sale whose Sales
+Person was disabled since gets no Sales Person at the till (ERPNext refuses
+disabled ones); the backfill copies it as it is.
+
+**Production deploy** (site `site1.local`; `stable` `798693f3` -> `674d936a`;
+after section 96's deploy).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse HEAD` -> `798693f3`.
+   (Older -> do section 96's deploy first.)
+2. `bench --site site1.local backup`
+3. Name check -- prints nothing:
+   `cd ~/frappe-bench && bench --help 2>/dev/null | grep -i "fill-sales-person"`
+4. `cd apps/posawesome && git pull --ff-only upstream stable` -> `git rev-parse HEAD` = `674d936a`.
+5. No migrate (no doctype, field, fixture or print format changed).
+6. `cd ~/frappe-bench && bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Command and hook check:
+   ```
+   bench --help 2>/dev/null | grep -iE "fill-sales-person|refresh-sales-credit"
+   echo 'from posawesome.posawesome.api import sales_credit as s; from posawesome.posawesome.api.invoice_processing import creation as c; print(hasattr(s,"fill_pos_sales_team"), c.apply_pos_sales_team is s.apply_pos_sales_team)' | bench --site site1.local console
+   ```
+   -> both commands listed; `True True`.
+9. Checks (before linking):
+   - POS: a sale with no Sales Person chosen submits; its Sales Team is
+     empty (nobody linked yet). A sale with a Sales Person chosen keeps it.
+   - POS return of that second sale: the Sales Person box is greyed out with
+     "A return keeps the original sale's Sales Person."; the submitted
+     return has the same Sales Person at 100%, minus amount.
+   - Sales by Cashier / Staff Sales Performance: same figures as before for
+     earlier dates.
+10. After linking Sales Persons (Desk -> Sales Person -> POS User):
+    - `bench --site site1.local posa-fill-sales-person --dry-run` -> "N
+      submitted POS invoices checked, M would change", filled / amendments
+      / returns counts, any overwritten returns listed (expected 0: before
+      this change a POS return had no Sales Team), "Left empty" per unlinked
+      cashier (e.g. Aziz). Then the real run -> same numbers, "changed";
+      once more -> "0 changed".
+    - `bench --site site1.local posa-refresh-sales-credit --dry-run` ->
+      "PIN cashier -> <name>" lines only for sales where a different Sales
+      Person was chosen, plus any Edit Invoice amendments moving back from
+      the editor to the original cashier; real run; once more -> "0 changed".
+    - A new POS sale with no choice -> the PIN cashier's own Sales Person at
+      100%; at another store too.
+    - ERPNext Sales Person Commission Summary (this month, one Sales Person)
+      -> the same invoices as that person's row in Staff Sales Performance
+      with Sales counted "All POS sales" (amounts differ by VAT: ERPNext
+      uses net).
+Rollback: `git checkout 798693f3`, `bench build --app posawesome`,
+clear-cache, restart. Sales Team rows written by the fill stay (they are
+ordinary rows; the old code keeps them).
+
+## 98. Bearer voucher for returns of Anonymous sales (2026-11-14, `36d8ac03` on `develop-swan`, `3bc57258` on `stable`)
+
+**Request.** Returns of anonymous (generic-customer) sales went through Return
+Without Invoice, which checks nothing against the sale: wrong price, wrong
+quantity, the same item twice or an item never bought were all possible
+(the 1-month Swan Galleria expo had 31 returns, all without an invoice).
+Decisions: return against the original sale and give the credit as a bearer
+voucher (our credit note voucher), only for returns linked to a sale to a
+generic customer; spending by that voucher only; a lost one can't be
+replaced, not even by a supervisor; Return Without Invoice stays and must
+not give a voucher (credit must go to a real customer); Exchange uses the
+voucher just printed; the till locks the customer with a note; walk-in
+button renamed "Anonymous customer". Named-customer flows unchanged.
+Spending a bearer voucher on a named customer's sale: later, before the
+next expo. Combined exchange receipt: later, separately.
+
+**Found first.**
+- ERPNext requires a linked return's customer to be the original's
+  (`validate_return_against`, "Party Mismatch") and checks items, quantity
+  left and price only for linked returns (`validate_returned_items`). So
+  the credit stays on Anonymous; store credit is the return invoice's own
+  negative outstanding (`payments.get_available_credit`), which is what the
+  voucher, expiry and exchange read.
+- Our credit note voucher already identifies one return (HMAC check
+  characters), supports part use and a balance voucher. Gift cards (0 used,
+  off in both stores, issued from cash by a supervisor) and a one-receipt
+  mixed invoice (no ERPNext return checks, VAT netted without a credit
+  note, Z Report and Sales Person wrong) were compared and rejected.
+- Receipts already carry the invoice barcode (section on scan-to-return);
+  production's "Swan Sales Invoice" has it.
+- Return Without Invoice to Anonymous was never refused at the return:
+  staging ACC-SINV-2026-00292 (-139.300, 5 Nov) left credit on Anonymous
+  that just couldn't be spent. Production: no such rows (checked by user).
+- The customer box's read-only listener (`set_customer_readonly`) is
+  commented out in Customer.vue; nothing locked the customer on a return.
+
+**Built.**
+- `credit_voucher.py`: `is_bearer_credit_note` (submitted return, linked,
+  generic customer; also a Jinja method), `bearer_voucher_for` (the voucher
+  of a no-refund linked return to a generic customer), `lookup_credit_voucher`
+  accepts bearer vouchers (`bearer: 1`), refuses a supervisor's approval by
+  return number for them (`lost_bearer_voucher_message`) and refuses other
+  shared-customer credit; `authorize_customer_credit` for a generic customer
+  -> `_authorize_bearer_credit`: every row must be a bearer credit note with
+  its own verified code; same-shift, supervisor and advances refused.
+- `invoice_processing/creation.py`: `_guard_generic_customer_stored_credit`
+  now allows a linked return to a generic customer only as full voucher or
+  full refund, and refuses a return without an invoice to a generic customer
+  that leaves credit (enforced on every final submit path incl. background
+  and offline sync). `submit_invoice` returns `posa_bearer_voucher` for the
+  return it has just submitted (not on replay or queued-payload paths).
+- `customers.get_customer_info` returns `posa_is_generic_customer`.
+- Voucher print (`templates/print/credit_note_voucher.html`): for a bearer
+  voucher, "This voucher works like cash: whoever presents it can use it. A
+  lost voucher can't be replaced." (+ Arabic) instead of the supervisor line.
+- Till: `customersStore` keeps shared customers and bearer vouchers
+  (`dropBearerVouchers` on cancel, park, a new return, and "Use Customer
+  Balance" off); Customer.vue locks the box with "This sale was to {0} —
+  the credit is given as a voucher." on a linked return to a shared customer
+  and "Paid with a voucher from a sale to {0} — the customer stays {0}." on
+  a voucher sale; Returns and Invoice Management load such returns instead
+  of refusing; Exchange adds the voucher just issued; Payments applies only
+  scanned bearer vouchers for a shared customer. Button "Walk-in / No
+  Loyalty" -> "Anonymous customer". 9 Arabic rows (ar.csv: `عميل مجهول`).
+- `test_creation.py` stubs `credit_voucher` (its fake frappe can't load it).
+
+**Verified on staging** (headless Chromium, throwaway cashier + supervisor,
+Test Pos): Anonymous sale 00368 -> receipt scan on Returns -> locked customer
+with note, change refused -> return 00369 -> voucher C26-00369-BB9R prints
+"works like cash" -> Exchange sale 00370 used it automatically ("voucher"
+in Credit Authorized By), 54.600 left, balance voucher prints; 3 returns
+00372/73/74: Anonymous alone gives nothing (same shift too), one voucher
+gives only its own 86.100; same voucher again "already been used"; supervisor
++ return number refused; voucher of a sale/return dated the day before
+(created on the server) used today; bearer voucher on a named sale ->
+"Switch customer?" -> Anonymous, locked; Return Without Invoice to Anonymous
+refused; old 00292 voucher refused; named "test disc" return/exchange
+unchanged (same-shift), named voucher and supervisor approval unchanged;
+offline Anonymous sale synced. Z/X figures for those invoices matched by
+hand (credit issued 502.950, redeemed 417.900); return GL reverses VAT
+against the linked original; credit follows the original seller; loyalty
+unchanged for the named customer.
+
+**Regression check.** Frontend 289/289 files, 1832/1832 (mutations: credit
+without voucher, exchange without voucher, no lock -- each caught). Backend
+in isolation: `test_credit_voucher` 63, `test_return_generic_customer_credit_guard`
+9 (mutations: spend without voucher, supervisor replaces lost bearer voucher,
+unlinked credit allowed, part refund allowed -- each caught), `test_sales_credit`
+51, `test_sales_by_cashier` 24, `test_staff_sales_performance` 16,
+`test_customer` 12, `test_customers` 4, `test_payments` 12, `test_stored_value`
+2, `test_customer_credit_invoice_fields` 2, `test_offline_sync_invoices` 4,
+`test_invoice_reporting_fields` 35, `test_print_barcode` 4, `test_api_imports`
+4, `test_pos_access` 12, `test_submitted_invoice_edit_customer` 9,
+`invoice_processing.test_payment` 4 and `.test_utils` 12, closing
+`test_same_shift_exchange` 5, `test_sales_breakdown` 6, `test_z_report` 3,
+`test_z_report_layout` 6, `test_overview_loyalty` 4, `test_z_report_vat` 8;
+`test_creation` the same 8 errors as before; `test_credit_exchange` and
+`test_submitted_invoice_edits_credit_badge` can't start on staging (duplicate
+"Standard Buying" price list in ERPNext test records), same with the change
+stashed. `bench build` exit 0. No migrate. System Settings restored 3/3,
+Asia/Muscat.
+
+**Notes.** "Exchanges Today" counts a voucher sale as an exchange whenever
+that customer had any return in the shift (existing per-customer rule), so
+an Anonymous sale paid with an older voucher can be listed there; totals
+are right. The supervisor line in Credit Authorized By names the signed-in
+user (existing). Spending on a named customer's sale is possible without
+core edits: ERPNext checks each Journal Entry row's party against its own
+referenced invoice, so one entry can debit Anonymous (the return) and credit
+the named customer (the sale).
+
+**Production deploy, part A: `aea4114c` -> `674d936a`** (sections 95-97) --
+section 96's steps 1-10 and section 97's steps 3 and 6-9, but move only to
+674d936a instead of the tip of stable:
+```
+cd ~/frappe-bench/apps/posawesome
+git rev-parse --short HEAD          # aea4114c
+git fetch upstream
+git merge --ff-only 674d936a
+git rev-parse --short HEAD          # 674d936a
+```
+(`git pull` would also bring 3bc57258.) After linking Sales Persons:
+`posa-fill-sales-person` dry run and real run, then `posa-refresh-sales-credit`
+dry run and real run (section 97 step 10).
+
+**Production deploy, part B: `674d936a` -> `3bc57258`** (this section, 1-2
+days later; site `site1.local`):
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `674d936a`.
+2. `bench --site site1.local backup`
+3. Checks: the receipt format includes the voucher template, and nothing
+   else already uses the new Jinja name -- 1 and nothing:
+   `bench --site site1.local mariadb -e "SELECT html LIKE '%credit_note_voucher.html%' FROM \`tabPrint Format\` WHERE name='Swan Sales Invoice';"`
+   `grep -rn "is_bearer_credit_note" ~/frappe-bench/apps/*/*/hooks.py`
+4. `git fetch upstream && git merge --ff-only 3bc57258` -> `git rev-parse --short HEAD` = `3bc57258`.
+5. No migrate (no doctype, field, fixture or print format record changed).
+6. `cd ~/frappe-bench && bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`
+   (the new Jinja method needs the restart).
+8. `echo 'print("posawesome.posawesome.api.credit_voucher.is_bearer_credit_note" in frappe.get_hooks("jinja")["methods"]); from posawesome.posawesome.api.credit_voucher import bearer_voucher_for; print("ok")' | bench --site site1.local console`
+   -> `True` and `ok`.
+9. Checks at one store: the button under the customer box reads
+   "Anonymous customer". Anonymous sale -> Sales Return -> scan the receipt
+   -> customer locked with the note -> Exchange: the voucher prints ("works
+   like cash") and the new sale uses it; or Credit Note Issue, then on a new
+   sale "Use Customer Balance" with Anonymous alone gives nothing and
+   scanning the voucher gives its amount. Return Without Invoice with
+   Anonymous is refused. A named customer's return and exchange work as
+   before.
+Rollback: `git checkout 674d936a`, `bench build --app posawesome`,
+clear-cache, restart. Bearer credit issued meanwhile stays on Anonymous;
+the old code can't spend it (generic-customer credit refused) until this
+change is back.
+
+## 99. Tick-to-return (2026-11-14, `2f7c1bf4` on `develop-swan`, `7519cb16` on `stable`)
+
+**Request.** A scanned receipt loaded every line into the return cart and
+staff deleted what wasn't returned -- easy to return too much. Now: nothing
+selected; staff tick the lines being returned (ticking = qty 1) and set each
+quantity, never above what is still returnable; original price and discount
+kept. One-line receipt with 1 left: straight to the cart. One line with 2+:
+the step, pre-ticked at the full quantity. Nothing ticked: "Select at least
+one item to return". Named and Anonymous returns, exchanges, Invoice
+Management.
+
+**Built.** `utils/returnItemSelection.ts` (initialReturnPicks, setPicked,
+setPickedQty, pickedReturnLines, linesWithoutPicking, buildPickedReturnTotal);
+`components/pos/flows/ReturnItemsPicker.vue` ("Choose items to return": tick,
+-/qty/+, Returnable, price, line amount, Select all, summary, error); Returns.vue
+(`submit_dialog` -> picker -> `load_picked_return`) and InvoiceManagement.vue
+(`createReturn` -> picker -> `loadPickedReturn`) build the return from the
+picked lines only, with amounts for the picked quantity and the grand total
+in proportion. A step before the cart, so the cart table, its keyboard grid
+and totals are unchanged; staff can still edit lines in the cart. Server:
+`creation._drop_unpicked_return_lines` in `submit_invoice` drops return lines
+at qty 0 and refuses a return whose lines are all 0 (no lines at all is left
+to ERPNext's own check). 12 Arabic rows.
+
+**Verified on staging** (headless Chromium, throwaway cashier): Anonymous
+one-line qty 2 (00389) -> pre-ticked 2, typing 5 kept 2, returned 1 (00390)
+-> Exchange used bearer voucher C26-00390-A6SX (00391); scanning 00389 again
+(1 left) -> straight to the cart; named 3-line 00388 -> picked the handbag
+only (00392) -> Exchange with same-shift credit (00393), no lock note;
+Invoice Management return of 00388 -> only the 2 lines still returnable,
+empty selection refused, belt only (00394). Offline: loading a receipt needs
+the server, and a linked return can't be finished offline -- the till's
+return check (`invoice_utils/validation.ts`) fetches the original from the
+server at PAY; existing behaviour, unchanged.
+
+**Regression check.** Frontend 291/291 files, 1846/1846 (mutations: picker
+starting ticked, skip at 2, Returns loading every line -- each caught).
+Backend in isolation: `test_return_line_picking` 5 (mutation: no drop --
+caught), `test_credit_voucher` 63, `test_return_generic_customer_credit_guard`
+9, `test_sales_credit` 51, `test_sales_by_cashier` 24,
+`test_staff_sales_performance` 16, `test_payments` 12, `test_offline_sync_invoices`
+4, `test_invoice_reporting_fields` 35, `test_customer_credit_invoice_fields` 2,
+`test_print_barcode` 4, `test_api_imports` 4, `test_pos_access` 12,
+`test_submitted_invoice_edit_customer` 9, `invoice_processing.test_utils` 12
+and `.test_payment` 4, closing `test_same_shift_exchange` 5,
+`test_sales_breakdown` 6, `test_z_report` 3, `test_z_report_vat` 8;
+`test_creation` the same 8 errors as before. `bench build` exit 0. No migrate.
+System Settings restored 3/3, Asia/Muscat.
+
+**Production deploy: sections 95-99 together** (site `site1.local`; `stable`
+`aea4114c` -> `7519cb16`; replaces the separate steps of sections 96, 97, 98).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `aea4114c`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- section 96 step 3 (every query no rows, commands print
+   nothing), plus:
+   ```
+   cd ~/frappe-bench
+   bench --help 2>/dev/null | grep -iE "fill-sales-person"
+   grep -rn "is_bearer_credit_note" apps/*/*/hooks.py
+   bench --site site1.local mariadb -e "SELECT html LIKE '%credit_note_voucher.html%' FROM \`tabPrint Format\` WHERE name='Swan Sales Invoice';"
+   ```
+   -> nothing, nothing, `1`.
+4. `cd apps/posawesome && git fetch upstream && git merge --ff-only 7519cb16`
+   -> `git rev-parse --short HEAD` = `7519cb16`.
+5. `bench --site site1.local migrate` -- exit 0 (3 fields and the Staff Sales
+   Performance report from sections 95-96; nothing new after that).
+6. `bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Checks: section 96 step 8 (fields, hooks, report), plus
+   ```
+   bench --help 2>/dev/null | grep -iE "fill-sales-person|refresh-sales-credit"
+   echo 'print("posawesome.posawesome.api.credit_voucher.is_bearer_credit_note" in frappe.get_hooks("jinja")["methods"]); from posawesome.posawesome.api.invoice_processing import creation as c; from posawesome.posawesome.api import sales_credit as s; print(c.apply_pos_sales_team is s.apply_pos_sales_team, hasattr(c, "_drop_unpicked_return_lines"))' | bench --site site1.local console
+   ```
+   -> both commands; `True` then `True True`.
+9. `bench --site site1.local posa-refresh-sales-credit --dry-run`, then the
+   real run, then once more -> 0 changed (section 96 step 9).
+10. Till checks: section 96 step 10, section 98 step 9 (Anonymous return by
+    receipt scan -> voucher -> Exchange; Return Without Invoice to Anonymous
+    refused; button "Anonymous customer"), and tick-to-return: a receipt with
+    several lines opens "Choose items to return" with nothing ticked; Return
+    selected with nothing ticked is refused; ticking one line returns only
+    that line at its original price; a one-line receipt with 1 goes straight
+    to the cart.
+11. After linking Sales Persons: `posa-fill-sales-person --dry-run`, real run;
+    then `posa-refresh-sales-credit --dry-run`, real run; each once more -> 0
+    changed (section 97 step 10).
+Rollback: to before tick-to-return `git checkout 3bc57258`; before the voucher
+`674d936a` (then bearer credit issued meanwhile can't be spent); everything
+`aea4114c` (also delete the Report "Staff Sales Performance"; the 3 fields
+stay). Each time `bench build --app posawesome`, clear-cache, restart.
+
+## 100. Invoice number per store (2026-11-14, `a10cf73c` on `develop-swan`, `6b09656b` on `stable`)
+
+**Request.** One company-wide series (ACC-SINV-2026-xxxxx) -> a series per
+store, set in Desk without code, returns in their own series; old invoices,
+credit notes and vouchers keep their numbers and keep working. Production
+switches on 1 January 2027; every POS Profile stays blank until then.
+
+**Built.** `api/invoice_naming.py`: POS Profile `posa_invoice_naming_series`
+(Select, "Sales and Return Controls" after Walk-in Customer; choices loaded by
+`pos_profile.js` from Sales Invoice's series list). Sales Invoice
+`before_naming` sets `naming_series` from the invoice's POS Profile, ignoring
+the till (Frappe skips the Select check for `naming_series`, so before this a
+till could send any series): sale `MCO-.YYYY.-`, return `MCO-CN-.YYYY.-`;
+blank -> `ACC-SINV-.YYYY.-`; no POS Profile (Desk) -> untouched; an amendment
+keeps the original's series (Frappe names it `<original>-N`). POS Profile
+`validate` refuses a series that isn't capital letters + `-.YYYY.-`, has a
+`CN` part, is longer than 4 characters, is ACC-SINV, or whose sales or `-CN`
+line isn't listed in Document Naming Settings. Document Naming Rule was not
+used: one counter forever (no yearly restart) and a misleading Series field.
+- Voucher: a credit note in a store series carries the prefix,
+  MCO-CN-2026-00001 -> `C26MCO00001xxxx`, printed `C26-MCO-00001-xxxx`; the
+  default series keeps the old form (old codes byte-identical). Lookup
+  narrows by `%-CN-20yy-n` and verifies the whole code.
+- Lost-voucher lookup by return number (`find_return_by_number`) is limited to
+  the authorized POS Profile (full name and number part).
+- Receipt barcode (`invoice_scan_code`): store names whole; ACC-SINV keeps the
+  number part. Returns search: a number-only scan (`\d{4}-\d+(-\d+)?`) opens
+  the exact `ACC-SINV-<number>` sale when it exists, else the normal LIKE.
+- Barcode length, measured (Chromium render, thresholded to dots, zxing) on
+  the 64 mm barcode: 16 characters / 231 modules decoded at 171, 180 and 203
+  dpi; 18 (253) failed at 171; 19 (264, full ACC-SINV name) failed at 171 and
+  180. Hence the 4-character prefix: names 15, vouchers 16; 3 letters keeps
+  an amendment (-1) at 16 too.
+
+**Verified on staging.** Rolled-back run: series added, picked on Test Pos ->
+sale ZQT-2026-00001 and return ZQT-CN-2026-00001 with the till sending
+`HACK-.YYYY.-`; voucher C26-ZQT-00001-26D9; `test 222` (blank) -> ACC-SINV;
+amendment of ACC-SINV-2026-00399 -> `-1`, ACC-SINV series; a CN series
+refused on the profile; nothing left behind (ACC-SINV counter 399). User then
+set it up in Desk and tested: all good.
+
+**Regression check.** Frontend 291/291 files, 1846/1846. Backend in
+isolation: `test_invoice_naming` 26 (incl. real `set_new_name`, rolled back),
+`test_credit_voucher` 63, `test_print_barcode` 4, `test_payments` 12,
+`test_stored_value` 2, `test_sales_credit` 51, `test_pos_awesome_branding` 3,
+`test_invoice_reporting_fields` 35, `test_customer_credit_invoice_fields` 2,
+`invoice_processing.test_utils` 12 and `.test_payment` 4; `test_invoices`,
+`test_submitted_invoice_shift_security`, `test_invoice_cancel_hooks`,
+`test_creation` fail identically with the change stashed (pre-existing).
+`bench build` exit 0. Migrate exit 0 twice, field position stable. System
+Settings 3/3, Asia/Muscat.
+
+**Production deploy: sections 95-100 together** (site `site1.local`; `stable`
+`aea4114c` -> `6b09656b`; replaces section 99's plan).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `aea4114c`.
+2. `bench --site site1.local backup --with-files`
+3. Name checks -- section 99 step 3 (section 96 step 3 + three more), plus:
+   ```
+   cd ~/frappe-bench
+   bench --site site1.local mariadb -e "
+   SELECT name FROM \`tabCustom Field\` WHERE name='POS Profile-posa_invoice_naming_series' OR (dt='POS Profile' AND fieldname='posa_invoice_naming_series');
+   SHOW COLUMNS FROM \`tabPOS Profile\` LIKE 'posa_invoice_naming_series';
+   SELECT name FROM \`tabDocument Naming Rule\` WHERE document_type='Sales Invoice' AND disabled=0;
+   SELECT name FROM \`tabServer Script\` WHERE reference_doctype='Sales Invoice' AND doctype_event='Before Insert' AND disabled=0;"
+   grep -rn "before_naming" apps/*/*/hooks.py
+   bench --site site1.local mariadb -e "SELECT naming_series, is_return, COUNT(*) FROM \`tabSales Invoice\` GROUP BY 1,2;"
+   ```
+   -> no rows, nothing; last query: only `ACC-SINV-.YYYY.-` (anything else:
+   stop and check before 1 January -- old receipts are scanned by number only
+   for ACC-SINV).
+4. `cd apps/posawesome && git fetch upstream && git merge --ff-only 6b09656b`
+   -> `git rev-parse --short HEAD` = `6b09656b`.
+5. `bench --site site1.local migrate` -- exit 0 (3 fields and the report from
+   95-96, the POS Profile field from 100).
+6. `bench build --app posawesome` -- exit 0.
+7. `bench --site site1.local clear-cache`, then `sudo supervisorctl restart all`.
+8. Checks: section 99 step 8, plus
+   ```
+   echo 'h=frappe.get_hooks("doc_events"); print(h["Sales Invoice"]["before_naming"], h["POS Profile"]["validate"]); print(frappe.get_meta("POS Profile").get_field("posa_invoice_naming_series").insert_after, frappe.db.sql("SELECT COUNT(*) FROM `tabPOS Profile` WHERE IFNULL(posa_invoice_naming_series,\"\")!=\"\"")[0][0]); from posawesome.posawesome.api.credit_voucher import credit_voucher_code as v; print(v("ACC-SINV-2026-00247")[:8])' | bench --site site1.local console
+   ```
+   -> `[...set_invoice_naming_series] [...validate_pos_profile]`, then
+   `posa_walkin_customer 0`, then `C2600247`.
+9. `bench --site site1.local posa-refresh-sales-credit --dry-run`, then the
+   real run, then once more -> 0 changed (section 96 step 9).
+10. Till checks: section 99 step 10, plus: a new sale is still the next
+    `ACC-SINV-2026-` number; scanning its receipt on Returns opens it; a
+    no-refund return's voucher reads `C26-<number>-xxxx` and works.
+11. After linking Sales Persons: section 99 step 11.
+**1 January 2027** (before the first sale; System Manager): Document Naming
+Settings -> Sales Invoice -> keep `ACC-SINV-.YYYY.-` first, add `<P>-.YYYY.-`
+and `<P>-CN-.YYYY.-` per store -> Update Series List; each POS Profile ->
+More Info -> Sales and Return Controls -> Invoice Naming Series -> Save.
+First sale -> `<P>-2027-00001`.
+Rollback: before store numbering `git checkout 7519cb16` (the field stays,
+harmless while blank; after 1 January blank every profile first -- vouchers
+already issued with a store prefix would no longer be found); further back as
+section 99. Each time `bench build --app posawesome`, clear-cache, restart.
+
+## 101. Receipt: tax titles, legal name and VAT No., exact exchange receipt; receipt moved into git (2026-11-14, `b1eeb622` on `develop-swan`, `07e088f4` on `stable`)
+
+**Request.** Keep today's "Swan Sales Invoice" design; add the legal name and
+VAT number, tax titles, a clear exchange receipt, a few fixes, slightly
+smaller type and side margins. Mock-ups went through three versions (two
+redesigns rejected: "keep today's receipt"); version 3 approved, then the
+additions below. Tested by the user on staging (Epson and Bixolon).
+
+**Where the receipt lives now.** `templates/print/swan_receipt.html` (git),
+next to `credit_note_voucher.html`. The "Swan Sales Invoice" record keeps its
+name (POS Profiles unchanged), stays non-standard (migrate never touches it)
+and holds only the switch voucher/receipt (`receipt_record.SWITCH_HTML`).
+`receipt_record.switch_swan_receipt(expected_md5)` refuses unless the
+record's HTML has the expected MD5 (same value as MySQL `MD5(html)`), backs
+the record up to `sites/<site>/private/backups/` first, and is a no-op when
+already switched; `restore_swan_receipt(backup_path)` puts it back. Old HTML
+kept in `templates/print/archive/` (staging `ad71c927…`, production
+`f8075c1d…`).
+
+**Production differed from staging** (CRLF line endings stored in the DB,
+plus four edits made there by hand): no store-name line, no "Return/Exchange
+valid until" under the barcode, "Credit Valid Until" (posting + 3 months) on a
+return with unused credit, two PDF-height tweaks. All folded in (the date via
+`credit_voucher_valid_until`, same rule); store name left out by decision;
+the exchange date put back on one line, "Exchange until dd-mm-yyyy ·
+الاستبدال حتى" (11 px bold; v3's wording needed 351 px of 268).
+
+**Receipt changes.**
+- Below the store details (12 px): SWAN INTERNATIONAL S.P.C / البجعة الدولية
+  ش ش و (as on the VAT certificate) and "VAT No: <Company Tax ID>" (hidden
+  when empty). CR number stays typed.
+- Title: "Simplified Tax Invoice / فاتورة ضريبية مبسطة" on sales, "Tax Credit
+  Note / إشعار دائن ضريبي" on returns (voucher: small line under its title).
+- Tax table first column always "VAT" (was the tax row description).
+- Time with two-digit hours ("3:41:" before 10:00 -> "03:41").
+- Card refund: section "Refund", "Refunded · Visa X"; "Store Credit Issued"
+  and the 3-month text only for the part kept as credit; the original invoice
+  number and date under the top table.
+- "Remaining Credit" removed: it printed
+  `posa_remaining_customer_credit_balance`, for Anonymous the pooled credit of
+  every anonymous return (staging 409.150). Leftover credit only on the
+  BALANCE voucher.
+- Exchange, found exactly: Jinja method
+  `credit_voucher.exchange_credit_sources(sale)` reads the credit redemption
+  Journal Entries (return -> sale, parameterized SQL) and keeps returns posted
+  in the sale's own shift; the rest of the redeemed credit is "Credit Applied".
+  Replaces "any return of this customer in the shift"
+  (`get_customers_with_same_shift_return`, still used by the Z Report and
+  Overview, unchanged). Layout: EXCHANGE heading, RETURNED ITEMS (return no.,
+  original receipt, minus amounts at the price paid), NEW ITEMS, big total =
+  difference paid, tax table with a "VAT returned" row, Summary (Returned
+  total, New items total, Difference paid, payment method), BALANCE pointer
+  without amount.
+- Type about 1 px smaller, divider gaps 18 -> 12 px; 2.5 mm side padding
+  inside the 76 mm page (QZ printable-width fit unchanged; the 64 x 14 mm
+  barcode measured 6 mm from each edge, as before). Logo call tolerates a
+  missing POS Profile.
+
+**Voucher changes** (`credit_note_voucher.html`, also the BALANCE voucher):
+legal name, VAT No., "Tax Credit Note", rows Return No. · رقم المرتجع,
+Original invoice · الفاتورة الأصلية (number and date), Voucher code · رمز
+القسيمة (label left with Arabic under it, value right -- the old 3-column
+rows broke long numbers letter by letter), VAT line from the return's tax
+rows, Arabic "used … on sale …" in three isolated lines (`<bdi>`), time fix,
+same small type/gap step and margins. The Desk PDF of a voucher has a blank
+second page -- also before this change (checked on the old template).
+
+**Lengths (Epson, Chromium measurement).** Sale 2 items 360 -> 312 mm,
+4 items 397 -> 343, card refund 374 -> ~300, voucher 300 -> ~324, exchange
+367 -> ~407 (now lists the returned items).
+
+**Checks.** vitest 292/292 files, 1858/1858 (Node 24). Backend in isolation:
+`test_swan_receipt` 15 (new; mutation-checked: putting back the old tax label
+and refund wording fails 5), `test_credit_voucher` 67, `test_print_barcode`
+4, `test_print_assets` 4, `test_invoice_naming` 26; `test_credit_exchange`
+crashes in ERPNext's test bootstrap (duplicate "Standard Buying") identically
+with the change stashed. `bench build`: N/A (no frontend file). Migrate exit
+0; record still the switch afterwards. Real print path
+(`get_html_and_style`) and Desk PDF checked for every type. System Settings
+restored to 3/3, Asia/Muscat. Offline receipts use their own template
+(`offline_print_template`) and are unchanged.
+
+**Production deploy** (site `site1.local`; `stable` `8afc7177` -> `07e088f4`).
+1. `cd ~/frappe-bench/apps/posawesome && git rev-parse --short HEAD` -> `8afc7177`.
+2. `bench --site site1.local backup`
+3. Checksum (expect `f8075c1d7b77a7f33d9948940f1ec6c1`; anything else: stop,
+   someone edited the record -- compare with the archived copy first):
+   `bench --site site1.local mariadb -N -e "SELECT MD5(html) FROM \`tabPrint Format\` WHERE name='Swan Sales Invoice'"`
+   and `SELECT tax_id FROM tabCompany` shows `OM1100066692` for the company.
+4. `git fetch upstream && git merge --ff-only 07e088f4` -> `git rev-parse --short HEAD` = `07e088f4`.
+5. `bench --site site1.local clear-cache` (new Jinja method), then
+   `sudo supervisorctl restart all`. No migrate or build needed.
+6. Switch:
+   `bench --site site1.local execute posawesome.posawesome.api.receipt_record.switch_swan_receipt --kwargs "{'expected_md5': 'f8075c1d7b77a7f33d9948940f1ec6c1'}"`
+   -> "Switched. Backup: <path>" (keep the path).
+7. Test prints as on staging: sale (scan its barcode on Returns), card refund,
+   voucher (scan at Payments), exchange, BALANCE voucher; Epson and Bixolon.
+Rollback: `... receipt_record.restore_swan_receipt --kwargs "{'backup_path': '<path from step 6>'}"`
+(the old HTML works with the new code too); code: `git checkout 8afc7177`,
+clear-cache, restart.
+
+## 102. Return confirmation and the exchange voucher safety net (2026-11-14, `65c81f92` on `develop-swan`, `bcae9fec` on `stable`)
+
+**Why.** A cashier clicked "Exchange: continue to new sale" on a return the
+customer never asked for, not knowing it submits the return. Production
+ACC-SINV-2026-01500 was left with unused credit and no new sale (the user is
+correcting it with a matching sale; its shift was closed). The one-screen
+exchange is too big for now; this is the small fix (approved: 1, 2 and 3).
+
+**Built (frontend only).**
+1. Footer buttons for a no-money return: "Submit return → Exchange" (Ctrl/⌘+
+   Enter label kept) and "Submit return → Credit note".
+2. `resolveReturnSubmit` now always returns `{action: "ask", intent}` for a
+   no-money return: the button's intent, Exchange for a plain submit key,
+   `null` (both options) for a print key. `ReturnIntentDialog` became the
+   confirmation "Submit this return?": items going back to stock (returned
+   quantity), "<credit> becomes store credit for <customer>." (credit =
+   |grand_total|, `returnConfirmFigures`), "This can't be undone at the till.",
+   "Then: start the customer's new sale" / "Then: print the credit note
+   voucher"; **Back** focused (Escape = Back). Refunds and sales unchanged.
+3. Safety net. `customersStore.pendingExchange` {returnName, doctype,
+   customer, customerName, credit} is set when a return is submitted as an
+   exchange (`usePaymentSubmission`, with `armExchangeCredit`). It is settled
+   by the next sale for that customer if it used credit; otherwise
+   `abandonPendingExchange()` opens `exchangePrompt`: the sale submitted
+   without credit (checked before the post-submit customer reset), another
+   customer chosen (`setSelectedCustomer`), Cancel Sale (`cancel_invoice`,
+   before the cart/customer reset), Back to Desk (`Navbar.goDesk`, carries on
+   leaving when the prompt closes). `ExchangeCreditPrompt.vue` (mounted once
+   in `DefaultLayout`): "Print the credit note voucher?" -- return number,
+   customer, unused credit; Print (focused) prints the return through the same
+   path as "Submit return → Credit note" (`usePaymentPrinting.loadPrintPage`,
+   no reprint settings: first print, not DUPLICATE); Not now / Escape skip; a
+   failed print says to reprint from Invoice Management. In memory only: a
+   page reload forgets a pending exchange.
+Arabic for all 15 new strings (`ar.csv`).
+
+**Browser check (staging, headless Chromium, throwaway PIN cashier, then
+disabled).** Return of one item of MCO-2026-00001: footer labels; the
+Exchange button, Ctrl+X and Alt+P each opened the confirmation (Alt+P with
+both options), Back focused; Enter on it and Escape closed it with nothing
+submitted (0 returns). Submitted as exchange (MCO-CN-2026-00003, credit
+43.470) -> Cancel Sale -> prompt with the right text, Print focused -> Print
+requested `get_html_and_style` for MCO-CN-2026-00003 (no QZ here: the
+existing browser-print fallback question) and closed. Second exchange
+(MCO-CN-2026-00004, 96.600) -> Back to Desk -> prompt -> Not now -> left for
+the Desk. Both test returns cancelled afterwards. Customer-change trigger
+covered by tests, not clicked through.
+
+**Checks.** vitest 294/294 files, 1880/1880 (Node 24): `returnIntent` 17,
+`exchangeCreditSafetyNet` 11 (store, prompt, wiring), `returnConfirmArabic`
+1, `usePaymentSubmission` 60 (+5: pending set, settled, abandoned before the
+reset), `backToDesk` 12 (+1); removing the customer-change trigger or the
+sale-submit trigger fails a test (checked). Backend: N/A, no Python changed.
+`bench build --app posawesome` exit 0. Migrate: N/A. Security: no new server
+call; the prompt prints with Frappe's permission-checked
+`get_html_and_style`; all text through `{{ }}` (no `v-html`).
+
+**Production deploy** (after section 101's; `stable` `07e088f4` -> `bcae9fec`).
+1. `git fetch upstream && git merge --ff-only bcae9fec`
+2. `bench build --app posawesome` (exit 0), `bench --site site1.local clear-cache`,
+   `sudo supervisorctl restart all`. No migrate.
+3. Tills hard-refresh (Ctrl+Shift+R).
+4. Check: a no-refund return -> "Submit return → Exchange" -> confirmation ->
+   Back (nothing submitted); then Exchange -> Cancel Sale -> "Print the credit
+   note voucher?" -> Print.
+Rollback: `git checkout 07e088f4`, build, clear-cache, restart.
+
+## 103. One-screen Return / Exchange (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** One cart holds the RETURN lines from one receipt and the new
+items; the return and the new sale are saved together or not at all. Behind
+the POS Profile tick box **"One-screen exchange"** (`posa_one_screen_exchange`,
+"Sales and Return Controls", off by default; to be switched on one store at a
+time). Off: today's flow (section 102) is unchanged. Online only. Later, not
+now: a return reason per line, gift receipt, several receipts per exchange.
+
+**Starting.** A receipt barcode scanned or typed in the item box (Classic
+search box, counter-grid entry row, or any hardware scan:
+`useScannerInput` -> `exchangeScanRoute`), or a receipt chosen in the
+"Return / Exchange" button's search (renamed from "Sales Return" / "Return"),
+opens **"Items on receipt"** (`ExchangePicker.vue`). Both orders work: with
+new items already in the cart the till asks "Add a return from this
+receipt?" (and "The customer changes to X." when it does). The same receipt
+again reopens the picker; another receipt: "One receipt per exchange...".
+No exchange without a receipt (Return Without Invoice unchanged).
+
+**Picker.** Every line; greyed with the reason when nothing is left
+("returned 1 on 17 Nov", "0 left"); "returnable until <date>" in the header;
+nothing ticked (a one-line receipt with 1 left comes ticked, as today);
+clicking anywhere on a row ticks/unticks it; scanning an item's barcode
+ticks one more of it (never above what is left), "This item isn't on this
+receipt" otherwise. While the picker is open every scan goes to it, never to
+the cart. Receipt messages (same rules as today's returns): "Return period
+ended on <date>", "This receipt was cancelled", "This is a return receipt,
+not a sale"; another store of the same company is allowed (today's rule);
+another company is "not found".
+
+**Cart.** RETURN rows sit in the cart's own columns (body.prepend slot of the
+items table, `ExchangeReturnRows.vue`): RETURN tag, receipt number under the
+name, pink row, -1 with -/+ in QTY, Orig. Price / Disc % / Disc Amt / Rate
+as grey plain text ("Price and discount from the receipt" on hover; never
+editable, no discount dialog), red amount, delete icon, no chart icon. They
+are not cart items (no pricing rules, offers or stock checks touch them). A
+receipt with an invoice-level discount shows "Invoice discount on the
+receipt: -X (included in Returned)". New items work as today. The customer
+box is locked ("Exchange for receipt X — the customer stays Y.") and the
+Walk-in button is hidden whenever the customer box is locked (exchange and
+Anonymous voucher). Save & Clear, Drafts, Print Draft hidden; Alt+S refused
+("No hold or draft during an exchange..."). Ctrl/⌘+Enter = main button;
+Esc = "Discard? Nothing saved."; Cancel Sale also discards.
+
+**Totals (approved wording).** Classic hero / counter-grid metrics:
+"Customer pays X" (button "Pay X"), "Credit note issued X" (named and
+Anonymous; button "Submit exchange"), "Even exchange" (no amount; button
+"Submit exchange"), plain return "Credit note issued X" (button "Submit
+return → Credit note"); under it "Returned −X · New items Y · 1 back · 1 new".
+Customer pays more -> Payments: locked row "Exchange credit · return of
+<receipt> −X", only Cash/Card (Visa, Master Card, Maal); store credit,
+vouchers, gift card, loyalty, credit change and credit sale hidden; buttons
+"Submit exchange" / "Submit exchange & Print" save directly (no
+confirmation; "Saving…", a second press ignored). Credit left / even / plain
+return: one confirmation from the cart with Back focused ("Submit this
+exchange? 1 back (X), 1 new (Y), customer pays Z / credit note issued Z /
+even exchange." — "Submit this return?" for a plain return); the dialog
+stays open as "Saving…" until saved, and these always print.
+
+**Server (`api/one_screen_exchange.py`).**
+- `submit_exchange`: the return and the sale through the normal
+  `submit_invoice`, one after the other, in one savepoint; any error rolls
+  everything back (both invoices, credit Journal Entry, stock, GL, loyalty,
+  submission ledger). Nothing is queued: background submission and the
+  background credit Journal Entry are off for this request
+  (`creation._in_atomic_exchange`); the ledger does not retry after a
+  deadlock (it has already undone the return). One exchange id from the
+  till; the return is submitted as "<id>:return", the sale as "<id>:sale"
+  (a retry replays both). The original receipt row is locked FOR UPDATE.
+- The till sends only which receipt lines and how many; `_build_return`
+  takes price, discount, discount reason and the invoice-discount share
+  (prorated as the Returns screen does) from the original lines and refuses
+  more than is left or a line from another receipt.
+- The sale is paid with the credit of the return just created: the server
+  builds that credit row itself; `credit_voucher._authorize_exchange_credit`
+  authorizes only that return (request-local flag set by the server, never
+  from the request), "<return>: exchange" in Credit Authorized By (bearer
+  Anonymous returns included). Client credit rows are replaced; gift card,
+  credit change, credit sale, loyalty and non Cash/Bank payments refused.
+- The figures the cashier saw (returned, new items total, pay) must match the
+  server's to the baisa, the credit Journal Entry must be posted in full and
+  the sale fully paid, or nothing is saved ("Totals changed: ...").
+- `quote_exchange`: builds both drafts through `update_invoice` inside a
+  savepoint that is always rolled back, and drops the "document changed"
+  notifications they queued -- the till's figures are the server's. The cart
+  checks itself in the background 0.4 s after its last change (each change
+  restarts the wait; no call when nothing that decides the figures changed);
+  Payments needs no check (its figures are already the server's).
+- `get_exchange_receipt`: the picker's receipt (lines sold / returned with
+  dates / left, barcodes, reasons). `discard_exchange_draft`: a discarded
+  exchange deletes only its own unsubmitted sale draft (the sale draft saved
+  by Pay carries "<id>:sale"; the key is unique), whatever the profile's
+  "Auto Delete Draft Invoice" setting -- never another draft, a submitted
+  invoice or a return.
+- Credit left over stays on the return (section 87): the receipt prints,
+  then the BALANCE voucher (existing record + print). Plain return: the
+  credit note voucher. Printing: always the exchange receipt (section 101's
+  template) for an exchange.
+- Item 10: a fully used credit note's reprint shows under the USED banner
+  "Used in exchange <sale>" / "استُخدمت في الاستبدال" (Jinja method
+  `credit_note_used_in_exchange`, sales that used it in the credit note's own
+  shift).
+
+**Live checks (staging, headless Chromium, throwaway PIN cashier, disabled
+after).** Pays more MCO-CN-2026-00007 / MCO-2026-00010 (80.850 credit +
+28.650 Visa) and MCO-CN-2026-00015 / MCO-2026-00024; even MCO-CN-2026-00008 /
+MCO-2026-00011 (Ctrl+Enter); credit left MCO-CN-2026-00009 / MCO-2026-00012
+(30.450 left, BALANCE voucher printed and recorded); plain return
+MCO-CN-2026-00010. Exchange receipt of MCO-2026-00010 shows RETURNED / NEW
+ITEMS / VAT returned / Difference paid. Click -> confirmation: payment screen
+1.1-1.2 s -> ~0.2 s (now no confirmation there at all), cart 0.36 s. Pay ->
+Cancel Payment -> Esc -> Discard deleted the draft MCO-2026-00025. Six test
+drafts (MCO-2026-00013, 00019-00023) deleted on request. Test Pos has the
+tick box ON on staging.
+
+**Invoice Management today (question, nothing changed).** Returns: status
+"Return" + orange "Credit Note" badge; Returns tab "Against" = original.
+Originals after a return: "Paid" or "Credit Note Issued" (unreliable --
+ERPNext refreshes the original's status only sometimes; 49 "Paid", 28 "Credit
+Note Issued" on staging). Exchange sale: "Paid" + blue "Exchange" badge
+(same customer had a return in the shift -- a guess, not a link). Next job:
+consistent labels, a real return <-> sale link, reliable original status.
+
+**"Auto Delete Draft Invoice" (question).** At Closing Shift submit it deletes
+every unprinted draft of that opening shift (any PIN cashier); printed drafts
+are submitted instead; the same setting lets Cancel Sale delete the cart's
+draft. Deletes with normal permissions: needs Delete on Sales Invoice
+(staging: only Accounts Manager). Store logins without it would fail the close
+if it were on. Off on both staging profiles; check production's roles.
+
+**Checks.** Frontend 295/295 files, 1924/1924 (Node 24) -- includes
+`oneScreenExchange.spec.ts`; `walkinCustomerButton.spec.ts` updated for the
+lock rule. Backend in isolation: `test_one_screen_exchange` 39,
+`test_one_screen_exchange_db` 30 (real invoices: failure at each step leaves
+nothing, VAT, baisa, Anonymous, replay, background setting ignored, prices
+from the receipt, receipts for the picker, quote = submit, discard scope),
+`test_credit_voucher` 69, `test_return_generic_customer_credit_guard` 9,
+`test_payments` 12, `test_swan_receipt` 15, `test_return_line_picking` 5,
+`test_sales_credit` 51, `test_sales_by_cashier` 24,
+`test_staff_sales_performance` 16, `test_invoice_reporting_fields` 35,
+`test_customer_credit_invoice_fields` 2, `test_offline_sync_invoices` 4,
+`test_print_barcode` 4, `test_api_imports` 4, `test_pos_access` 12,
+`test_stored_value` 2, `test_gift_cards` 14, `test_customer` 12,
+`test_customers` 4, `test_submitted_invoice_edit_customer` 9,
+`invoice_processing.test_utils` 12 / `.test_payment` 4, closing
+`test_same_shift_exchange` 5, `test_z_report` 3, `test_z_report_vat` 8,
+`test_z_report_layout` 6, `test_sales_breakdown` 6, `test_overview_loyalty`
+4, `test_closing_variance` 12; `test_creation` the same 8 pre-existing errors
+(identical with the change stashed); `test_submitted_invoice_edits_credit_badge`
+and `test_pos_invoice_submission_ledger` can't start on staging (duplicate
+"Standard Buying" price list), as before. Breakage checks: removing the
+rollback, the synchronous credit entry, the exchange authorisation, the
+confirmation, the picker scan route, the 0.4 s wait or the draft filter each
+fails a test. `bench build` exit 0. Migrate twice exit 0; the field stays
+after `posa_sales_by_cashier_hidden`; fixture diff purely additive (54 lines,
+hand-added). System Settings restored 3/3, Asia/Muscat.
+
+**Production deploy (later, with stable; not done).**
+1. Backup. Name check: `SELECT name FROM \`tabCustom Field\` WHERE
+   name='POS Profile-posa_one_screen_exchange'` -> none;
+   `grep -rn credit_note_used_in_exchange apps/*/*/hooks.py` -> none.
+2. Merge, `bench --site site1.local migrate` (the new field), `bench build
+   --app posawesome`, clear-cache, `sudo supervisorctl restart all` (new Jinja
+   method). Tills hard-refresh.
+3. The tick box stays off everywhere until a store is chosen.
+Rollback: previous commit, build, clear-cache, restart; the field stays (off).
+
+## 104. Credit notes, exchanges and Invoice Management on the real link (2026-11-18, on `develop-swan`, NOT committed)
+
+**Request.** Make credit redeem, Invoice Management and the shift closing
+consistent with the one-screen exchange (section 103): one set of words
+("Credit note", "Credit note issued", "Exchange", "Returned"), the real return
+<-> sale link instead of the "same shift" guess, a customer lock for credit,
+a reliable original-invoice status. Policy: returns are credit-only (no
+"Refunded" label; production has 0 money-refund returns, staging 1 test
+return ACC-SINV-2026-00355).
+
+**The real link (`api/credit_exchange.py`).** `get_credit_links(sales,
+credit_notes)`: the credit redemption Journal Entries (debit row = the
+credit note, credit row = the sale), batched, parameterised; `exchange` =
+both in the same POS Opening Shift. `get_exchange_credit_by_sale`,
+`get_returned_state` (part / whole by item code), `describe_credit` (list
+row fields), whitelisted `get_invoice_credit_details` (one invoice, read
+through `frappe.get_list`, so permissions apply; adds returned qty per line).
+The receipt's `exchange_credit_sources` and the voucher's "Used in exchange"
+use it. Removed: `get_customers_with_same_shift_return` (the guess) and
+`submitted_invoice_edits._apply_credit_exchange_badges`. Staging: 53
+exchanges; the guess had 7 wrong (2 Anonymous), e.g. ACC-SINV-2026-00379.
+
+**Invoice Management.** Badge + link line (`InvoiceCreditTags.vue`,
+`utils/invoiceCreditLabels.ts`) in History list/cards, Returns list (new
+Status column)/cards and the detail popup: "Exchange for return X" /
+"Exchange → X", "Paid with credit note X", "Credit note issued X" / "Y left
+of X" / "Used" (+ "Expired on"), "Returned: part / whole — X"; popup adds
+"Valid until", "Used Y on X" and a Returned qty column; links open the
+linked invoice. Chips with counts: History All / Sales / Exchanges / Paid
+with credit note / Returned; Returns All / Credit notes / Exchanges / Unused
+credit. A money-refund return: no badge, no line. Receipt: "Credit Applied"
+-> "Credit note used إشعار دائن مستخدم".
+
+**Customer lock.** While a named customer's credit is on the sale (scanned
+voucher or "Use Customer Balance"), the customer box is locked and Walk-in
+hidden ("Paid with credit note X — the customer stays Y."); switching
+"Use Customer Balance" off drops every scanned voucher and unlocks. Another
+customer's voucher is refused while credit is on. Dialog: "Use credit note
+X? The customer changes to Y." (Use credit note / Cancel). The server
+already refused another customer's credit.
+
+**Original status.** POS shows ERPNext's "Credit Note Issued" on a sale as
+"Paid" + the Returned line; status filter without "Credit Note Issued".
+Hook `invoice.refresh_returned_invoice_status` (Sales Invoice on_submit /
+on_cancel of a return): ERPNext `set_status` on the original, status column
+only, modified untouched. Patch `refresh_returned_invoice_status` (dry run:
+`bench --site <site> execute posawesome.patches.refresh_returned_invoice_status.dry_run`):
+staging 78 originals, 49 "Paid -> Credit Note Issued", applied by migrate.
+
+**Shift closing.** Overview, Z Report and the Closing Shift's field use
+`get_exchange_credit_by_sale` (only credit from same-shift returns).
+Wording: Returned / Returned count / Items returned / CREDIT NOTES / Credit
+notes issued / Credit notes used / ↳ of which in exchanges / Left on credit
+notes / + Credit notes issued / - Credit notes used / Number of returns /
+VAT on returned items; Overview cards and sections the same; Desk labels
+(label only) Credit Notes Issued / Credit Notes Used / Of Which in
+Exchanges. Old Z reprints recalculate (agreed); the stored Desk field stays.
+Staging: 7 of 59 closings reprint a different exchange figure (3 from
+August stored 0 before the field existed; CS-0000010, -13, -49, -51 were
+the guess), e.g. CS-0000049 557.200 -> 139.300; Net Sales, payments,
+takings unchanged.
+
+**Checks.** Vitest 296/296 files, 1937/1937 tests (Node 24). Backend in
+isolation: test_exchange_links_db 10, test_describe_credit 9,
+test_swan_receipt 15, test_credit_voucher 69, test_one_screen_exchange 39,
+test_one_screen_exchange_db 30, edit_supervisor 13, edit_customer 9,
+generic_customer_credit_guard 9, return_line_picking 5, payments 12,
+customer_credit_invoice_fields 2, gift_cards 14, sales_credit 51,
+offline_sync_invoices 4, invoice_reporting_fields 35, api_imports 4,
+pos_access 12, stored_value 2, customer 12, customers 4, invoice_processing
+test_payment 4 / test_utils 12, all 13 closing modules OK. Same failures
+with the change stashed (pre-existing): test_invoice_cancel_hooks 2 errors,
+test_invoices 1, test_submitted_invoice_shift_security 1, test_creation 8.
+`bench build` exit 0; migrate twice exit 0 (patch once, Z Report md5
+cbf70ac7 both times, labels kept). System Settings restored 3/3 Asia/Muscat.
+Browser (staging): IM chips/links/popup; voucher dialog -> lock -> switch
+off -> unlock. Test draft MCO-2026-00032 (test x) left from opening Payments.
+
+**Production deploy (later).** Before: (1) count of closings whose exchange
+figure changes (console snippet comparing `same_shift_exchange_total` with
+`data.get_same_shift_exchange_total`); (2) patch dry run; (3)
+`SELECT name FROM tabPrint Format WHERE html LIKE '%get_customers_with_same_shift_return%'`
+must be empty (the old receipt record called it; section 101's switch
+removed that). Then migrate (patch, labels, Z Report), build, clear-cache,
+restart.
+
+**Follow-up after the user's testing (same day, not committed).**
+- Label back to "Exchanges Today" (Overview card, Z Report "↳ Exchanges
+  Today" sub-row, Desk label), hint unchanged; Arabic "استبدالات اليوم".
+- Anonymous receipt reached the old return screen: Invoice Management's
+  return action (`createReturn`) never checked "One-screen exchange" (for
+  any customer). It now opens "Items on receipt" like the scan and the
+  Return / Exchange search. Browser: all three entry points x Anonymous
+  (MCO-2026-00027) and named (MCO-2026-00026) open the picker.
+- Old return screen (profiles with one-screen off): "80.850-.ر.ع" came from
+  `InvoiceTotals.vue` passing the currency to formatCurrency inside a field
+  that already has the symbol as prefix (two symbols, laid out right to
+  left); now number only, like the cart. Wording change proposed, not built.
+- The 4 failing modules fail identically at production's bcae9fec.
+- Deleted test drafts MCO-2026-00032 and MCO-CN-2026-00022 (mine).
+- Pre-deploy checks for production are plain SQL (the new code isn't there
+  yet); the closings query gives the same 7 rows on staging as the code.
+
+**Second follow-up (same day, not committed).**
+- Z Report: "↳ Exchanges Today" moved under "Credit notes issued" (as the
+  Overview).
+- Old return screen (one-screen off), built as proposed: "Credit note issued
+  (OMR)" instead of "Remaining Refund" on a credit return; under the
+  credit-only policy one line "The return's value is issued as a credit
+  note." instead of the Store as Credit switch and the policy note; panel
+  "Credit note"; no "Refund" badge on the payment methods. Profiles that
+  allow cash refunds keep the switch and refund wording.
+- Shift Overview cards: Total Invoices icon (`mdi-receipt-text-multiple` is not
+  in the bundled @mdi/font 7.4 -> `mdi-receipt-text-outline`); hints shown in
+  full (wrap; touch tills have no hover), cards in a row keep one height;
+  amounts on one line, the font follows the card width (container units,
+  1.25rem down to 0.8rem), gap 16 -> 12 px. Measured in headless Chromium at
+  1280/1366/1600/1920: no wrap, no overflow, up to "OMR 123,912.450".
+- Fixed: ClosingDialog's translate dropped arguments, so "of which exchanges
+  ({0})" showed "{0}" (pre-existing).
+- Deleted drafts MCO-CN-2026-00021 (user's) and my own test drafts.
+- The 4 old failing test modules: separate cleanup job later.
+
+## 105. Old failing backend test modules fixed (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** Fix the 4 modules that already failed on production's
+`bcae9fec` and the "Standard Buying" crash. Test files only; no app code
+changed. Each failure was an outdated test, not a bug.
+
+- `test_submitted_invoice_shift_security` (1/1): missing fake for
+  `invoice_processing.utils` (imported by `submitted_invoice_edits.py`).
+- `test_invoices` (7/7): fake `creation` lacked
+  `trusted_invoice_shift_reassignment`; the "editable" test now names the
+  supervisor approver (Edit Invoice is supervisor-only since `22e37d32`); new
+  test: no supervisor -> blocked, "Only a POS supervisor".
+- `test_invoice_cancel_hooks` (5/5): fakes for invoice.py's validate-time
+  helpers; cancelled doc has `.get` (on_cancel's status refresh, section 104);
+  `tearDownModule` restores the real frappe (ended the runner's
+  "'frappe.utils' is not a package" crash).
+- `invoice_processing.test_creation` (114/114): all 8 errors came from
+  `166eeaba` (fake frappe lacked `local.message_log`, fake payment rows lacked
+  `mode_of_payment`). New `test_trusted_delayed_work_rejects_unsupported_source`
+  on the real guard (refused before any lookup, shift untouched, no audit
+  flag); confirmed it fails with "client" temporarily allowed.
+- `invoice_processing.test_payment` (4/4): `tearDownModule` (exit was 1 from a
+  teardown crash, pre-existing).
+- `test_pos_invoice_submission_ledger` (2/2, couldn't start): cause is
+  ERPNext's test bootstrap (`erpnext/tests/utils.py`, run on import) checking
+  "Standard Buying" by name + currency INR; staging's is OMR, so it inserts a
+  duplicate. Now `IntegrationTestCase` with
+  `IGNORE_TEST_RECORD_DEPENDENCIES = ["Company", "POS Profile"]` (it uses the
+  site's own POS Profile); cashier roles "POS User" if it exists (site-made,
+  production only) + "Sales User". No data changed.
+- `test_submitted_invoice_edits_credit_badge` no longer exists (section 104).
+  `test_stock_lookup_suggest` already used `unittest.TestCase`, 7/7.
+
+**Staging data.** Earlier crashed bootstrap runs (2026-08-11) left ERPNext
+`_Test` records (13 companies, 10 customers, 20 items, 12 warehouses) - left
+as they are. The 14 `@example.com` users (3 with System Manager) are now
+disabled, not deleted. Production (`site1.local`): 0 `@example.com` users, 0
+`_Test` companies (user's check).
+
+**Checks.** Vitest 298/298 files, 1944/1944 tests. Backend in isolation: the 6
+above plus test_stock_lookup_suggest 7, test_submitted_invoice_edit_supervisor
+13, test_offline_sync_invoices 4, invoice_processing.test_utils 12, all OK.
+No build (no frontend files), no migrate (no doctype/fixture). System
+Settings restored 3/3 Asia/Muscat, `precision("grand_total")` 3.
+
+## 106. Printout cleanup (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** Remove unnecessary lines from the receipt, exchange receipt,
+credit note voucher, BALANCE voucher and Z Report; receipt design otherwise
+unchanged. Before/after screenshots of every printout were approved.
+
+- **Receipt / exchange receipt** (`swan_receipt.html`): the English
+  description line is left out when it is part of the item name (case and
+  spaces ignored; variants "ABITO IN JERSEY-1-XL" / "ABITO IN JERSEY" - 1,375
+  of 2,040 items on staging); the Arabic description always prints. "You
+  have been served by" unchanged. The Arabic lookup moved above the Desk PDF
+  height estimate so it counts only printed description lines.
+- **Credit note voucher** (`credit_note_voucher.html`): "A lost voucher can
+  only be replaced by a supervisor" removed (named vouchers); "Validity
+  starting date" and the two validity tables replaced by one line "Valid
+  until DD-MM-YYYY : صالحة حتى"; "Voucher code" row only when there is no
+  barcode (used/expired); no Customer row on Anonymous (bearer) vouchers;
+  "Stamp and signature" and its 22 mm blank removed (note gets a 12 px gap
+  instead). **BALANCE voucher**: "Remaining X" removed (English and Arabic).
+  Desk PDF page height re-measured on staging PDFs: every type one page with
+  21-31 mm spare (HEAD's Anonymous and BALANCE PDFs spilled onto a blank
+  second page; fixed).
+- **Z Report** (`z_report.json`): 2.5 mm side margins as on the receipt,
+  font unchanged (13 px + margins: two "↳" sub-lines wrap from 10,000.000
+  OMR; accepted). Additional Information no longer repeats Number of
+  Receipts, Number of returns, Items Sold, Items returned, Number of Items,
+  Discounts Granted, Net Sales incl. VAT; hint "Per receipt and per item..."
+  removed. Hidden when 0: Returned, ↳ of sales made in this shift, Returned
+  count, Items returned, Credit notes issued / used, Left on credit notes,
+  the Takings credit-note terms, VAT on returned items; the Credit Notes
+  heading when all its lines are 0. Payment modes 0 everywhere hidden in
+  Today's Payments and Cash Balance ("Nothing opened, expected or counted"
+  when none is left). Kept: Gross Sales Receipts and Total Register (staff
+  use them), "Equals Today's Payments above.", "Below zero..." (only when the
+  printed Net Sales is below 0). A hidden 0 term never breaks a total.
+- **No "-0.000"**: `amt()` / `minus()` macros in the Z Report and the
+  receipt (literal "-" in front of a 0, a stored -0.0, or a float rest such
+  as an exchange's difference). Vouchers needed none (amounts `|abs`).
+  Normal amounts print byte-for-byte as before.
+
+**Checks.** Vitest 298/298 files, 1944/1944 tests. Backend in isolation:
+test_credit_voucher 69, test_swan_receipt 20, test_z_report_layout 16,
+test_z_report_item_counts 7, test_z_report_vat 8, test_z_report 3,
+test_z_report_cash_net_of_change 5, test_closing_variance 12,
+test_discount_reasons 34, test_print_assets 4, all OK. No build (no frontend
+files). Migrate twice, idempotent; Z Report record = git. System Settings
+3/3 Asia/Muscat, `precision("grand_total")` 3. Not checked: the on-screen
+Shift Overview for "-0.000" (not a printout).
+
+## 107. Return label, "OMR 0.000", Invoice Management filter labels, smaller bottom bar on small screens, Sales Person at the top of the payment screen (2026-11-18, on `develop-swan`, NOT on `stable`)
+
+**Request.** Design fixes from a proposal reviewed with before/after
+screenshots. A calmer "refined" light theme was proposed and **rejected**:
+today's colours and look stay exactly as they are. A text-size step (cart,
+item list, headings, payment screen about 1-2 px smaller on smaller screens)
+was built, then **reverted** at the user's request. Every screen it touched
+was re-measured and matches the original sizes again.
+
+- **Return button label** (`InvoiceActionButtons.vue`): "Return" when the
+  POS Profile tick box One-screen exchange is off, "Return / Exchange" when
+  on, on both the normal screen and fast counter mode (the normal screen
+  said "Sales Return"). Production still shows "Sales Return" until
+  section 103 (One-screen exchange) reaches `stable`. The label reads the
+  profile loaded when the POS opens, so reload after ticking the box.
+- **"OMR 0.000"**: new `joinMoney(symbol, amount)` in `format.ts` (symbol,
+  one space, amount; just the amount when the symbol is hidden), used by both
+  shared `formatCurrency(value, currency)` helpers. A space added where the
+  symbol was glued to the amount: Active sale box and fast counter totals
+  (`InvoiceSummary.vue`), exchange figures and RETURN rows
+  (`ExchangeReturnRows.vue`), "Items on receipt" (`ExchangePicker.vue`),
+  payment "Exchange credit" row (`Payments.vue`), small-screen dock
+  (`Pos.vue`), drafts drawer and rail, old return screen (`Returns.vue`),
+  POS Pay sidebar (14 places). `ExchangeHost.vue` and the tender-button
+  fallback (`PaymentConfirmationDialog.vue`) already printed a space; they now
+  go through `joinMoney` too. Printouts are untouched (built server-side with
+  Frappe's own format). Display only, no amount or rounding change.
+- **Invoice Management filter labels**: the tops of "Status", "From Date"
+  and "To Date" were cut off, because the tab content (`v-window`) clips its
+  overflow for the slide animation. Fixed with 10 px top padding inside it
+  (`InvoiceManagement.vue`). Note: `*.vue.css` files are gitignored build
+  copies; the scoped `<style>` in the `.vue` file is the real one.
+- **Bottom bar scales down on smaller screens** (normal POS screen, 1100 px
+  wide and up; fast counter mode and the under-1100 mobile dock untouched).
+  Tiers by browser window size: **large** >= 1600 wide and >= 960 tall:
+  as before (bar 226 px). **Medium** 1100-1599 wide or under 960 tall:
+  buttons 36 px, PAY 40 px, bar 174 px. **Small** 1100-1365 wide or under
+  768 tall: buttons 32 px, PAY 36 px, bar 146 px. Same buttons, places,
+  order and colours, and the empty slot next to Return is kept for Print
+  Draft / Customer Screen (`InvoiceSummary.vue`, `InvoiceActionButtons.vue`).
+  The cart card used to be a fixed 58/64/72 % of the window height, so a
+  smaller bar alone only left a gap; on medium/small it now fills the height
+  the bar leaves (`Invoice.vue`: shell `height: calc(100vh - 64px)`, card
+  `flex: 1`), with `Pos.vue` bottom padding 6 px. The drag-to-resize corner
+  (and its saved height) only applies on large now (`useInvoiceUI.ts`
+  `canResizeInvoicePanel`: >= 1600 x 960, was >= 1280 x 860). Cart rows
+  fully visible (4 in the cart): 1280x720 1 -> 2, 1366x657 (a 1366x768
+  laptop in Chrome) 1 -> 2, 1366x768 2 -> 3, 1536x730 (1080p at 125%) 1 -> 3,
+  1536x864 3 -> 4, 1600x900 3 -> 4, 1920x1080 4 (same). No size scrolls the
+  page. Layout heights are computed at page load: measure by reloading at
+  each size, not by resizing.
+- **Sales Person on the payment screen**: it sat in the right column's last
+  grid row, the row shared with the long "Credit and Output" panel, so it
+  started 824 px down with a 406 px empty band above it (off-screen even on
+  1920x1080). Now the right column is one `payment-side` wrapper with Sales
+  Person and Print first, then Redemption and Totals (8 px apart); grid
+  areas "summary side" / "methods side" / "settlement side". Its field is
+  visible without scrolling at every size. Same `PaymentSelectionFields`
+  component and bindings; saving (`sales_team` = that person at 100%) and
+  auto-fill (server-side at submit, `sales_credit.apply_pos_sales_team`) are
+  unchanged. A live sale on staging (ACC-SINV-2026-00409, by the user)
+  saved Sales Person "aziz" at 100% after the move. On narrow single-column
+  windows Sales Person now comes before the totals and Credit and Output.
+
+**Checks.** Vitest 300/300 files, 1956/1956 tests (new:
+`moneyFormatSpace.spec.ts` 4 incl. a scan of every `.vue`/`.ts` for a symbol
+glued to an amount; `paymentSalesPersonPlacement.spec.ts` 3; 4 label cases in
+`invoiceActionButtons.spec.ts`; resize-corner threshold in
+`useInvoiceUI.spec.ts`; each new test checked to fail on the old code).
+Backend: `test_sales_credit` 51/51 OK (Sales Person rules); no server file
+changed. `bench build` exit 0. No migrate (no doctype, fixture or print
+format). System Settings after the test run: precision 3/3, Asia/Muscat,
+`precision("grand_total")` 3. All layout numbers above were measured in
+headless Chromium on staging after a real build. Revert check (1366x657,
+1366x768, 1920x1080): cart rows 69/69/73 px, edit boxes 32 px, item list
+14 px with 16 px cell padding (9/11/17 rows visible, 30 of 32 rows
+wrapping), headings, customer and search fields and payment titles, fields
+and buttons back at 16 px with 40/48 px heights, payment overflow 512 / 401 /
+89 px: all as before the text-size step. Not live-tested: an exchange in
+progress (same Active sale classes), Arabic/RTL, dark mode, fast counter mode.
+
+**Audit for later (not built).** Every POS screen measured at 1280x720,
+1366x657, 1366x768, 1440x900 and 1920x1080 for scroll and cut-off, on this
+build (before the text-size revert; numbers for the original text sizes are
+the 1366x657 / 1366x768 / 1920x1080 ones below). Proposed fixes for medium
+and small only, same layout and colours; a mock-up showed 1920x1080
+unchanged with them loaded.
+- **Cart scrolls sideways** 45 px at 1366, 20 at 1440, 76 at 1280 (the last
+  column, price history, out of view). Cause: `useItemsTableResponsive.ts`
+  draws columns at their preferred widths (sum 919 px in an 874 px box)
+  while the drop-optional-column check uses the smaller minimum widths. Fix:
+  use the existing minimum widths when the preferred ones don't fit; the
+  existing rule still drops the optional column below that.
+- **Item list scrolls sideways** 26 px (1366x657), 82 px (1366x768): UOM out
+  of view; prices wrap to two lines. Five columns with 16 px padding in a
+  ~390-440 px panel. Fix: fixed column shares (25/28/21/13/13 %), 6 px
+  padding.
+- **Payment screen** full page height, 512 / 401 / 89 px below the fold
+  (Master Card, Maal, Credit and Output; at 1366x657 Grand Total half
+  hidden). The left column sets the height (four ~143 px method cards).
+  Fix: tighter method cards (gaps, 36 px method buttons, 24 px quick-amount
+  buttons), tighter totals rows and panel padding; mock-up 355 / 143 px on
+  small / medium (Credit and Output still needs a scroll on small).
+- **Invoice Management**: whole dialog scrolls 167 px at 1366x657 (about
+  1.5 invoice rows visible), 56 px at 1366x768; "Show repair candidates" cut
+  by 32-40 px (13-21 px on large). Cause: `.invoice-management-card__body`
+  `min-height: 580px` + header/tabs/footer = 773 px; summary tiles 124 px;
+  the button needs 284 px in a 245 px grid slot. Fix: no min-height on
+  medium/small, tile padding 10/14, smaller gaps, button text 0.78 rem.
+- **Return search** (old return screen) fields area scrolls 18 / 12 / 12 px:
+  12 px padding per field row plus `v-row` negative margins (a 12 px phantom
+  scroll at every size). Fix: 4 px row padding, no row margins in
+  `.returns-card__content`.
+- **Offers / Coupons view**: whole page scrolls 28 / 18 / 16 px (at 1366x657
+  PAY is pushed half off the bottom). `PosOffers.vue` / `PosCoupons.vue`:
+  card `80vh` + Back bar `11vh` + margins > window. Fix: card height =
+  window - Back bar - header.
+- **Closing shift**: ~2,190 / 1,950 / 1,770 px to scroll (fixed 900 px
+  dialog, long report). Change Returned, Cash Drawer Snapshot and Submitted
+  Cash Movements share one half-width column (`ShiftOverview.vue`
+  `v-col md=6`, right half empty). Fix: tighter overview cards; optionally
+  those three side by side (-210 px).
+- Fit already: New customer, Cancel sale, Z Report history; drafts drawer
+  (only its list scrolls). Not checked: Sales by Cashier (restricted menu,
+  not reachable with the test cashier).
+- Open questions from the review: fix the three small large-screen defects
+  too (repair button, 12 px return-search scroll, 16 px offers page scroll)?
+  Closing three-cards layout OK? Is "all but Credit and Output visible" good
+  enough for the payment screen on small?
+
+## 108. Every exchange through the payment screen; credit note voucher from the main screen (2026-11-19, on `develop-swan`, NOT committed)
+
+**Request (approved proposal).** A: every one-screen exchange case goes
+through the payment screen, like a normal sale, with no confirmation popup
+(the payment screen is the review). B: a credit note voucher scanned on the
+main screen selects and locks its customer and puts its credit on the sale.
+Decisions: return only has one button; even exchange prints only with
+"& Print"; another store's voucher works as before; B on all profiles; the
+"Credit note −X / Pay Y" line shows exactly the payment screen's figures.
+Plus (a) row lock, (b) unfinished exchange drafts, (c) return Sales Person,
+(d) wrong-try limit, (e) pre-deploy checks.
+
+**A. Exchange through the payment screen.**
+- Cart button: "Pay X" (customer pays more), "Continue" (credit left, even,
+  return only). The exchange's "Submit this exchange? / return?" dialog is
+  gone (store, `ExchangeHost`, `useExchangeSubmit`); "Add a return from this
+  receipt?" and "Discard? Nothing saved." stay.
+- Credit left / even: Pay saves the sale draft as for "pays" (key
+  "<id>:sale"), Payments in exchange mode: locked "Exchange credit" row,
+  "Nothing to pay" or "Even exchange — nothing to pay", "Credit note issued X
+  — the BALANCE voucher prints."; Cash/Card cards greyed out and `inert`.
+  Buttons [Submit exchange] [Submit exchange & Print].
+- Return only: `ExchangeReturnReview.vue` inside Payments (same dialog/column,
+  same keys: every submit key goes through `submitInvoiceWrapper`): receipt,
+  "1 back −X", "Credit note issued X", "For Y — the credit note voucher
+  prints.", Sales Person locked; one button [Submit return & Print voucher];
+  nothing saved before Submit (no return draft); Cancel / closing the payment
+  screen goes back to the cart with the exchange as it was.
+- Print: receipt only with "& Print" (pays, credit, even); the credit always
+  prints its voucher whichever key (BALANCE voucher when credit is left,
+  credit note voucher for a return only). Even exchange: Submit prints
+  nothing (was: always printed).
+- Sales Person: the field is the new sale's; under it "Return credited to:
+  X" (from `quote_exchange.return_sales_person`, the server's own rule).
+- Unchanged: "Saving…", second press ignored, both-or-neither
+  (`submit_exchange`), BALANCE voucher record + print.
+
+**B. Credit note voucher from the main screen.**
+- Scan box order (scanner `useScannerInput`, Enter in the search box
+  `ItemsSelector`, counter-grid entry `Pos.vue`): picker -> receipt -> voucher
+  -> item. Voucher shape (`voucherScanRoute.looksLikeVoucher`): "C" + 2-digit
+  year + store letters + number + 4 check characters (no 0/1/I/L/O), dashes
+  and case ignored. Item barcodes are digits only; receipts have a 4-digit
+  year between dashes. The server decides (`lookup_credit_voucher`,
+  `quiet_miss=1`): not a voucher -> `{"found": 0}` -> the code goes to the
+  item search once; used / expired / another company / too many tries -> red
+  toast with the reason, cart unchanged.
+- Applied (`saleCreditStore.applyFromScan`): walk-in/default -> the voucher's
+  customer (named or Anonymous bearer) is selected and locked; another named
+  customer -> "Use credit note X? The customer changes to Y." (same dialog
+  as Payments, `SaleCreditHost.vue`); another customer's credit already on the
+  sale, the same voucher twice, an exchange or a return in the cart, offline:
+  refused. Lock note "Paying with credit note X (OMR 12.500) — the customer
+  stays Y." with [Remove] (drops the vouchers, credit off, unlocks). Cancel
+  Sale and Save & Clear drop every voucher.
+- "Credit note −X · To pay Y" (hero) / "Credit note −X" (fast counter) and
+  the main button "Pay OMR Y": the server's total for this exact cart
+  (`sale_credit_quote.quote_sale_credit`: `update_invoice` in a savepoint that
+  is always rolled back, like `quote_exchange`) and `get_available_credit`;
+  the rows are picked and allocated by the payment screen's own code, now
+  shared (`useRedemptionLogic.creditRowsToApply` / `allocateCredit`, same
+  precision and `flt`). Checked 0.4 s after the cart's last change, only while
+  a voucher is on the sale; "Checking…" until in; Pay waits for it. Same
+  shift's credit of that customer is counted too, as the payment screen does.
+- The payment screen re-reads the credit when it opens; a voucher whose
+  balance dropped meanwhile: "Credit note X now has Y left — part of it was
+  used on another till." (or "has already been used", voucher removed).
+- Scanning in Payments works as before (lost-voucher supervisor path stays
+  there only: a return number has the receipt shape on the main screen).
+
+**(a) One credit note, two tills.** `creation._lock_credit_origins`: the
+credit notes the sale spends are locked `SELECT ... WHERE name IN %(names)s
+ORDER BY name FOR UPDATE` (name order, parameterised) before the balance is
+checked, and the balance used is the locked read's (a plain read can show
+the snapshot from before the other till committed). On MariaDB with
+`innodb_snapshot_isolation=1` (staging 11.8) a row changed since the
+snapshot raises a deadlock-class error -> "This credit note was just used on
+another till. Open Payments again to see what is left on it." A sale using
+credit is never queued for the background (`_uses_customer_credit`) and its
+credit Journal Entry is posted inside the submit, under the lock (the
+background job path never re-validated credit).
+
+**(b) Unfinished exchange drafts.** Numbering: a draft takes its number at
+save; Frappe's `revert_series_if_last` gives it back when the deleted draft
+is the series' last (works for "MCO-.YYYY.-": prefix from the name), else
+a gap (a "Deleted Document" record stays). Return only saves no draft.
+Closing Shift (`POSClosingShift.delete_draft_invoices`) now first calls
+`one_screen_exchange.delete_shift_exchange_drafts`: unsubmitted, not a
+return, that opening shift and profile, key "<exchange id>:sale" (checked in
+Python too), whatever "Auto Delete Draft Invoice" says; never another draft,
+a submitted invoice, a return or the shift. `get_draft_invoices` hides them
+(`posa_client_request_id not like '%:sale'`, Frappe wraps it in ifnull, so
+drafts without a key stay). Staging: no such drafts today.
+
+**(c) Return's Sales Person.** `sales_credit.return_sales_team`: the
+original's Sales Team, even a Sales Person disabled since; only when the
+original has none, the PIN cashier's linked Sales Person (none linked:
+empty). ERPNext refuses a disabled Sales Person on any new invoice
+(`selling_controller.validate_sales_team`): the Sales Invoice / POS Invoice
+overrides let through exactly the names on the return's original
+(`validate_return_sales_team`); a sale, or another disabled name on a
+return, is still refused. New returns only; `fill_pos_sales_team` no longer
+empties a return that got the cashier fallback. Staging: 44 of 89 submitted
+POS returns have an empty Sales Team (all 44 originals empty too).
+Production count (run before deciding on a backfill):
+
+    SELECT COUNT(*) AS returns_empty_team,
+           SUM(o.parent IS NULL) AS original_also_empty,
+           SUM(o.parent IS NOT NULL) AS original_has_one
+    FROM `tabSales Invoice` r
+    LEFT JOIN (SELECT DISTINCT parent FROM `tabSales Team` WHERE parenttype='Sales Invoice') t ON t.parent = r.name
+    LEFT JOIN (SELECT DISTINCT parent FROM `tabSales Team` WHERE parenttype='Sales Invoice') o ON o.parent = r.return_against
+    WHERE r.docstatus = 1 AND r.is_return = 1 AND IFNULL(r.return_against,'') <> ''
+      AND IFNULL(r.pos_profile,'') <> '' AND t.parent IS NULL;
+
+**(d) Wrong voucher numbers.** Limit 10 per login *and till* (POS Profile),
+15 minutes from the last wrong number (unchanged). The same wrong code again
+(dashes/case ignored) counts once; only a 16-character SHA-256 digest is
+kept. A POS supervisor active on the till clears the count: identity from
+`get_submitted_invoice_edit_approver` (session user, or the terminal's active
+cashier, written server-side only after their PIN was verified); the client
+cannot claim it. Item scans never reach the lookup. Message: "Too many wrong
+voucher numbers on this till. Wait 15 minutes, or switch the till to a POS
+supervisor with their PIN and try again."
+
+**(e) Production pre-deploy checks (section 108).**
+1. No item barcode or code shaped like a voucher (must return nothing):
+
+        SELECT barcode FROM `tabItem Barcode`
+        WHERE barcode REGEXP '^[Cc][0-9]{2}[A-Za-z]*[0-9]+[2-9A-HJKMNP-Za-hjkmnp-z]{4}$'
+        UNION ALL
+        SELECT item_code FROM tabItem
+        WHERE item_code REGEXP '^[Cc][0-9]{2}[A-Za-z]*[0-9]+[2-9A-HJKMNP-Za-hjkmnp-z]{4}$';
+
+2. Background submission per profile (credit sales now always submit in the
+   foreground; note which profiles have it on):
+
+        SELECT name, posa_allow_submissions_in_background_job FROM `tabPOS Profile`;
+
+3. MariaDB snapshot isolation (decides which message a two-till race shows;
+   both are safe): `SELECT @@version, @@innodb_snapshot_isolation;`
+4. The (c) count above.
+
+**Live check (staging, headless Chromium 1600x960, throwaway PIN cashier
+"T108 Cashier" on test 222, One-screen exchange ticked for the check and set
+back to off).**
+- B: typed C26-MCO-00019-6S78 (MCO-CN-2026-00019, test x, 80.850) in the item
+  box -> customer test x selected and locked, "Paying with credit note
+  C26-MCO-00019-6S78 (OMR 80.850) — the customer stays test x. REMOVE",
+  "Credit note OMR 80.850 — scan the new items". Two items (87.150) ->
+  "Credit note −OMR 80.850 · To pay OMR 6.300", button "Pay OMR 6.300". Pay ->
+  payment screen: Applied Stored Value 80.850, Cash 6.300, Remaining 0.000 --
+  the same figures. Cancel Payment -> Remove -> note, line and "Pay OMR"
+  label gone, customer unlocked.
+- A, credit left: receipt MCO-2026-00029 (67.620) + one item 28.350 ->
+  "Continue" -> payment screen, no question: locked Exchange credit
+  −28.350, "Nothing to pay", "Credit note issued OMR 39.270 — the BALANCE
+  voucher prints.", Cash/Card greyed out, "Return credited to: aziz",
+  [Submit exchange] [Submit exchange & Print]. Submit exchange (no print) ->
+  ACC-SINV-2026-00411 (sale) + 00412 (return, Sales Team aziz = original's);
+  printed: only the BALANCE voucher of 00412 (balance_for 00411).
+- A, return only: receipt MCO-2026-00030 (Anonymous, 66.150) -> "Continue" ->
+  review: "Returning from MCO-2026-00030", "1 back −OMR 66.150", "Credit note
+  issued OMR 66.150", "For Anonymous — the credit note voucher prints.",
+  Sales Person locked "aziz", one button [Submit return & Print voucher] ->
+  ACC-SINV-2026-00413, credit note voucher printed, cart reset. (First build
+  of the review rendered its buttons outside the dialog: Payments' scoped
+  styles don't reach a child component; restyled as one card and rebuilt.)
+- Cleaned up: ACC-JV-2026-00082, ACC-SINV-2026-00411/-00412/-00413 cancelled,
+  draft ACC-SINV-2026-00410 (from the B check) deleted; T108 cashier disabled,
+  PIN cleared, POS Profile User row removed (it is posa_cashier on the
+  cancelled invoices, so not deleted).
+- Not live-tested: even exchange, customer pays more (unchanged path), fast
+  counter mode, the under-1100 mobile dock, Arabic/RTL, a misread voucher in
+  the browser (unit tests), the two-till race (real-DB tests with a second
+  connection).
+
+**Checks.** Vitest 301/301 files, 1993/1993 tests (Node 24); new
+`saleCreditVoucher.spec.ts` 36 (scan routing item / receipt / voucher /
+misread -> item, used / expired / another company / blocked refused, voucher
++ exchange refused, offline, same voucher twice, customer prompt, Remove
+unlocks, figures = payment screen's, 0.4 s check, A review); updated
+`oneScreenExchange.spec.ts` 45 (no confirmation; print: credit left Submit =
+BALANCE voucher only, & Print = receipt + voucher; even Submit = nothing,
+& Print = receipt; pays Submit = nothing, & Print = receipt; return only =
+credit note voucher). Backend, each module in isolation on staging, all OK:
+test_credit_voucher 77 (+8 limiter), test_voucher_exchange_db 17 (new: lock
+with a second real connection, foreground credit sale, closing cleanup and
+Drafts filter, return Sales Person incl. disabled and fill guard),
+test_one_screen_exchange 39, test_one_screen_exchange_db 30 (1 skip as
+before), test_sales_credit 52 (two old-rule return tests rewritten for the new
+rule, +1), invoice_processing.test_creation 114 (lock stubbed in the one
+fake-frappe test, asserted called once), test_invoice_naming 26, test_invoices
+7, test_payments 12, test_exchange_links_db 10, return_generic_customer_
+credit_guard 9, customer_credit_invoice_fields 2, stored_value 2, gift_cards
+14, sales_by_cashier 24, staff_sales_performance 16, pos_access 12,
+api_imports 4, offline_sync_invoices 4, describe_credit 9,
+submitted_invoice_edit_customer 9, swan_receipt 20, return_line_picking 5,
+invoice_reporting_fields 35, invoice_cancel_hooks 5,
+submitted_invoice_shift_security 1, submitted_invoice_edit_supervisor 13,
+invoice_processing.test_payment 4 / test_utils 12, test_pos_closing_shift 10
+and all 12 closing_processing modules. Breakage checks: removing FOR UPDATE,
+the foreground rule, the disabled override, the cashier fallback, the fill
+guard, the closing call / Drafts filter, the limiter's till key / dedupe /
+supervisor clear, the print rule, the misread fallback or the main screen's
+shift context each fails a test. `bench build --app posawesome` exit 0.
+Migrate: N/A (no doctype JSON, fixture or print format; the closing shift
+change is its Python controller). System Settings restored 3/3, Asia/Muscat,
+`precision("grand_total")` 3.
+
+**Follow-up (same day).**
+- f) A credit note used in part keeps its own code: the voucher code is
+  derived from the credit note's name (`credit_voucher_code(doc.name)`), so
+  the BALANCE voucher prints the same code, expiry and barcode. The old paper
+  scanned later finds the same credit note and shows / uses only what is left
+  (the server re-reads it, and since (a) under a row lock); fully used ->
+  "Voucher X has already been used." Both papers are the same credit, never
+  two.
+- g) Normal sale with a credit note used in part: already the same rule, no
+  change -- `Payments.printBalanceVouchers` runs after every submit with a
+  remainder (receipt only when Print was pressed; BALANCE voucher always).
+- Arabic/RTL (headless Chromium, Administrator language ar for the check,
+  reverted): main-screen note "الدفع بإشعار دائن C26-MCO-00019-6S78 (OMR
+  ٨٠٫٨٥٠) — يبقى العميل test x." with "إزالة", line "إشعار دائن −OMR ٨٠٫٨٥٠ ·
+  المتبقي للدفع OMR ٦٫٣٠٠", button "ادفع OMR ٦٫٣٠٠"; return review fully in
+  Arabic, mirrored, "تأكيد الإرجاع وطباعة القسيمة"; cart button "متابعة".
+  Fixed: "OMR" wrapped away from its amount at the end of the credit line ->
+  no-break space between symbol and amount in that line. Vitest 301/301,
+  1993/1993 after the fix; build exit 0. T108 cashier disabled again, test 222
+  One-screen exchange off again, no drafts left.
+- Backfill of the 44 empty-Sales-Team returns: not now (user).
+
+## 109. Receipt scans open by themselves; big exchange result line (2026-11-19, on `develop-swan`, NOT committed)
+
+**1. Receipt scan needed Enter (bug from the user's hand test).** Cause: the
+scan detector accepts only letters, digits, spaces and "/"
+(`keyboardScan.BARCODE_CANDIDATE_CHAR_RE`). A voucher's barcode is
+"C26MCO000196S78" (no dashes) -> detected; a receipt's is "MCO-2026-00030" ->
+the first "-" reset detection, so only Enter (ItemsSelector.onEnter)
+opened it. Fix (main scan box, `useScannerInput`): a dash is accepted only
+for a receipt; a *complete* receipt number (`isFullReceiptCode`: year-number
+with the 5-digit number, store prefix and amendment "-1" allowed; One-screen
+exchange on) opens after 250 ms with no change, at any scanner speed, and
+sooner when the keystrokes were scanner-speed. A half number is never
+complete, so it never opens; Enter cancels the wait (never opened twice);
+other dashed text is left for Enter as before; item barcodes unchanged.
+Return search box (`Returns.vue` Invoice ID): same rule via
+`createReceiptScanWatcher` -> `search_invoices_by_enter`. First version used
+the keystroke-timing rule only: live it worked 3/5 (Playwright keystrokes
+arrive 15-90 ms apart, spans ~290 ms > the 250 ms cap) -- a slower real
+scanner would fail the same way, so the rule became "complete + quiet";
+live 5/5 at 5 ms and 25 ms per key. A full number typed by hand also opens
+after the pause (same as pressing Enter). Fast counter mode's entry row is
+Enter-only for everything (items too) and is unchanged.
+
+**2. Big result line.** `ExchangeResultLine.vue` + `useExchangeResult`:
+"Customer pays: OMR X" (orange edge), "Credit note to issue: OMR X" (green;
+credit left and return only), "Even exchange — nothing to pay" (blue). Only
+the server's figures (`exchangeStore.serverQuote`: the quote whose key
+matches the cart as it is now); while a change is checked the last line
+stays dimmed with "Checking…"; "New items" in the meta line is the server's
+total too. In the normal screen's summary (replaces the small headline +
+amount), fast counter mode's result metric and the under-1100 mobile dock
+(was "Active sale" + cart total). Dark text on a tinted band (orange text on
+orange tint would be unreadable), size from its own width (container units,
+1.3-2 rem; 0.95-1.3 rem compact), amount and symbol joined by a no-break
+space. Arabic: "يدفع العميل: {0}", "إشعار دائن سيصدر: {0}".
+Live (1366x768 and 1280x720): MCO-2026-00030 scanned -> "Credit note to
+issue: OMR 66.150" -> +28.350 item -> "Credit note to issue: OMR 37.800" ->
++58.800 -> "Customer pays: OMR 21.000", button "Pay OMR 21.000"; at
+1280x720 the line wraps to two lines inside the 146 px bar.
+
+**Checks.** Vitest 303/303 files, 2015/2015 tests (new `receiptScan.spec.ts`
+14, `exchangeResultLine.spec.ts` 8). One run had a single
+`stockLookupDialog.spec.ts` failure under load; it passed 3/3 alone and in
+the two full runs after. Backend: N/A, no Python changed (ar.csv only).
+`bench build` exit 0 (a TS error in the first build, `currencySymbol(string |
+undefined)`, fixed). Migrate N/A. Test cashier disabled and test 222's
+One-screen exchange off again; no drafts or invoices left.
+
+## 110. Exchange result never stuck on "Checking…"; receipt scan on every profile (2026-11-19, on `develop-swan`, NOT committed)
+
+**1. "Checking…" forever after Pay -> Cancel (user's hand test).** Cause:
+Pay saves the exchange's sale draft and loads the server's version back into
+the cart (price_list_rate, taxes_and_charges...). The figures are keyed on
+those fields (`saleSignature`), but the re-check was triggered by Invoice.vue's
+own watch of a smaller set (`exchangeCartSignature`), which didn't change -> no
+new check, so `serverQuote` stayed null. Fix (`exchangeStore`):
+- the store watches the very key it checks against (`liveKey`) and re-checks
+  0.4 s after any change, however the cart changed (scan, tick, back from the
+  payment screen, any other way back);
+- a check that fails or doesn't answer in 15 s, or offline, ends in a clear
+  state: "Totals not checked" + the reason + [Retry] (red edge), never a
+  "Checking…" that stays;
+- Pay: disabled and "Checking…" while the figures for the cart as it is now
+  are being checked (`figuresPending`), and on press it waits for them
+  (`checkNow`); a failed check stops Pay with the reason.
+Live (test 222): pays-more exchange -> Pay -> Cancel Payment -> "Customer pays:
+OMR 21.000" at once, Pay enabled with its amount.
+
+**2. Receipt auto-open on every profile.** Section 109 only routed with
+One-screen exchange ticked. Now, with it off, a complete receipt number
+scanned (or typed + Enter) in the main scan box opens the old Return dialog
+with that receipt searched and the exact match loaded, on profiles with
+"Allow Return" (same `== 1` rule as the Return button: the profile carries
+1, "1" or true). Request goes through `uiStore.requestReturnFor` (watched by
+Returns.vue): emitting on the imported `bus` from the items chunk never
+reached Returns.vue's listener live (a different emitter instance in that
+bundle chunk), so a Pinia store value is used instead. The return search box
+already worked on all profiles. Fast counter mode stays Enter-only.
+Live: exchange off, MCO-2026-00029 / -00030 / -00029 scanned (5 and 25 ms per
+key) -> old Return flow loaded the receipt each time; a half number typed
+slowly -> nothing; exchange on -> the "Items on receipt" picker as before.
+
+**Receipt prefix characters (answer).** `invoice_naming._SERIES_PATTERN`
+`^([A-Z]+(?:-[A-Z]+)*)-\.YYYY\.-$`: capital letters A-Z only, optionally in
+groups joined by a single dash, no digits; at most 4 characters including
+dashes (MAX_PREFIX_LENGTH, barcode decode limit); not the "CN" (credit note)
+segment. The default series ACC-SINV prints just "2026-00210". The scan rule
+accepts any letters prefix (`(?:[A-Za-z]+-)*`) before the 4-digit year.
+
+**Checks.** Vitest 303/303 files, 2024/2024 tests (new: back-from-payment
+re-check, failure + Retry, 15 s timeout, offline, Pay disabled/waits, old
+Return routing incl. 1/"1"/true; removing the store's watch fails the
+back-from-payment test). Backend N/A (no Python). `bench build` exit 0.
+Migrate N/A. Test cashier disabled and test 222 One-screen exchange off
+again. Left alone: user's own unfinished exchange draft ACC-SINV-2026-00418
+(testfff, 11:40) -- Closing Shift deletes it.
+
+## 111. Faster item scans: no scale-barcode round trip, repeat scans without the server; exchange DB test on its own profile (2026-11-19, on `develop-swan`, NOT on `stable`)
+
+**Measured first** (staging, test 222, Limit Search on; scanner-speed keys in
+a headless browser): item in the cart ~200-330 ms after the last key, almost
+all of it two sequential server calls: `parse_scale_barcode` (every scan,
+before the local lookup, although Scale Barcode Settings is empty) and
+`get_items_from_barcode`. Repeat scans of the same item paid both again:
+with Limit Search, clearing the box after each scan empties the barcode index
+(`useItemsSelectorSearch.clearSearch` -> `resetBarcodeIndex`). The receipt /
+voucher detection (sections 108-110) costs ~0.5 us per scan, no timer, no
+call; all 1,423 staging barcodes go straight to the item path.
+
+**A. Scale barcode parse only when it can be one.** `useScannerInput` loads
+Scale Barcode Settings once when the till opens (one request even when the
+first scan asks at the same time) and keeps `item_code_starting_digit` /
+`item_code_total_digits` too (`normalizeScaleBarcodeSettings`).
+`shouldAskServerForScaleBarcode(code)` = settings not known (not loaded or the
+load failed) OR `mayBeScaleBarcode` -- the server's own rule
+(`barcode.py _parse_scale_barcode_data`): item-code position set and, with a
+prefix, the code starts with it. `useScanProcessor` skips the call otherwise.
+An edit to Scale Barcode Settings reaches a till on its next reload (it used
+to arrive with the next scan).
+
+**B. Repeat scans.** `scannedItemMemory.ts`: an item `get_items_from_barcode`
+found for a raw barcode is remembered per ItemsSelector, used when the local
+index misses, for the same profile + warehouse + price list + customer price
+list + currency, for 5 minutes (the scan's stock check reads the remembered
+stock figure, so it must not be old -- not "the whole shift" as first
+proposed). Never remembered: scale barcodes, serial/batch numbers, misses.
+
+**Test fix.** `test_one_screen_exchange_db` switched One-screen exchange
+on/off on the profile of Administrator's open shift (test 222). Each test now
+runs on its own copy (`_Test One-screen Exchange <hex>`, users not default)
+with its own open shift for Administrator, inside the rolled-back
+transaction; the real profile is only read as the template;
+`tearDownClass` removes copies a commit might have left. Note: test 222 was
+actually found off because section 110's cleanup switched it off.
+
+**Live (Enter-terminated, LS2208 style).** Item first scan: one server call
+(lookup) before the cart, no `parse_scale_barcode`; same item again: no
+server call before the add, qty 2 on every line, box clear ~100-180 ms after
+the last key (was ~300-500). Receipt + Enter -> "Add a return from this
+receipt?"; voucher `C26004157HRG` and `C26-00415-7HRG` + Enter -> one lookup,
+credit on; Counter Grid + Enter unchanged ("Find an item", exact match
+highlighted). User hand test: same item twice -> qty 2 -> Pay -> Submit &
+Print correct.
+
+**Checks.** Vitest 304/304 files, 2044/2044 tests (new: skip / still ask /
+old fallback, repeat scan, price list and customer price list change, misses
+not remembered, stock check on a remembered item, settings unknown / none /
+failed / prefix / one request, memory scope / expiry / limit).
+`test_one_screen_exchange_db` 30 tests: 29 OK, 1 skipped (return validity
+off on the template, as before); System Settings unchanged (precision 3,
+Asia/Muscat, `doc.precision` 3). `bench build` exit 0. Migrate N/A.
+
+**Found, not fixed here:** receipt + Enter fetches the receipt twice (the
+250 ms receipt timer isn't cancelled: Enter in the item box never reaches
+`useScannerInput.handleSearchKeydown`); an unknown 12+ digit barcode + Enter
+is re-tagged low confidence by `_performSearch`, so no "Item not found";
+Counter Grid + Limit Search needs a second Enter (not used, skipped).
+
+## 112. Enter-terminated scans (receipt once, unknown barcode -> "Item not found"); credit note voucher card (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+Store scanners (Symbol LS2208) now send Enter after each scan.
+
+**1. Receipt + Enter opened twice.** Enter in the item box goes ItemHeader ->
+`emit("enter")` -> `ItemsSelector.onEnter`, never `useScannerInput.handleSearchKeydown`,
+so the 250 ms receipt settle timer fired a second `openReceipt`. Now
+`onEnter` first calls `scannerInput.claimEnter(value)`: cancels the receipt
+timer and the 100 ms keyboard-scan timer (Enter ends the sequence, every
+branch: receipt, voucher, counter grid, search). Live: one
+`get_exchange_receipt` (was two).
+
+**2. Unknown barcode + Enter showed nothing.** `_performSearch` re-tagged a
+12+ digit code "low" (silent miss). `claimEnter` returns true when the box's
+whole text arrived at scanner speed: same `isLikelyKeyboardScan` thresholds as
+without Enter (>= 7 chars, <= 45 ms gaps, <= 250 ms), plus a keystroke-run
+count that must cover every character (the input event overwrites the
+keyboard buffer with the whole box, so hand-typed text ending in a fast pair
+looked fast). Then `onEnter` sends it to the scan pipeline as "high" ->
+"Item not found" dialog + error tone (220 Hz). Hand typing, paste, short
+codes, receipts and vouchers keep their old routes. Live: "Item not found:
+99999999999991", one error tone.
+
+**3. Voucher card (approved proposal).** `SaleCreditCard.vue` (text from
+`utils/saleCreditCard.ts`, model `useSaleCreditCard.ts`):
+- large screens (>= 1600 x 960): full card on its own row across the Active
+  sale box: CREDIT NOTE + code (or "2 credit notes") + amber chip from 7 days
+  before the earliest expiry ("Expires in N days" / "Expires today") +
+  [Remove]; "OMR X available · Valid until · From <till>"; "After this sale:"
+  Customer pays / Balance voucher / Credit covers it (one line each, the full
+  sentence incl. "Credit used" as tooltip -- in Arabic the long form needed
+  5 lines and was cut off);
+- medium/small: two lines in the box ("OMR 80.850 · until 18-02-2027" + ✕ /
+  result); under 1100 px also in the sale dock (Pos.vue) and the Cart view;
+- Counter Grid: same two-line shape as the other figures ("Credit note ·
+  Balance voucher OMR 64.250" / −OMR 16.600, ✕), strip goes to 6 columns
+  while a voucher is on (it wrapped Net total onto a second row before).
+- success: item-scan beep (`utils/scanTone.ts`, shared with useScannerInput)
+  + 1 s green flash (`appliedCount` / `appliedAt`: the first voucher mounts
+  the card after the count went up, so it flashes if that was < 1 s ago;
+  a timer, not an animation frame, which headless/hidden windows hold back).
+- PAY keeps its last amount, dimmed (`creditPayPending`), while re-checking.
+- "Balance voucher" = what stays on the SCANNED vouchers' own rows after
+  allocation (`figures.left`), never the customer's other credit.
+- Customer box: "Customer from credit note" (Remove moved to the card).
+- Server: `lookup_credit_voucher` returns `store` (the credit note's POS
+  Profile, "" for a Desk return); `expires_on` was already there.
+- Arabic for the 14 new strings (ar.csv).
+Live (headless, T108 Cashier re-enabled with a temporary PIN, then put back
+exactly: disabled, no PIN row, no profile row, modified unchanged;
+Administrator language ar for the RTL check then NULL again): voucher 80.850
++ 16.600 item -> Balance voucher 64.250, Pay OMR 0.000; + 139.300 jacket ->
+Customer pays 75.050; Remove; two Anonymous vouchers -> 2 credit notes,
+153.820; 1024x768 dock; Counter Grid; Arabic. Expiry chip: unit tests only
+(no near-expiry voucher on staging). Found, not changed: Arabic 1600x1000
+PAY bottom 7 px past the window with or without a voucher.
+
+**Checks.** Vitest 306/306 files, 2074/2074 tests. test_credit_voucher 78
+OK. `bench build` exit 0. Migrate N/A. System Settings unchanged.
+
+## 113. App dialogs instead of browser pop-ups; Clear cache blocked while offline sales are unsent; no Ctrl+Shift+R (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+**1. Shared dialog.** `services/appDialog.ts` (`appConfirm()` -> true/false,
+`appNotice()`), shown by `components/ui/AppConfirmDialog.vue`, mounted once in
+`DefaultLayout.vue`. Esc / click outside = No; red confirm + focus on the safe
+button for cancel/delete; key guard copied from DiscountReasonDialog (a scan
+doesn't reach the cart). No dialog mounted -> frappe.confirm / msgprint.
+Replaced 7 browser pop-ups, all text through `__()`: customer already exists
+(UpdateCustomer), save corrected invoice + delete draft (InvoiceManagement),
+cancel / delete cash movement (CashMovementView), "Offline data tidied up"
+notice (DefaultLayout, not awaited), Clear saved data. Still browser pop-ups
+(part 2, later): QZ print fallback (`documentPrint.ts`, 7 callers), start-up
+bootstrap check (DefaultLayout), Close Shift skipped-invoices check
+(`usePosShift.ts`); a test fails if any other appears.
+
+**2. Clear cache safety.** Clearing deletes all IndexedDB/localStorage,
+unsent offline sales included. `confirmClearSavedData()` (clearAllCaches.ts)
+counts unsent work (`utils/unsentOfflineWork.ts`: sales = max(legacy queue,
+invoice outbox); other = customers + payments + cash movements): any -> "X
+offline sales not sent yet — connect and sync first." notice, nothing cleared;
+check fails -> blocked too; none -> "Clear saved data on this till?" [Clear
+data] / [Keep data]. The Navbar "Clear cache" button (which asked nothing)
+now uses it; still refused while offline.
+Correction: "refresh items" uses itemsStore's own items-only clearAllCaches,
+not this one, and never showed the pop-up.
+
+**3. Ctrl+Shift+R removed.** It was the browser's hard refresh (used on the
+tills after every deploy); the POS listener cleared caches and the browser
+reloaded over the dialog. Listener and dead `#clear-cache-btn` hook removed;
+`posawesome.bundle.ts` no longer imports clearAllCaches for side effects.
+No shortcut for Clear cache (user decision). A test fails if any source binds
+Ctrl+Shift+R. First load after deploy: Ctrl+F5 (old bundle still intercepts).
+
+**Checks.** Vitest 310/310 files, 2100/2100 tests. Backend N/A. `bench build`
+exit 0. Migrate N/A.
+
+## 114. Browser printing on an 80 mm page (receipt, credit note voucher, Z Report) instead of A4; QZ Tray unchanged (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+**Before.** The QZ fallback (and any print view / browser print) printed on the
+browser's default paper (A4/Letter): the templates' `page-width/page-height`
+only feed wkhtmltopdf. Z Report: 3 Letter pages.
+
+**Change.** A marked block (`/* posa-browser-page:start */ ... :end */`) with
+`@media print { @page { size: 80mm <length>mm; margin: 2mm; } }`:
+- `swan_receipt.html`, `credit_note_voucher.html`: length = their existing
+  `_pdf_h`, margins as the PDF, so browser print looks like the PDF.
+- Z Report fixture: body captured in `{% set _zbody %}`, lines counted
+  (`class="row` / `sub-row` / `hint` / `<div class="payment-mode-name"`);
+  length = 201 + 8.4 mm/line + 12 (safety + margins) + 5.5 mm per 40 chars
+  of variance reason, 23 less without logo. Fitted in Chrome on six staging Z
+  Reports (434-570 mm, within 3.1 mm). `{% set report %}` stays outside the
+  block (the `avg()` macro reads it; inside it broke rendering).
+- `qzTray.ts` `stripBrowserPageBlock()` removes the block (and a `<style>`
+  holding only it) before QZ: QZ HTML identical to before for sale, return,
+  voucher, Z Report (whitespace and Z "Printed" time aside).
+Templates and `qzTray.ts` must deploy together (an old cached bundle would
+send the rule to QZ); migrate for the Z Report; Ctrl+F5 the tills.
+
+**Verified.** Headless Chromium print-to-PDF: one 80 mm page each (sale
+80x355, voucher 80x307, return 80x298, Z Reports 449-583, 6-12 mm spare).
+wkhtmltopdf PDFs unchanged (download_pdf = WhatsApp/email, rewards receipt
+PDF: same page size/count/drawing; Z Report desk PDF still 3 A4). DB Z Report
+= git before migrate (no hand edits); second migrate content-idempotent.
+User: QZ prints unchanged; browser fallback receipt-size.
+
+**Later list.** (1) On the real EPSON TM-T88V the Chrome preview shows a very
+long page -- the driver's roll size overrides our page length; would waste
+paper. (2) Item 3: print-fallback question into appConfirm (7 call sites
+async). (3) Item 4: Z Report browser fallback. Also the start-up bootstrap and
+Close Shift skipped-invoices browser pop-ups. Found, not changed: Z Report rows
+centred in Frappe print view (Bootstrap `.row`).
+
+**Checks.** Vitest 311/311 files, 2107/2107 tests. test_swan_receipt 20 OK,
+test_credit_voucher 78 OK, test_rewards_sync 3 OK, test_print_assets 4 OK,
+test_z_report_layout 16 OK, test_z_report 3 OK (known post-OK teardown
+traceback). `bench build` exit 0. Migrate exit 0 x2. System Settings restored.
+
+## 115. Closing Shift view: no "OMR OMR"; "Left on credit notes" line as on the Z Report (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+**Before.** On the desk POS Closing Shift form (`closing_shift_details.html`,
+rendered by `overview.get_payment_reconciliation_details`) each amount had a
+grey second line `{{ row.currency }} {{ fmt_money(..., currency=...) }}`:
+fmt_money already prints the symbol, so "OMR OMR 470.400", and with only the
+company currency the line just repeated the amount. The view also had no way
+to see why Cash differs from Grand Total.
+
+**Audit (POSA-CS-26-0000061, staging).** Grand Total 470.400 = sales 663.600
+- returns 193.200; Cash 582.750 = the four cash sales; the 112.350 gap = credit
+still held by customers (15.750 left after exchange 00415 -> 00416 via JE
+ACC-JV-2026-00083, plus 96.600 from return 00421). No cash double counting
+(credit JEs never reach Payment Reconciliation); Total Quantity 6 = 8 sold - 2
+returned; every Z Report figure matched. Draft 00423 (unprinted) correctly
+excluded.
+
+**Change.** `overview.py`: `_foreign_currency_rows()` keeps the per-currency
+lines (sales, net, each payment mode) only when one is not the company
+currency; `_left_as_store_credit()` = `get_sales_breakdown(...)["left_as_store_credit"]`
+over the closing's `pos_transactions` (same function and invoices as the Z
+Report's "Left on credit notes"). Template: currency prefix removed; "Left on
+credit notes" row under Total Quantity, only when not 0. Z Report label was
+already "Left on credit notes" (no change).
+
+**Checks.** Vitest 311/311 files, 2107/2107 tests (run from `frontend/`; from
+the app root npx picks a stray vitest without jsdom). 13 closing-shift backend
+modules OK (test_pos_closing_shift 13 incl. 3 new). Build/migrate N/A (Python +
+server template only). System Settings checked: precision 3, Asia/Muscat.
+
+## 116. Pre-deploy check of everything on `develop-swan` since stable `bcae9fec` (2026-11-19, staging only; stable and production untouched)
+
+**Scope.** Stable's code = develop-swan at `d3a6f3ba` (trees differ only in
+CLAUDE.md / PROGRESS_NOTES; stable is cherry-picked, so `git log
+bcae9fec..develop-swan` lists August history). To deploy: e6a8efe2 (103),
+996057a2 (104), 10e8c7c1 (105, tests), 7786685f (106), 69d22626 (107),
+472120c6 (docs), 3a7146e5 (108-110), 1a8dfe02 (111), 8422448b (112), 93d3e330
+(113), 9ae9c51b (114), 13386674 (115).
+
+**Automated.** Vitest (from `frontend/`) 311/311 files, 2107/2107 tests.
+Backend, 105 modules one at a time: 92 OK, 6 without tests, 7 failed in the
+batch; rerun alone with System Settings restored first: `test_sales_by_cashier`
+24 OK and `test_closing_variance` 12 OK (the batch's precision-2 reset);
+`test_exchange_links_db` (9 errors) and `test_voucher_exchange_db` (17 errors)
+borrow `setUp` from `test_one_screen_exchange_db` but not section 111's new
+`_own_profile_and_shift` (test files only; fixed after the report, see below); `test_customer_store`
+1 failure (its backfill check takes the first POS invoice's customer, now
+Anonymous -- generic customers stay blank by design; test and code identical
+to stable); `test_gift_card_invoice_fields` / `test_workspace_gift_card`
+pre-existing (section 92). `bench build` exit 0. Migrate x2 exit 0, Z Report
+DB md5 = git. System Settings restored (3, Asia/Muscat).
+
+**End to end** (headless, T108 Cashier on test 222, own shift
+POSA-OS-26-0000070 -> POSA-CS-26-0000062): cash (20.000 tendered, 3.400 change),
+Visa with Sales Person aziz, Maal to test 777 (no Sales Person -> credited to
+PIN cashier); return only (review explains the empty Sales Person); exchanges
+pays more 5.200 / even / credit left 2.200 (BALANCE); vouchers on the main
+screen: full (bearer), partial (test x MCO-CN-00018 + 16.870 cash; 00019
+untouched), two vouchers (test 6666, 6.700 cash), BALANCE (bearer 21.800 on
+16.600 -> 5.200 stays on the same note); lost voucher: plain cashier refused,
+supervisor + return number approved and recorded; Invoice Management labels,
+History and Returns chips, reprint, delete draft (app dialog), Edit Invoice
+(amended to -1); Clear cache online (app dialog, reload); receipt / voucher /
+Z Report print view on 80 mm. Closing overview, Closing Shift, Z data, Desk
+view and printed Z Report all equal: Net 192.600, Gross 325.800, Returned
+133.200, Qty 10 (17-7), VAT 9.170, Cash expected 74.170 (10 + 64.170), Visa
+18.800, Maal 40.600, credit issued 133.200, used 202.230, Exchanges Today
+87.400, Left on credit notes 45.800, Takings 123.570. Every setting restored
+(T108 disabled, no PIN, no profile row, role and modified as before; test 222
+fields and modified as before). Test invoices ACC-SINV-2026-00424..00447-1
+left on staging; they used up test x MCO-CN-2026-00018, test 6666 00326/00335
+and 80.000 of testfff 00421 remains.
+
+**Findings (not changed).**
+- A supervisor on the till, or a same-shift return of the same customer,
+  authorizes all of a named customer's credit: scanning one voucher then uses
+  the others too. The main-screen card said "Credit covers it" while the
+  payment screen asked to issue the 18.800 remainder (card counts only the
+  scanned vouchers' balance).
+- Lost voucher by return number accepts only this till's own store; another
+  store's return gives "This is not a valid credit note voucher number".
+- The approver recorded is the signed-in user when it is a supervisor
+  (Administrator on staging), before the PIN cashier -- existing rule; a store
+  login with the supervisor role makes every till a supervisor.
+- A bearer voucher from a return made earlier in the same shift is labelled
+  "Exchange" in Invoice Management (section 104 rule).
+
+**Later list.**
+- Cash Movement from the till fails on every profile without the
+  source-account fields: the till always sends `source_account`, and
+  `posa_allow_source_account_override` / `posa_default_source_account` /
+  `posa_allowed_source_accounts` / `posa_allowed_expense_accounts` are in
+  hooks.py's fixture filter but not in custom_field.json, so they don't
+  exist; the server answers "Source account override is disabled for this POS
+  Profile." Pre-existing (only 113's dialogs changed). Not used now; check later.
+  Cancel / delete dialogs (113) not live-tested: the buttons are disabled by
+  the profile.
+- Offline on staging after Clear cache: stock 0 for every item and prices with
+  VAT added again (warning "Missing prerequisites: tax_inclusive"), so no
+  offline sale could be made; "Clear cache blocked while offline sales are
+  unsent" (113) is covered by unit tests only.
+- Make `test_customer_store`'s backfill check skip generic customers.
+
+**Test fix (approved).** `test_exchange_links_db` and `test_voucher_exchange_db`
+now also borrow `_own_profile_and_shift` and `tearDownClass` from
+`TestOneScreenExchangeOnInvoices`: 10/10 and 17/17 OK, no `_Test One-screen
+Exchange` profile left, System Settings unchanged (3, Asia/Muscat).
+
+## 117. A voucher spends only itself; another store's lost voucher says where it can be replaced; offline VAT finding; supervisor inventory (2026-11-19, on `develop-swan`, NOT on `stable`; user approved on live checks)
+
+**Voucher only itself.** `creditAuthorization.selectAuthorizedCredit` (used by
+the main-screen card and by Payments): once a credit note is picked (scanned
+or typed voucher, or a supervisor's return number) only the picked rows are
+applied -- no longer "plus a same-shift return" (the supervisor "all credit"
+already stopped when something was picked). With nothing picked, unchanged:
+same-shift credit (two-step exchange) and a supervisor's "all credit". Server
+unchanged (it only checks the rows the till sends). Live, T108 as supervisor,
+test x holding same-shift return 00448 (18.800) and old voucher
+MCO-CN-2026-00019 (80.850): voucher + 87.200 -> card "Customer pays 6.350",
+Payments Cash 6.350, one source; voucher + 21.800 -> card "Balance voucher
+59.050", Payments "Issue a credit note for 59.050" (not submitted). Specs:
+`creditAuthorization.spec.ts` (+2, one rewritten), `saleCreditVoucher.spec.ts`
+(card = Payments selection, with and without supervisor; BALANCE = remainder).
+
+**Lost voucher of another store.** `credit_voucher.lookup_credit_voucher`: a
+supervisor's return number not found in this store but found as a return of
+the same company in another store -> "This credit note was issued at another
+store — it can only be replaced there." (Arabic added). Rule unchanged:
+nothing usable, still counted as a wrong number, cashier still gets "not a
+valid number", another company never named, a shared customer's return keeps
+"works like cash". test_credit_voucher 82 (+4).
+
+**Offline VAT / stock (report only).** Offline tax uses the cached
+`tax_inclusive` flag (`document.ts`, `!!memory.tax_inclusive`); missing ->
+treated as exclusive -> VAT added again. A till fetches it at start-up only
+when it already has a cached opening shift (`DefaultLayout` hydrate path); on
+the first session after Clear cache or on a new browser it stays missing
+until the next online reload (2 minutes online were not enough). The Offline
+Status panel says "Offline data is ready / all Fresh" meanwhile. Synced sale
+ACC-SINV-2026-00450: server grand total 18.800, paid 19.740, change 0.940
+(never handed back) -> customer overcharged, drawer over. Code, not setup
+(staging profiles: posa_tax_inclusive 1, inclusive template); production has
+the same code. Stock 0 offline only in the first ~minute after a fresh load.
+Warm till: correct (ACC-SINV-2026-00449, 18.800 / 0.895).
+
+**Found while checking (not changed).** `invoices.get_draft_invoice_doc`
+returns `frappe.get_cached_doc(doctype, name)` for any doctype with no
+permission check; `payments.repair_overpayment_change_allocations` (writes a
+reconciliation with dry_run=0) has no role check. Both already on stable.
+
+## 118. Draft loader reads only POS invoices the user may read (2026-11-19, on `develop-swan`, NOT on `stable`; user check OK)
+
+**Before.** `invoices.get_draft_invoice_doc(invoice_name, doctype)` (whitelisted)
+returned `frappe.get_cached_doc(doctype, name)` with no permission check and
+any doctype: a logged-in user could read any document by name (a User, a
+setting, another store's invoice). On stable and production too.
+
+**Change.** Only `Sales Invoice` / `POS Invoice` (`DRAFT_INVOICE_DOCTYPES`,
+else PermissionError "Only a Sales Invoice or POS Invoice can be loaded
+here."), then `doc.check_permission("read")` -- the same ERPNext permission as
+the drafts list it is picked from (`get_draft_invoices` uses `get_list`), so
+a supervisor's other-store draft still loads when the list shows it. Callers
+(Drafts dialog, document sources) only send those two doctypes.
+
+**Checks.** New `test_draft_invoice_doc` 3/3 (two fail on the old code: other
+doctype, Guest). HTTP as Administrator: draft 200, `doctype=User` 403; store
+login testserver@swan.com (Sales User / POS Manager) loads a test 222 draft.
+
+**Later list.**
+- `payments.repair_overpayment_change_allocations` is whitelisted with no role
+  check: reads candidates with `get_all` (no permissions) and, with
+  `dry_run=0`, posts a reconciliation. Not fixed now: the Repair button in
+  Invoice Management is shown to every cashier, so a guard on the write takes
+  repair away from store staff (policy decision) and needs the till's POS
+  Profile passed from the frontend. Proposal: dry run via `get_list`; the
+  write only for a POS supervisor (login or PIN, as Edit Invoice) or a manager
+  login; hide the button for others.
+- Offline VAT on the first session after Clear cache / new browser (section
+  117): proposal first.
+- Staging: `posa-e2e-credit-gap@test.invalid` (enabled, POS Awesome
+  Supervisor) disabled 2026-11-19; its open shift POSA-OS-26-0000014 left as is.
