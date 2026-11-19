@@ -40,9 +40,12 @@ Sales Person reports and commission see the same people
   they are) at 100% -- whatever the store's Allowed list, so staff covering
   another store still get it. A cashier without one: left empty.
 - A return against an invoice always gets the original's Sales Team,
-  whatever was picked on the till (a disabled Sales Person can't be put on
-  a new invoice, so then it is left empty; the credit still follows the
-  original). A return without an original is treated like a sale.
+  whatever was picked on the till -- even a Sales Person disabled since
+  (validate_return_sales_team lets exactly those names through ERPNext's
+  disabled check). Only when the original has none: the PIN cashier's own
+  Sales Person, as for a sale (return_sales_team; new returns only, past
+  returns are not changed). A return without an original is treated like
+  a sale.
 - Edit Invoice (an amendment) keeps the Sales Team it copied from the
   original, and its credit stays with the original sale: with no linked
   Sales Person, the PIN cashier of the first invoice in the chain, not the
@@ -301,6 +304,48 @@ def _team_rows(doctype, name):
     )
 
 
+def return_sales_team(doctype, return_against, cashier):
+    """The Sales Team of a new return against `return_against`: the original
+    sale's, even when that Sales Person has since been disabled (staff who
+    left; allowed by validate_return_sales_team); only when the original has
+    none, the PIN cashier's own Sales Person at 100% (none linked: empty)."""
+    rows = [r for r in _team_rows(doctype, return_against) if cstr(r.sales_person).strip()]
+    if rows:
+        return [{"sales_person": r.sales_person, "allocated_percentage": r.allocated_percentage} for r in rows]
+    own = linked_sales_person(cashier)
+    return [{"sales_person": own, "allocated_percentage": 100}] if own else []
+
+
+def return_sales_person_label(doctype, return_against, cashier):
+    """What the till shows in the locked Sales Person field of a return:
+    {"sales_person", "source": "original" | "cashier" | "none", "cashier_name"}."""
+    team = return_sales_team(doctype, return_against, cashier)
+    has_original = any(
+        cstr(r.sales_person).strip() for r in _team_rows(doctype, return_against)
+    )
+    return {
+        "sales_person": ", ".join(cstr(r["sales_person"]) for r in team),
+        "source": "original" if has_original else ("cashier" if team else "none"),
+        "cashier_name": user_full_name(cashier) if cashier else "",
+    }
+
+
+def validate_return_sales_team(doc, sales_team):
+    """ERPNext refuses a disabled Sales Person on any new invoice. A return
+    keeps the original sale's Sales Persons even when they were disabled
+    since: those names, on a return against that sale, are let through;
+    every other row is checked as ERPNext does. Returns the rows ERPNext
+    still has to check."""
+    if not (cint(doc.get("is_return")) and cstr(doc.get("return_against")).strip()):
+        return list(sales_team or [])
+    original = {
+        cstr(r.sales_person).strip()
+        for r in _team_rows(doc.doctype, doc.return_against)
+        if cstr(r.sales_person).strip()
+    }
+    return [row for row in (sales_team or []) if cstr(row.get("sales_person")).strip() not in original]
+
+
 def apply_pos_sales_team(invoice_doc, profile_doc):
     """The POS invoice's Sales Team at submit (see the module docstring)."""
     if invoice_doc.get("doctype") not in ("Sales Invoice", "POS Invoice"):
@@ -308,16 +353,9 @@ def apply_pos_sales_team(invoice_doc, profile_doc):
     if _trusted_source() == AMENDMENT_SOURCE or cstr(invoice_doc.get("amended_from")).strip():
         return  # Edit Invoice keeps what it copied from the original
     if _is_return_against(invoice_doc):
-        rows = [r for r in _team_rows(invoice_doc.doctype, invoice_doc.return_against) if cstr(r.sales_person).strip()]
-        names = [r.sales_person for r in rows]
-        enabled = set(
-            frappe.get_all("Sales Person", filters={"name": ["in", names], "enabled": 1}, pluck="name", ignore_permissions=True)
-        ) if names else set()
-        if any(name not in enabled for name in names):
-            rows = []  # ERPNext refuses a disabled Sales Person on a new invoice
         invoice_doc.set(
             "sales_team",
-            [{"sales_person": r.sales_person, "allocated_percentage": r.allocated_percentage} for r in rows],
+            return_sales_team(invoice_doc.doctype, invoice_doc.return_against, invoice_doc.get(CASHIER_FIELD)),
         )
         return
     check_pos_sales_team(invoice_doc, profile_doc)
@@ -560,6 +598,12 @@ def fill_pos_sales_team(dry_run=False, verbose=True):
             original = expected.get(inv.return_against)
             if original is None:
                 original = _key(team.get(inv.return_against))
+            if not original and current:
+                # The original has none: the return keeps the PIN cashier's
+                # Sales Person it got at submit (return_sales_team).
+                expected[inv.name] = current
+                counts["had_sales_person"] += 1
+                continue
             expected[inv.name] = original
             if current != original:
                 counts["return_copied"] += 1

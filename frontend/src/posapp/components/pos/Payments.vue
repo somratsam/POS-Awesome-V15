@@ -7,6 +7,16 @@
 		tabindex="-1"
 		:class="['payment-shell', { 'payment-shell--dialog': dialogMode }]"
 	>
+		<!-- One-screen exchange, a return with no new items (section 108). -->
+		<ExchangeReturnReview
+			v-if="returnReviewMode"
+			:dialog-mode="dialogMode"
+			:money="reviewMoney"
+			:saving="exchangeStore.submitting"
+			@cancel="back_to_invoice"
+			@submit="submitReturnReview"
+		/>
+		<template v-else>
 		<v-card
 			:class="[
 				'selection mx-auto my-0 pos-themed-card payment-card',
@@ -52,7 +62,12 @@
 
 					<section
 						v-if="is_cashback && invoice_doc"
-						class="payment-section payment-section--methods"
+						:class="[
+							'payment-section payment-section--methods',
+							{ 'payment-section--nothing-due': exchangeNothingDue },
+						]"
+						:inert="exchangeNothingDue || undefined"
+						:aria-disabled="exchangeNothingDue ? 'true' : undefined"
 					>
 						<div class="payment-section__header payment-section__header--with-action">
 							<h3 class="payment-section__title">{{ __("Payment Methods") }}</h3>
@@ -124,6 +139,7 @@
 								:sales-person="sales_person"
 								:readonly="readonly"
 								:follows-original="!!(invoice_doc?.is_return && invoice_doc?.return_against)"
+								:return-credited-to="exchangeMode ? exchangeReturnSalesPerson : ''"
 								:print-formats="print_formats"
 								:print-format="print_format"
 								:show-print-format="
@@ -151,6 +167,20 @@
 								<strong class="exchange-credit-row__amount">
 									−{{ currencySymbol(invoice_doc.currency) }} {{ formatCurrency(exchange_credit) }}
 								</strong>
+							</div>
+							<div
+								v-if="exchangeMode && exchangeNothingDue"
+								class="exchange-result-note"
+								data-testid="exchange-result-note"
+							>
+								<strong>{{ exchangeCreditLeft > 0 ? __("Nothing to pay") : __("Even exchange — nothing to pay") }}</strong>
+								<span v-if="exchangeCreditLeft > 0">
+									{{
+										__("Credit note issued {0} — the BALANCE voucher prints.", [
+											`${currencySymbol(invoice_doc.currency)} ${formatCurrency(exchangeCreditLeft)}`,
+										])
+									}}
+								</span>
 							</div>
 							<PaymentRedemption
 								v-else
@@ -302,6 +332,7 @@
 				@cancel="back_to_invoice"
 			/>
 		</div>
+		</template>
 		<CreditVoucherCustomerDialog
 			:model-value="voucherCustomerDialog"
 			:voucher="pendingVoucher"
@@ -446,6 +477,7 @@ import {
 import { isNoMoneyReturn, resolveReturnSubmit, returnConfirmFigures } from "../../utils/returnIntent";
 import { useExchangeStore } from "../../stores/exchangeStore";
 import { useExchangeSubmit } from "../../composables/pos/exchange/useExchangeSubmit";
+import ExchangeReturnReview from "./payments/ExchangeReturnReview.vue";
 import {
 	balanceVoucherSettings,
 	recordBalanceVoucherPrint,
@@ -628,6 +660,31 @@ const exchange_credit = computed(() => {
 	const total = flt(invoice_doc.value.rounded_total || invoice_doc.value.grand_total, currency_precision.value);
 	return flt(Math.min(Math.abs(exchangeStore.returned || 0), Math.max(total, 0)), currency_precision.value);
 });
+// Credit left / even exchange: nothing to pay -- the Cash/Card cards are
+// greyed out (section 108).
+const exchangeSaleTotal = computed(() =>
+	exchangeMode.value
+		? flt(invoice_doc.value.rounded_total || invoice_doc.value.grand_total, currency_precision.value)
+		: 0,
+);
+const exchangeNothingDue = computed(
+	() => exchangeMode.value && flt(exchangeSaleTotal.value - exchange_credit.value, currency_precision.value) <= 0,
+);
+const exchangeCreditLeft = computed(() =>
+	exchangeMode.value
+		? flt(Math.max(Math.abs(exchangeStore.returned || 0) - exchangeSaleTotal.value, 0), currency_precision.value)
+		: 0,
+);
+// The return half of an exchange keeps the original sale's Sales Person
+// (else the PIN cashier's); the field above is the new sale's.
+const exchangeReturnSalesPerson = computed(() => {
+	const info = exchangeStore.quote?.return_sales_person;
+	if (!info) return "";
+	return info.sales_person || __("{0} (no Sales Person)", [info.cashier_name || __("the cashier")]);
+});
+// A return with no new items: the payment screen is its review.
+const returnReviewMode = computed(() => Boolean(exchangeStore.active && exchangeStore.reviewingReturn));
+const reviewMoney = (value) => `${currencySymbol(pos_profile.value?.currency)} ${formatCurrency(Math.abs(Number(value) || 0))}`;
 // Store credit and the exchange credit: what is covered before Cash/Card.
 const credit_covered = computed(() =>
 	flt((redeemed_customer_credit.value || 0) + exchange_credit.value, currency_precision.value),
@@ -757,11 +814,37 @@ const {
 		supervisor: Boolean(currentCashier.value?.is_supervisor),
 	}),
 	creditVouchers: storeToRefs(customersStore).creditVouchers,
+	// A voucher scanned on the main screen whose balance went down since
+	// (used on another till): say so, and use what is left (section 108).
+	onCreditRows: (rows) => notifyChangedVoucherBalances(rows),
 	onCreditMessage: (message) => {
 		voucherError.value = message;
 	},
 	getGiftCardTotal: () => Number(giftCardAppliedAmount?.value || 0),
 });
+
+function notifyChangedVoucherBalances(rows) {
+	const customer = invoice_doc.value?.customer;
+	const vouchers = Object.values(customersStore.creditVouchers || {}).filter((v) => v?.customer === customer);
+	for (const voucher of vouchers) {
+		const row = (rows || []).find((r) => r?.type === "Invoice" && r.credit_origin === voucher.credit_origin);
+		const now = flt(row?.total_credit || 0, currency_precision.value);
+		const before = flt(voucher.amount || 0, currency_precision.value);
+		if (flt(before - now, currency_precision.value) <= 0) continue;
+		if (now <= 0) {
+			customersStore.removeCreditVoucher(voucher.credit_origin);
+			showVoucherError(__("Voucher {0} has already been used.", [voucher.voucher]));
+		} else {
+			customersStore.addCreditVoucher({ ...voucher, amount: now });
+			showVoucherError(
+				__("Credit note {0} now has {1} left — part of it was used on another till.", [
+					voucher.voucher,
+					formatCurrency(now),
+				]),
+			);
+		}
+	}
+}
 
 // Credit note voucher scanned or typed in Payments: the server checks it
 // (lookup_credit_voucher), the sale switches to the voucher's customer if
@@ -1522,6 +1605,8 @@ const queueSearchRefocusRecovery = () => {
 
 const back_to_invoice = () => {
 	releaseActiveFocus();
+	// Cancel on the return review: back to the cart, the exchange as it was.
+	exchangeStore.reviewingReturn = false;
 	paymentVisible.value = false;
 	if (paymentDialogOpen.value) {
 		uiStore.closePaymentDialog();
@@ -2322,14 +2407,14 @@ const submitExchangeFromPayments = async (print) => {
 						sale_total: saleTotal,
 						pay: flt(Math.max(saleTotal - returnedValue, 0), currency_precision.value),
 					};
-		// Straight to saving, like a normal sale: no confirmation here.
+		// Straight to saving, like a normal sale: no confirmation.
 		const submitted = await submitExchange({
-			confirm: false,
 			figures,
 			sale: doc,
 			saleData: cashChange > 0 ? { paid_change: cashChange } : {},
 			print: Boolean(print),
-			expectKinds: ["pays"],
+			// Customer pays more, credit left or even: all reviewed here.
+			expectKinds: ["pays", "credit", "even"],
 			printDoc: ({ name, settings }) =>
 				loadPrintPage({
 					doctype: "Sales Invoice",
@@ -2351,8 +2436,40 @@ const submitExchangeFromPayments = async (print) => {
 	}
 };
 
+// A return with no new items, reviewed here: the credit note voucher always
+// prints (useExchangeSubmit), whichever key submitted it.
+const submitReturnReview = async () => {
+	if (submissionInFlight.value || exchangeStore.submitting) return;
+	submissionInFlight.value = true;
+	try {
+		const submitted = await submitExchange({
+			sale: null,
+			print: true,
+			expectKinds: ["return"],
+			printDoc: ({ name, settings }) =>
+				loadPrintPage({
+					doctype: "Sales Invoice",
+					name,
+					doc: { name, doctype: "Sales Invoice" },
+					settings,
+				}),
+		});
+		if (submitted) {
+			finishSubmissionNavigation(true);
+			customersStore.setSelectedCustomer(pos_profile.value?.customer || null);
+			eventBus.emit("focus_item_search");
+		}
+	} finally {
+		submissionInFlight.value = false;
+	}
+};
+
 const submitInvoiceWrapper = async (print, callbackOverrides = {}, options = {}) => {
 	if (submissionInFlight.value || returnIntentDialog.value || creditRemainderDialog.value) {
+		return;
+	}
+	if (returnReviewMode.value) {
+		await submitReturnReview();
 		return;
 	}
 	if (exchangeMode.value) {
@@ -2706,6 +2823,22 @@ watch(redeemed_customer_credit, () => {
 	rebalancePreferredPaymentCoverage();
 });
 
+// The return review shows the server's figures (and the return's Sales
+// Person); the payment screen closing by any route ends the review.
+watch(
+	returnReviewMode,
+	(on) => {
+		if (!on) return;
+		exchangeStore.figuresFor(null).catch((error) => {
+			toastStore.show({ title: error?.message || __("The exchange could not be checked."), color: "error" });
+		});
+	},
+	{ immediate: true },
+);
+watch(isPaymentOpen, (open) => {
+	if (!open && exchangeStore.reviewingReturn) exchangeStore.reviewingReturn = false;
+});
+
 watch(exchange_credit, () => {
 	rebalancePreferredPaymentCoverage();
 });
@@ -2999,6 +3132,22 @@ defineExpose({
 </script>
 
 <style scoped>
+.payment-section--nothing-due {
+	opacity: 0.45;
+	pointer-events: none;
+}
+
+.exchange-result-note {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 6px 0;
+	padding: 8px 10px;
+	border-radius: 8px;
+	background: rgba(var(--v-theme-success), 0.1);
+	font-size: 0.9rem;
+}
+
 .exchange-credit-row {
 	display: flex;
 	align-items: center;

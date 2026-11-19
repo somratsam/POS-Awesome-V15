@@ -173,39 +173,23 @@ describe("figures and wording", () => {
 		expect(exchangeCartLabels({ kind: "credit", pay: 0, credit: 31.1 }, money, t)).toEqual({
 			headline: "Credit note issued",
 			amount: "OMR 31.100",
-			button: "Submit exchange",
+			button: "Continue",
 		});
 		expect(exchangeCartLabels({ kind: "even", pay: 0, credit: 0 }, money, t)).toEqual({
 			headline: "Even exchange",
 			amount: null,
-			button: "Submit exchange",
+			button: "Continue",
 		});
-		expect(exchangeCartLabels({ kind: "return", pay: 0, credit: 50.4 }, money, t).button).toBe(
-			"Submit return → Credit note",
-		);
+		expect(exchangeCartLabels({ kind: "return", pay: 0, credit: 50.4 }, money, t).button).toBe("Continue");
 		expect(exchangeQtyText(1, 1, t)).toBe("1 back · 1 new");
 		expect(exchangeQtyText(2, 0, t)).toBe("2 back");
 	});
 
-	it("the confirmation", () => {
-		const data = { backQty: 1, returned: 50.4, newQty: 1, saleTotal: 109.5 };
-		expect(exchangeConfirmText({ type: "submit", data: { ...data, kind: "pays", pay: 59.1 } }, money, t)).toEqual({
-			title: "Submit this exchange?",
-			body: ["1 back (OMR 50.400), 1 new (OMR 109.500), customer pays OMR 59.100."],
-			ok: "Submit exchange",
-		});
-		expect(
-			exchangeConfirmText({ type: "submit", data: { ...data, saleTotal: 20, kind: "credit", credit: 30.4 } }, money, t).body[0],
-		).toBe("1 back (OMR 50.400), 1 new (OMR 20.000), credit note issued OMR 30.400.");
-		expect(exchangeConfirmText({ type: "submit", data: { ...data, kind: "even" } }, money, t).body[0]).toMatch(
-			/even exchange\.$/,
-		);
-		expect(exchangeConfirmText({ type: "submit", data: { backQty: 1, returned: 50.4, kind: "return", credit: 50.4 } }, money, t)).toEqual({
-			title: "Submit this return?",
-			body: ["1 back (OMR 50.400), credit note issued OMR 50.400."],
-			ok: "Submit return → Credit note",
-		});
+	it("questions: add a return, discard (submitting asks nothing)", () => {
 		expect(exchangeConfirmText({ type: "discard", data: {} }, money, t).title).toBe("Discard? Nothing saved.");
+		expect(exchangeConfirmText({ type: "add_return", data: { receipt: "R-1" } }, money, t).title).toBe(
+			"Add a return from this receipt?",
+		);
 	});
 });
 
@@ -333,12 +317,8 @@ describe("submitting", () => {
 		return store;
 	};
 	const sale = (paid = 0) => ({ items: [{ item_code: "N", qty: 1 }], payments: [{ mode_of_payment: "Visa", amount: paid }] });
-	const answer = async (store: any, value: boolean) => {
-		await vi.waitFor(() => expect(store.prompt?.type).toBe("submit"));
-		store.settlePrompt(value);
-	};
 
-	it("credit left: server figures, one confirmation, then the pair; receipt and BALANCE voucher print", async () => {
+	it("credit left, Submit & Print: server figures, no question, the pair; receipt and BALANCE voucher print", async () => {
 		const store = await ready();
 		const printDoc = vi.fn();
 		call.mockImplementation(async (method: string) => {
@@ -346,8 +326,8 @@ describe("submitting", () => {
 			return { return: { name: "CN-9" }, sale: { name: "S-12" }, credit_left: 30.45 };
 		});
 		const running = useExchangeSubmit().submitExchange({ sale: sale(), print: true, expectKinds: ["credit", "even"], printDoc });
-		await answer(store, true);
 		expect(await running).toBe(true);
+		expect(store.prompt).toBeNull();
 		const submit = call.mock.calls.find(([method]) => method.endsWith("submit_exchange"))![1];
 		expect(submit.expected).toEqual({ returned: 80.85, sale_total: 50.4, pay: 0 });
 		expect(submit.return_invoice.items).toEqual([{ sales_invoice_item: "L1", qty: 1 }]);
@@ -358,14 +338,55 @@ describe("submitting", () => {
 		expect(store.active).toBe(false);
 	});
 
-	it("Back on the confirmation saves nothing", async () => {
-		const store = await ready();
-		call.mockResolvedValueOnce({ returned: 80.85, sale_total: 80.85, pay: 0, credit_left: 0 });
-		const running = useExchangeSubmit().submitExchange({ sale: sale(), print: true, expectKinds: ["credit", "even"], printDoc: vi.fn() });
-		await answer(store, false);
-		expect(await running).toBe(false);
-		expect(call.mock.calls.some(([m]) => m.endsWith("submit_exchange"))).toBe(false);
-		expect(store.active).toBe(true);
+	it("credit left, Submit (no print): only the BALANCE voucher prints -- the customer needs it", async () => {
+		await ready();
+		const printDoc = vi.fn();
+		call.mockImplementation(async (method: string) => {
+			if (method.endsWith("quote_exchange")) return { returned: 80.85, sale_total: 50.4, pay: 0, credit_left: 30.45 };
+			return { return: { name: "CN-9" }, sale: { name: "S-12" }, credit_left: 30.45 };
+		});
+		expect(await useExchangeSubmit().submitExchange({ sale: sale(), print: false, expectKinds: ["credit"], printDoc })).toBe(true);
+		await vi.waitFor(() => expect(printDoc).toHaveBeenCalledTimes(1));
+		expect(printDoc.mock.calls[0][0]).toEqual({ name: "CN-9", settings: JSON.stringify({ balance_for: "S-12" }) });
+	});
+
+	it("even exchange: Submit prints nothing, Submit & Print prints the receipt", async () => {
+		const even = async (print: boolean) => {
+			await ready();
+			const printDoc = vi.fn();
+			call.mockImplementation(async (method: string) => {
+				if (method.endsWith("quote_exchange")) return { returned: 80.85, sale_total: 80.85, pay: 0, credit_left: 0 };
+				return { return: { name: "CN-8" }, sale: { name: "S-11" }, credit_left: 0 };
+			});
+			expect(await useExchangeSubmit().submitExchange({ sale: sale(), print, expectKinds: ["even"], printDoc })).toBe(true);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			return printDoc;
+		};
+		expect(await even(false)).not.toHaveBeenCalled();
+		const printed = await even(true);
+		expect(printed).toHaveBeenCalledTimes(1);
+		expect(printed.mock.calls[0][0]).toEqual({ name: "S-11" });
+		expect(recordBalanceVoucherPrint).not.toHaveBeenCalled();
+	});
+
+	it("customer pays more: Submit prints nothing, Submit & Print prints the receipt", async () => {
+		const pays = async (print: boolean) => {
+			await ready();
+			const printDoc = vi.fn();
+			call.mockResolvedValueOnce({ return: { name: "CN-7" }, sale: { name: "S-10" }, credit_left: 0 });
+			const ok = await useExchangeSubmit().submitExchange({
+				sale: sale(28.65),
+				figures: { returned: 80.85, sale_total: 109.5, pay: 28.65 },
+				print,
+				expectKinds: ["pays", "credit", "even"],
+				printDoc,
+			});
+			expect(ok).toBe(true);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			return printDoc;
+		};
+		expect(await pays(false)).not.toHaveBeenCalled();
+		expect((await pays(true)).mock.calls).toEqual([[{ name: "S-10" }]]);
 	});
 
 	it("the server says the customer pays more: nothing is asked or saved", async () => {
@@ -392,13 +413,12 @@ describe("submitting", () => {
 			throw new Error("Totals changed: the returned value is 80.850, the till showed 80.000.");
 		});
 		const running = useExchangeSubmit().submitExchange({ sale: null, print: true, expectKinds: ["return"], printDoc: vi.fn() });
-		await answer(store, true);
 		expect(await running).toBe(false);
 		expect(toastShow).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/^Totals changed/) }));
 		expect(store.active).toBe(true);
 	});
 
-	it("plain return: the credit note voucher prints", async () => {
+	it("return only: the credit note voucher prints, whichever key submitted it", async () => {
 		const store = await ready();
 		const printDoc = vi.fn();
 		call.mockImplementation(async (method: string) =>
@@ -407,8 +427,8 @@ describe("submitting", () => {
 				: { return: { name: "CN-10" }, sale: null, credit_left: 80.85 },
 		);
 		const running = useExchangeSubmit().submitExchange({ sale: null, print: false, expectKinds: ["return"], printDoc });
-		await answer(store, true);
 		expect(await running).toBe(true);
+		expect(store.prompt).toBeNull();
 		await vi.waitFor(() => expect(printDoc).toHaveBeenCalledWith({ name: "CN-10" }));
 		expect(recordBalanceVoucherPrint).not.toHaveBeenCalled();
 	});
@@ -449,18 +469,16 @@ describe("instant confirmation", () => {
 		}
 	});
 
-	it("a matching background check opens the confirmation with no server call", async () => {
+	it("a matching background check is used: the only server call is the submit", async () => {
 		const store = await ready();
 		store.setSaleProvider(() => sale);
 		call.mockResolvedValue(QUOTE);
 		store.refreshQuote(0);
 		await vi.waitFor(() => expect(store.quote).not.toBeNull());
-		call.mockClear();
-		const running = useExchangeSubmit().submitExchange({ sale, print: true, expectKinds: ["credit"], printDoc: vi.fn() });
-		await vi.waitFor(() => expect(store.prompt?.type).toBe("submit"));
-		expect(call).not.toHaveBeenCalled();
-		store.settlePrompt(false);
-		await running;
+		call.mockReset();
+		call.mockResolvedValue({ return: { name: "CN-1" }, sale: { name: "S-1" }, credit_left: 30.45 });
+		await useExchangeSubmit().submitExchange({ sale, print: true, expectKinds: ["credit"], printDoc: vi.fn() });
+		expect(call.mock.calls.map(([m]) => m.split(".").pop())).toEqual(["submit_exchange"]);
 	});
 
 	it("a changed cart is checked now, shown as Checking…", async () => {
@@ -469,15 +487,15 @@ describe("instant confirmation", () => {
 		call.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
 		const running = useExchangeSubmit().submitExchange({ sale, print: true, expectKinds: ["credit"], printDoc: vi.fn() });
 		await vi.waitFor(() => expect(store.checking).toBe(true));
+		call.mockResolvedValueOnce({ return: { name: "CN-1" }, sale: { name: "S-1" }, credit_left: 30.45 });
 		release(QUOTE);
-		await vi.waitFor(() => expect(store.prompt?.type).toBe("submit"));
+		expect(await running).toBe(true);
 		expect(store.checking).toBe(false);
-		store.settlePrompt(false);
-		await running;
 	});
 
-	it("Payments passes the figures it shows: no check before the confirmation", async () => {
-		const store = await ready();
+	it("Payments passes the figures it shows: no check before the submit", async () => {
+		await ready();
+		call.mockResolvedValueOnce({ return: { name: "CN-1" }, sale: { name: "S-1" }, credit_left: 0 });
 		const running = useExchangeSubmit().submitExchange({
 			sale: { ...sale, payments: [{ mode_of_payment: "Visa", amount: 28.65 }] },
 			figures: { returned: 80.85, sale_total: 109.5, pay: 28.65 },
@@ -485,10 +503,8 @@ describe("instant confirmation", () => {
 			expectKinds: ["pays"],
 			printDoc: vi.fn(),
 		});
-		await vi.waitFor(() => expect(store.prompt?.type).toBe("submit"));
-		expect(call).not.toHaveBeenCalled();
-		store.settlePrompt(false);
-		await running;
+		expect(await running).toBe(true);
+		expect(call.mock.calls.map(([m]) => m.split(".").pop())).toEqual(["submit_exchange"]);
 	});
 
 	it("payment screen: no confirmation -- straight to saving; a second press does nothing", async () => {
@@ -496,7 +512,6 @@ describe("instant confirmation", () => {
 		let release: (v: any) => void = () => {};
 		call.mockImplementation(() => new Promise((resolve) => (release = resolve)));
 		const options = {
-			confirm: false,
 			sale: { ...sale, payments: [{ mode_of_payment: "Visa", amount: 28.65 }] },
 			figures: { returned: 80.85, sale_total: 109.5, pay: 28.65 },
 			print: true,
@@ -513,24 +528,6 @@ describe("instant confirmation", () => {
 		release({ return: { name: "CN-1" }, sale: { name: "S-1" }, credit_left: 0 });
 		expect(await running).toBe(true);
 		expect(store.submitting).toBe(false);
-	});
-
-	it("confirmed: the dialog stays open as Saving… (Back ignored) until the save ends", async () => {
-		const store = await ready();
-		let release: (v: any) => void = () => {};
-		call.mockImplementation((method: string) =>
-			method.endsWith("quote_exchange") ? Promise.resolve(QUOTE) : new Promise((resolve) => (release = resolve)),
-		);
-		const running = useExchangeSubmit().submitExchange({ sale, print: true, expectKinds: ["credit"], printDoc: vi.fn() });
-		await vi.waitFor(() => expect(store.prompt?.type).toBe("submit"));
-		store.settlePrompt(true);
-		expect(store.prompt?.saving).toBe(true);
-		store.settlePrompt(false);
-		expect(store.prompt?.saving).toBe(true);
-		await vi.waitFor(() => expect(call.mock.calls.some(([m]) => m.endsWith("submit_exchange"))).toBe(true));
-		release({ return: { name: "CN-1" }, sale: { name: "S-1" }, credit_left: 30.45 });
-		expect(await running).toBe(true);
-		expect(store.prompt).toBeNull();
 	});
 });
 
@@ -604,8 +601,8 @@ describe("wiring", () => {
 		expect((summarySource.match(/<InvoiceActionButtons/g) || []).length).toBe(2);
 		expect((summarySource.match(/:exchange-button-label="exchangeLabels.button"/g) || []).length).toBe(2);
 		expect((summarySource.match(/:exchange-active="exchangeStore.active"/g) || []).length).toBe(2);
-		expect(buttonsSource).toContain('exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : __("PAY")');
-		expect(buttonsSource).toContain('exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : __("Pay")');
+		expect(buttonsSource).toContain('exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : creditActive ? creditPayLabel || __("Checking…") : __("PAY")');
+		expect(buttonsSource).toContain('exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : creditActive ? creditPayLabel || __("Checking…") : __("Pay")');
 		expect(buttonsSource).toContain('__("Return / Exchange")');
 	});
 
@@ -664,13 +661,14 @@ describe("wiring", () => {
 		expect(invoiceVueSource).toContain("exchangeStore.refreshQuote(400)");
 		expect(invoiceVueSource).toContain("this._unregisterExchangeSale?.()");
 		expect(buttonsSource).toContain('exchangeChecking ? __("Checking…") : exchangeButtonLabel');
-		expect((summarySource.match(/:exchange-checking="exchangeStore.checking"/g) || []).length).toBe(2);
+		expect((summarySource.match(/:exchange-checking="exchangeStore.checking \|\| exchangeStore.figuresPending"/g) || []).length).toBe(2);
 		expect(paymentButtonsSource).toMatch(/checking\s*\?\s*__\("Checking…"\)\s*:\s*saving\s*\?\s*__\("Saving…"\)\s*:\s*__\("Submit exchange & Print"\)/);
 		expect(paymentsSource).toContain(':checking="exchangeStore.checking"');
 		expect(paymentsSource).toContain(':saving="exchangeMode && exchangeStore.submitting"');
-		expect(paymentsSource).toMatch(/submitExchange\(\{\s*confirm: false,/);
+		expect(paymentsSource).not.toContain("confirm: false");
 		expect(paymentButtonsSource).toContain('__("Saving…")');
-		expect(hostSource).toContain('saving ? __("Saving…") : okLabel');
+		// No confirmation dialog for submitting any more (section 108).
+		expect(hostSource).not.toContain("Saving…");
 	});
 
 	it("the whole picker row ticks and unticks; −/+ and the box keep their own clicks", () => {

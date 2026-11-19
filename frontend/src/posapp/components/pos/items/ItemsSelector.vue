@@ -389,6 +389,9 @@ import { useInvoiceStore } from "../../../stores/invoiceStore";
 import { useEmployeeStore } from "../../../stores/employeeStore";
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import { looksLikeReceipt } from "../../../utils/oneScreenExchange";
+import { looksLikeVoucher } from "../../../composables/pos/items/voucherScanRoute";
+import { openOldReturnFor } from "../../../composables/pos/items/exchangeScanRoute";
+import { useSaleCreditStore } from "../../../stores/saleCreditStore";
 
 import { parseBooleanSetting, shouldBlockSaleForStock } from "../../../utils/stock";
 import { shouldFocusCartQtyAfterItemAdd } from "../../../utils/cartFocusSettings";
@@ -1943,6 +1946,24 @@ const onEnter = (e) => {
 			if (handled) clearSearch();
 			else itemsSelectorSearch.onEnter(e);
 		});
+		return;
+	}
+	// One-screen exchange off: a receipt number opens the old Return dialog
+	// with it searched (section 110).
+	if (openOldReturnFor(typed)) {
+		e?.preventDefault?.();
+		clearSearch();
+		return;
+	}
+	// A typed credit note voucher number (section 108).
+	if (looksLikeVoucher(typed)) {
+		e?.preventDefault?.();
+		void useSaleCreditStore()
+			.applyFromScan(typed)
+			.then((result) => {
+				if (result === "not_voucher") itemsSelectorSearch.onEnter(e);
+				else clearSearch();
+			});
 		return;
 	}
 	itemsSelectorSearch.onEnter(e);

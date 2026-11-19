@@ -107,6 +107,27 @@ export const isLikelyKeyboardScan = ({
 };
 
 /**
+ * A receipt's barcode carries dashes ("MCO-2026-00030", "2026-00210"), which
+ * no item barcode uses. A dash is accepted only on the timing-verified
+ * keyboard-scan path, and only when the whole code is a complete receipt
+ * number (section 109): typing a dashed text by hand never passes the
+ * timing check, and a half-scanned code is never shaped like a full receipt.
+ */
+const RECEIPT_SCAN_CHAR_RE = /^[A-Za-z0-9 /-]$/;
+const RECEIPT_SCAN_STRING_RE = /^[A-Za-z0-9 /-]+$/;
+const FULL_RECEIPT_RE = /^(?:[A-Za-z]+-)*\d{4}-\d{5,}(?:-\d+)?$/;
+
+export const isReceiptScanChar = (value: string): boolean => RECEIPT_SCAN_CHAR_RE.test(value);
+
+/** A value that may still become a receipt scan (letters, digits, dashes). */
+export const isReceiptScanCandidate = (value: string): boolean =>
+    RECEIPT_SCAN_STRING_RE.test(value) && value.includes("-");
+
+/** A complete receipt number as its barcode prints it: year-number (5+ digits), an amendment's "-1" allowed. */
+export const isFullReceiptCode = (value: string): boolean =>
+    value.length <= 60 && FULL_RECEIPT_RE.test(value.trim());
+
+/**
  * Checks if the search field is ready to accept a scan.
  */
 export const isSearchFieldPrimedForScan = (value: string): boolean => {
@@ -115,3 +136,37 @@ export const isSearchFieldPrimedForScan = (value: string): boolean => {
     }
     return isBarcodeCandidateString(value);
 };
+
+/**
+ * A field that should act on a scanned receipt without Enter (the return
+ * search box, section 109): call `onKeydown` from the field's keydown. When
+ * the field then holds a complete receipt number and nothing is typed for
+ * 250 ms, `onScan` runs -- at any scanner speed. A half number is never a
+ * complete one; Enter (which searches on its own) cancels the wait.
+ */
+export function createReceiptScanWatcher(options: {
+    getValue: () => string;
+    onScan: (_code: string) => void;
+    settleMs?: number;
+}) {
+    const settleMs = options.settleMs ?? 250;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const reset = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+    };
+
+    const onKeydown = (event: KeyboardEvent) => {
+        const key = event?.key || "";
+        reset();
+        if (key === "Enter" || key === "Escape" || event?.ctrlKey || event?.metaKey || event?.altKey) return;
+        timer = setTimeout(() => {
+            timer = null;
+            const code = String(options.getValue() || "").trim();
+            if (isFullReceiptCode(code)) options.onScan(code);
+        }, settleMs);
+    };
+
+    return { onKeydown, reset };
+}

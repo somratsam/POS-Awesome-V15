@@ -305,6 +305,14 @@ export const useCustomersStore = defineStore("customers", () => {
 		};
 	}
 
+	/** One voucher off the sale (its credit was used meanwhile on another till). */
+	function removeCreditVoucher(creditOrigin: string) {
+		if (!creditOrigin || !creditVouchers.value[creditOrigin]) return;
+		const next = { ...creditVouchers.value };
+		delete next[creditOrigin];
+		creditVouchers.value = next;
+	}
+
 	/** Every scanned voucher off the sale ("Use Customer Balance" switched off). */
 	function dropCreditVouchers() {
 		if (Object.keys(creditVouchers.value).length) creditVouchers.value = {};
@@ -1260,6 +1268,7 @@ export const useCustomersStore = defineStore("customers", () => {
 		closeExchangePrompt,
 		setCreditOn,
 		creditVouchers,
+		removeCreditVoucher,
 		addCreditVoucher,
 		keepCreditVouchersFor,
 		dropBearerVouchers,

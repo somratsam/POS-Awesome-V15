@@ -326,6 +326,7 @@ import { getCurrentInstance, ref } from "vue";
 import { save_and_clear_invoice as saveAndClearInvoiceAction } from "./invoice_utils/actions";
 import { buildExchangeSale, exchangeCartSignature } from "./invoice_utils/exchange";
 import { useExchangeStore } from "../../stores/exchangeStore";
+import { useSaleCreditStore } from "../../stores/saleCreditStore";
 import { fetchDraftInvoices } from "../../utils/draftInvoices";
 import { getQuickCashTenderSuggestions } from "../../utils/cashTender";
 
@@ -1290,6 +1291,23 @@ export default {
 				if (signature) exchangeStore.refreshQuote(400);
 			},
 		);
+		// A credit note voucher on the sale (section 108): the server's total
+		// for this exact cart, 0.4 s after its last change.
+		const saleCredit = useSaleCreditStore();
+		this._unregisterSaleCredit = saleCredit.setProviders(
+			() => buildExchangeSale(this),
+			() => exchangeCartSignature(this),
+		);
+		this.$watch(
+			() =>
+				saleCredit.active
+					? `${exchangeCartSignature(this)}#${saleCredit.vouchers.map((voucher) => voucher.credit_origin).join(",")}`
+					: "",
+			(signature) => {
+				if (signature) saleCredit.refresh(400);
+				else saleCredit.reset();
+			},
+		);
 
 		this.$watch(
 			() => this.uiStore.posProfile,
@@ -1411,6 +1429,7 @@ export default {
 	},
 	beforeUnmount() {
 		this._unregisterExchangeSale?.();
+		this._unregisterSaleCredit?.();
 		if (typeof this.price_list_rate_dialog_resolver === "function") {
 			this.price_list_rate_dialog_resolver(null);
 			this.price_list_rate_dialog_resolver = null;

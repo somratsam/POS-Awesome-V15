@@ -10530,3 +10530,332 @@ unchanged with them loaded.
   too (repair button, 12 px return-search scroll, 16 px offers page scroll)?
   Closing three-cards layout OK? Is "all but Credit and Output visible" good
   enough for the payment screen on small?
+
+## 108. Every exchange through the payment screen; credit note voucher from the main screen (2026-11-19, on `develop-swan`, NOT committed)
+
+**Request (approved proposal).** A: every one-screen exchange case goes
+through the payment screen, like a normal sale, with no confirmation popup
+(the payment screen is the review). B: a credit note voucher scanned on the
+main screen selects and locks its customer and puts its credit on the sale.
+Decisions: return only has one button; even exchange prints only with
+"& Print"; another store's voucher works as before; B on all profiles; the
+"Credit note −X / Pay Y" line shows exactly the payment screen's figures.
+Plus (a) row lock, (b) unfinished exchange drafts, (c) return Sales Person,
+(d) wrong-try limit, (e) pre-deploy checks.
+
+**A. Exchange through the payment screen.**
+- Cart button: "Pay X" (customer pays more), "Continue" (credit left, even,
+  return only). The exchange's "Submit this exchange? / return?" dialog is
+  gone (store, `ExchangeHost`, `useExchangeSubmit`); "Add a return from this
+  receipt?" and "Discard? Nothing saved." stay.
+- Credit left / even: Pay saves the sale draft as for "pays" (key
+  "<id>:sale"), Payments in exchange mode: locked "Exchange credit" row,
+  "Nothing to pay" or "Even exchange — nothing to pay", "Credit note issued X
+  — the BALANCE voucher prints."; Cash/Card cards greyed out and `inert`.
+  Buttons [Submit exchange] [Submit exchange & Print].
+- Return only: `ExchangeReturnReview.vue` inside Payments (same dialog/column,
+  same keys: every submit key goes through `submitInvoiceWrapper`): receipt,
+  "1 back −X", "Credit note issued X", "For Y — the credit note voucher
+  prints.", Sales Person locked; one button [Submit return & Print voucher];
+  nothing saved before Submit (no return draft); Cancel / closing the payment
+  screen goes back to the cart with the exchange as it was.
+- Print: receipt only with "& Print" (pays, credit, even); the credit always
+  prints its voucher whichever key (BALANCE voucher when credit is left,
+  credit note voucher for a return only). Even exchange: Submit prints
+  nothing (was: always printed).
+- Sales Person: the field is the new sale's; under it "Return credited to:
+  X" (from `quote_exchange.return_sales_person`, the server's own rule).
+- Unchanged: "Saving…", second press ignored, both-or-neither
+  (`submit_exchange`), BALANCE voucher record + print.
+
+**B. Credit note voucher from the main screen.**
+- Scan box order (scanner `useScannerInput`, Enter in the search box
+  `ItemsSelector`, counter-grid entry `Pos.vue`): picker -> receipt -> voucher
+  -> item. Voucher shape (`voucherScanRoute.looksLikeVoucher`): "C" + 2-digit
+  year + store letters + number + 4 check characters (no 0/1/I/L/O), dashes
+  and case ignored. Item barcodes are digits only; receipts have a 4-digit
+  year between dashes. The server decides (`lookup_credit_voucher`,
+  `quiet_miss=1`): not a voucher -> `{"found": 0}` -> the code goes to the
+  item search once; used / expired / another company / too many tries -> red
+  toast with the reason, cart unchanged.
+- Applied (`saleCreditStore.applyFromScan`): walk-in/default -> the voucher's
+  customer (named or Anonymous bearer) is selected and locked; another named
+  customer -> "Use credit note X? The customer changes to Y." (same dialog
+  as Payments, `SaleCreditHost.vue`); another customer's credit already on the
+  sale, the same voucher twice, an exchange or a return in the cart, offline:
+  refused. Lock note "Paying with credit note X (OMR 12.500) — the customer
+  stays Y." with [Remove] (drops the vouchers, credit off, unlocks). Cancel
+  Sale and Save & Clear drop every voucher.
+- "Credit note −X · To pay Y" (hero) / "Credit note −X" (fast counter) and
+  the main button "Pay OMR Y": the server's total for this exact cart
+  (`sale_credit_quote.quote_sale_credit`: `update_invoice` in a savepoint that
+  is always rolled back, like `quote_exchange`) and `get_available_credit`;
+  the rows are picked and allocated by the payment screen's own code, now
+  shared (`useRedemptionLogic.creditRowsToApply` / `allocateCredit`, same
+  precision and `flt`). Checked 0.4 s after the cart's last change, only while
+  a voucher is on the sale; "Checking…" until in; Pay waits for it. Same
+  shift's credit of that customer is counted too, as the payment screen does.
+- The payment screen re-reads the credit when it opens; a voucher whose
+  balance dropped meanwhile: "Credit note X now has Y left — part of it was
+  used on another till." (or "has already been used", voucher removed).
+- Scanning in Payments works as before (lost-voucher supervisor path stays
+  there only: a return number has the receipt shape on the main screen).
+
+**(a) One credit note, two tills.** `creation._lock_credit_origins`: the
+credit notes the sale spends are locked `SELECT ... WHERE name IN %(names)s
+ORDER BY name FOR UPDATE` (name order, parameterised) before the balance is
+checked, and the balance used is the locked read's (a plain read can show
+the snapshot from before the other till committed). On MariaDB with
+`innodb_snapshot_isolation=1` (staging 11.8) a row changed since the
+snapshot raises a deadlock-class error -> "This credit note was just used on
+another till. Open Payments again to see what is left on it." A sale using
+credit is never queued for the background (`_uses_customer_credit`) and its
+credit Journal Entry is posted inside the submit, under the lock (the
+background job path never re-validated credit).
+
+**(b) Unfinished exchange drafts.** Numbering: a draft takes its number at
+save; Frappe's `revert_series_if_last` gives it back when the deleted draft
+is the series' last (works for "MCO-.YYYY.-": prefix from the name), else
+a gap (a "Deleted Document" record stays). Return only saves no draft.
+Closing Shift (`POSClosingShift.delete_draft_invoices`) now first calls
+`one_screen_exchange.delete_shift_exchange_drafts`: unsubmitted, not a
+return, that opening shift and profile, key "<exchange id>:sale" (checked in
+Python too), whatever "Auto Delete Draft Invoice" says; never another draft,
+a submitted invoice, a return or the shift. `get_draft_invoices` hides them
+(`posa_client_request_id not like '%:sale'`, Frappe wraps it in ifnull, so
+drafts without a key stay). Staging: no such drafts today.
+
+**(c) Return's Sales Person.** `sales_credit.return_sales_team`: the
+original's Sales Team, even a Sales Person disabled since; only when the
+original has none, the PIN cashier's linked Sales Person (none linked:
+empty). ERPNext refuses a disabled Sales Person on any new invoice
+(`selling_controller.validate_sales_team`): the Sales Invoice / POS Invoice
+overrides let through exactly the names on the return's original
+(`validate_return_sales_team`); a sale, or another disabled name on a
+return, is still refused. New returns only; `fill_pos_sales_team` no longer
+empties a return that got the cashier fallback. Staging: 44 of 89 submitted
+POS returns have an empty Sales Team (all 44 originals empty too).
+Production count (run before deciding on a backfill):
+
+    SELECT COUNT(*) AS returns_empty_team,
+           SUM(o.parent IS NULL) AS original_also_empty,
+           SUM(o.parent IS NOT NULL) AS original_has_one
+    FROM `tabSales Invoice` r
+    LEFT JOIN (SELECT DISTINCT parent FROM `tabSales Team` WHERE parenttype='Sales Invoice') t ON t.parent = r.name
+    LEFT JOIN (SELECT DISTINCT parent FROM `tabSales Team` WHERE parenttype='Sales Invoice') o ON o.parent = r.return_against
+    WHERE r.docstatus = 1 AND r.is_return = 1 AND IFNULL(r.return_against,'') <> ''
+      AND IFNULL(r.pos_profile,'') <> '' AND t.parent IS NULL;
+
+**(d) Wrong voucher numbers.** Limit 10 per login *and till* (POS Profile),
+15 minutes from the last wrong number (unchanged). The same wrong code again
+(dashes/case ignored) counts once; only a 16-character SHA-256 digest is
+kept. A POS supervisor active on the till clears the count: identity from
+`get_submitted_invoice_edit_approver` (session user, or the terminal's active
+cashier, written server-side only after their PIN was verified); the client
+cannot claim it. Item scans never reach the lookup. Message: "Too many wrong
+voucher numbers on this till. Wait 15 minutes, or switch the till to a POS
+supervisor with their PIN and try again."
+
+**(e) Production pre-deploy checks (section 108).**
+1. No item barcode or code shaped like a voucher (must return nothing):
+
+        SELECT barcode FROM `tabItem Barcode`
+        WHERE barcode REGEXP '^[Cc][0-9]{2}[A-Za-z]*[0-9]+[2-9A-HJKMNP-Za-hjkmnp-z]{4}$'
+        UNION ALL
+        SELECT item_code FROM tabItem
+        WHERE item_code REGEXP '^[Cc][0-9]{2}[A-Za-z]*[0-9]+[2-9A-HJKMNP-Za-hjkmnp-z]{4}$';
+
+2. Background submission per profile (credit sales now always submit in the
+   foreground; note which profiles have it on):
+
+        SELECT name, posa_allow_submissions_in_background_job FROM `tabPOS Profile`;
+
+3. MariaDB snapshot isolation (decides which message a two-till race shows;
+   both are safe): `SELECT @@version, @@innodb_snapshot_isolation;`
+4. The (c) count above.
+
+**Live check (staging, headless Chromium 1600x960, throwaway PIN cashier
+"T108 Cashier" on test 222, One-screen exchange ticked for the check and set
+back to off).**
+- B: typed C26-MCO-00019-6S78 (MCO-CN-2026-00019, test x, 80.850) in the item
+  box -> customer test x selected and locked, "Paying with credit note
+  C26-MCO-00019-6S78 (OMR 80.850) — the customer stays test x. REMOVE",
+  "Credit note OMR 80.850 — scan the new items". Two items (87.150) ->
+  "Credit note −OMR 80.850 · To pay OMR 6.300", button "Pay OMR 6.300". Pay ->
+  payment screen: Applied Stored Value 80.850, Cash 6.300, Remaining 0.000 --
+  the same figures. Cancel Payment -> Remove -> note, line and "Pay OMR"
+  label gone, customer unlocked.
+- A, credit left: receipt MCO-2026-00029 (67.620) + one item 28.350 ->
+  "Continue" -> payment screen, no question: locked Exchange credit
+  −28.350, "Nothing to pay", "Credit note issued OMR 39.270 — the BALANCE
+  voucher prints.", Cash/Card greyed out, "Return credited to: aziz",
+  [Submit exchange] [Submit exchange & Print]. Submit exchange (no print) ->
+  ACC-SINV-2026-00411 (sale) + 00412 (return, Sales Team aziz = original's);
+  printed: only the BALANCE voucher of 00412 (balance_for 00411).
+- A, return only: receipt MCO-2026-00030 (Anonymous, 66.150) -> "Continue" ->
+  review: "Returning from MCO-2026-00030", "1 back −OMR 66.150", "Credit note
+  issued OMR 66.150", "For Anonymous — the credit note voucher prints.",
+  Sales Person locked "aziz", one button [Submit return & Print voucher] ->
+  ACC-SINV-2026-00413, credit note voucher printed, cart reset. (First build
+  of the review rendered its buttons outside the dialog: Payments' scoped
+  styles don't reach a child component; restyled as one card and rebuilt.)
+- Cleaned up: ACC-JV-2026-00082, ACC-SINV-2026-00411/-00412/-00413 cancelled,
+  draft ACC-SINV-2026-00410 (from the B check) deleted; T108 cashier disabled,
+  PIN cleared, POS Profile User row removed (it is posa_cashier on the
+  cancelled invoices, so not deleted).
+- Not live-tested: even exchange, customer pays more (unchanged path), fast
+  counter mode, the under-1100 mobile dock, Arabic/RTL, a misread voucher in
+  the browser (unit tests), the two-till race (real-DB tests with a second
+  connection).
+
+**Checks.** Vitest 301/301 files, 1993/1993 tests (Node 24); new
+`saleCreditVoucher.spec.ts` 36 (scan routing item / receipt / voucher /
+misread -> item, used / expired / another company / blocked refused, voucher
++ exchange refused, offline, same voucher twice, customer prompt, Remove
+unlocks, figures = payment screen's, 0.4 s check, A review); updated
+`oneScreenExchange.spec.ts` 45 (no confirmation; print: credit left Submit =
+BALANCE voucher only, & Print = receipt + voucher; even Submit = nothing,
+& Print = receipt; pays Submit = nothing, & Print = receipt; return only =
+credit note voucher). Backend, each module in isolation on staging, all OK:
+test_credit_voucher 77 (+8 limiter), test_voucher_exchange_db 17 (new: lock
+with a second real connection, foreground credit sale, closing cleanup and
+Drafts filter, return Sales Person incl. disabled and fill guard),
+test_one_screen_exchange 39, test_one_screen_exchange_db 30 (1 skip as
+before), test_sales_credit 52 (two old-rule return tests rewritten for the new
+rule, +1), invoice_processing.test_creation 114 (lock stubbed in the one
+fake-frappe test, asserted called once), test_invoice_naming 26, test_invoices
+7, test_payments 12, test_exchange_links_db 10, return_generic_customer_
+credit_guard 9, customer_credit_invoice_fields 2, stored_value 2, gift_cards
+14, sales_by_cashier 24, staff_sales_performance 16, pos_access 12,
+api_imports 4, offline_sync_invoices 4, describe_credit 9,
+submitted_invoice_edit_customer 9, swan_receipt 20, return_line_picking 5,
+invoice_reporting_fields 35, invoice_cancel_hooks 5,
+submitted_invoice_shift_security 1, submitted_invoice_edit_supervisor 13,
+invoice_processing.test_payment 4 / test_utils 12, test_pos_closing_shift 10
+and all 12 closing_processing modules. Breakage checks: removing FOR UPDATE,
+the foreground rule, the disabled override, the cashier fallback, the fill
+guard, the closing call / Drafts filter, the limiter's till key / dedupe /
+supervisor clear, the print rule, the misread fallback or the main screen's
+shift context each fails a test. `bench build --app posawesome` exit 0.
+Migrate: N/A (no doctype JSON, fixture or print format; the closing shift
+change is its Python controller). System Settings restored 3/3, Asia/Muscat,
+`precision("grand_total")` 3.
+
+**Follow-up (same day).**
+- f) A credit note used in part keeps its own code: the voucher code is
+  derived from the credit note's name (`credit_voucher_code(doc.name)`), so
+  the BALANCE voucher prints the same code, expiry and barcode. The old paper
+  scanned later finds the same credit note and shows / uses only what is left
+  (the server re-reads it, and since (a) under a row lock); fully used ->
+  "Voucher X has already been used." Both papers are the same credit, never
+  two.
+- g) Normal sale with a credit note used in part: already the same rule, no
+  change -- `Payments.printBalanceVouchers` runs after every submit with a
+  remainder (receipt only when Print was pressed; BALANCE voucher always).
+- Arabic/RTL (headless Chromium, Administrator language ar for the check,
+  reverted): main-screen note "الدفع بإشعار دائن C26-MCO-00019-6S78 (OMR
+  ٨٠٫٨٥٠) — يبقى العميل test x." with "إزالة", line "إشعار دائن −OMR ٨٠٫٨٥٠ ·
+  المتبقي للدفع OMR ٦٫٣٠٠", button "ادفع OMR ٦٫٣٠٠"; return review fully in
+  Arabic, mirrored, "تأكيد الإرجاع وطباعة القسيمة"; cart button "متابعة".
+  Fixed: "OMR" wrapped away from its amount at the end of the credit line ->
+  no-break space between symbol and amount in that line. Vitest 301/301,
+  1993/1993 after the fix; build exit 0. T108 cashier disabled again, test 222
+  One-screen exchange off again, no drafts left.
+- Backfill of the 44 empty-Sales-Team returns: not now (user).
+
+## 109. Receipt scans open by themselves; big exchange result line (2026-11-19, on `develop-swan`, NOT committed)
+
+**1. Receipt scan needed Enter (bug from the user's hand test).** Cause: the
+scan detector accepts only letters, digits, spaces and "/"
+(`keyboardScan.BARCODE_CANDIDATE_CHAR_RE`). A voucher's barcode is
+"C26MCO000196S78" (no dashes) -> detected; a receipt's is "MCO-2026-00030" ->
+the first "-" reset detection, so only Enter (ItemsSelector.onEnter)
+opened it. Fix (main scan box, `useScannerInput`): a dash is accepted only
+for a receipt; a *complete* receipt number (`isFullReceiptCode`: year-number
+with the 5-digit number, store prefix and amendment "-1" allowed; One-screen
+exchange on) opens after 250 ms with no change, at any scanner speed, and
+sooner when the keystrokes were scanner-speed. A half number is never
+complete, so it never opens; Enter cancels the wait (never opened twice);
+other dashed text is left for Enter as before; item barcodes unchanged.
+Return search box (`Returns.vue` Invoice ID): same rule via
+`createReceiptScanWatcher` -> `search_invoices_by_enter`. First version used
+the keystroke-timing rule only: live it worked 3/5 (Playwright keystrokes
+arrive 15-90 ms apart, spans ~290 ms > the 250 ms cap) -- a slower real
+scanner would fail the same way, so the rule became "complete + quiet";
+live 5/5 at 5 ms and 25 ms per key. A full number typed by hand also opens
+after the pause (same as pressing Enter). Fast counter mode's entry row is
+Enter-only for everything (items too) and is unchanged.
+
+**2. Big result line.** `ExchangeResultLine.vue` + `useExchangeResult`:
+"Customer pays: OMR X" (orange edge), "Credit note to issue: OMR X" (green;
+credit left and return only), "Even exchange — nothing to pay" (blue). Only
+the server's figures (`exchangeStore.serverQuote`: the quote whose key
+matches the cart as it is now); while a change is checked the last line
+stays dimmed with "Checking…"; "New items" in the meta line is the server's
+total too. In the normal screen's summary (replaces the small headline +
+amount), fast counter mode's result metric and the under-1100 mobile dock
+(was "Active sale" + cart total). Dark text on a tinted band (orange text on
+orange tint would be unreadable), size from its own width (container units,
+1.3-2 rem; 0.95-1.3 rem compact), amount and symbol joined by a no-break
+space. Arabic: "يدفع العميل: {0}", "إشعار دائن سيصدر: {0}".
+Live (1366x768 and 1280x720): MCO-2026-00030 scanned -> "Credit note to
+issue: OMR 66.150" -> +28.350 item -> "Credit note to issue: OMR 37.800" ->
++58.800 -> "Customer pays: OMR 21.000", button "Pay OMR 21.000"; at
+1280x720 the line wraps to two lines inside the 146 px bar.
+
+**Checks.** Vitest 303/303 files, 2015/2015 tests (new `receiptScan.spec.ts`
+14, `exchangeResultLine.spec.ts` 8). One run had a single
+`stockLookupDialog.spec.ts` failure under load; it passed 3/3 alone and in
+the two full runs after. Backend: N/A, no Python changed (ar.csv only).
+`bench build` exit 0 (a TS error in the first build, `currencySymbol(string |
+undefined)`, fixed). Migrate N/A. Test cashier disabled and test 222's
+One-screen exchange off again; no drafts or invoices left.
+
+## 110. Exchange result never stuck on "Checking…"; receipt scan on every profile (2026-11-19, on `develop-swan`, NOT committed)
+
+**1. "Checking…" forever after Pay -> Cancel (user's hand test).** Cause:
+Pay saves the exchange's sale draft and loads the server's version back into
+the cart (price_list_rate, taxes_and_charges...). The figures are keyed on
+those fields (`saleSignature`), but the re-check was triggered by Invoice.vue's
+own watch of a smaller set (`exchangeCartSignature`), which didn't change -> no
+new check, so `serverQuote` stayed null. Fix (`exchangeStore`):
+- the store watches the very key it checks against (`liveKey`) and re-checks
+  0.4 s after any change, however the cart changed (scan, tick, back from the
+  payment screen, any other way back);
+- a check that fails or doesn't answer in 15 s, or offline, ends in a clear
+  state: "Totals not checked" + the reason + [Retry] (red edge), never a
+  "Checking…" that stays;
+- Pay: disabled and "Checking…" while the figures for the cart as it is now
+  are being checked (`figuresPending`), and on press it waits for them
+  (`checkNow`); a failed check stops Pay with the reason.
+Live (test 222): pays-more exchange -> Pay -> Cancel Payment -> "Customer pays:
+OMR 21.000" at once, Pay enabled with its amount.
+
+**2. Receipt auto-open on every profile.** Section 109 only routed with
+One-screen exchange ticked. Now, with it off, a complete receipt number
+scanned (or typed + Enter) in the main scan box opens the old Return dialog
+with that receipt searched and the exact match loaded, on profiles with
+"Allow Return" (same `== 1` rule as the Return button: the profile carries
+1, "1" or true). Request goes through `uiStore.requestReturnFor` (watched by
+Returns.vue): emitting on the imported `bus` from the items chunk never
+reached Returns.vue's listener live (a different emitter instance in that
+bundle chunk), so a Pinia store value is used instead. The return search box
+already worked on all profiles. Fast counter mode stays Enter-only.
+Live: exchange off, MCO-2026-00029 / -00030 / -00029 scanned (5 and 25 ms per
+key) -> old Return flow loaded the receipt each time; a half number typed
+slowly -> nothing; exchange on -> the "Items on receipt" picker as before.
+
+**Receipt prefix characters (answer).** `invoice_naming._SERIES_PATTERN`
+`^([A-Z]+(?:-[A-Z]+)*)-\.YYYY\.-$`: capital letters A-Z only, optionally in
+groups joined by a single dash, no digits; at most 4 characters including
+dashes (MAX_PREFIX_LENGTH, barcode decode limit); not the "CN" (credit note)
+segment. The default series ACC-SINV prints just "2026-00210". The scan rule
+accepts any letters prefix (`(?:[A-Za-z]+-)*`) before the 4-digit year.
+
+**Checks.** Vitest 303/303 files, 2024/2024 tests (new: back-from-payment
+re-check, failure + Retry, 15 s timeout, offline, Pay disabled/waits, old
+Return routing incl. 1/"1"/true; removing the store's watch fails the
+back-from-payment test). Backend N/A (no Python). `bench build` exit 0.
+Migrate N/A. Test cashier disabled and test 222 One-screen exchange off
+again. Left alone: user's own unfinished exchange draft ACC-SINV-2026-00418
+(testfff, 11:40) -- Closing Shift deletes it.

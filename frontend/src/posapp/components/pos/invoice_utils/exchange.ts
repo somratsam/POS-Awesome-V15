@@ -1,34 +1,21 @@
-// One-screen exchange from the cart: the main button (and every key that
-// opens Payments) when the customer doesn't pay more -- credit left, even
-// exchange, or no new items -- submits straight from the cart after one
-// confirmation, and always prints. When the customer pays more, Payments
-// opens as usual (show_payment) and submits the exchange from there.
+// One-screen exchange from the cart: the main button ("Pay X" / "Continue")
+// and every key that opens Payments go to the payment screen in every case,
+// like a normal sale; the payment screen is the review step (section 108):
+// - new items (customer pays more, credit left, even exchange): Payments
+//   opens as usual (show_payment saves the sale draft) and submits the
+//   exchange from there;
+// - no new items (a return only): the payment screen's return review
+//   (ExchangeReturnReview in Payments.vue), nothing saved before Submit.
 // Escape: "Discard? Nothing saved."
 
-import { computed, ref } from "vue";
 import { peekExchangeStore, useExchangeStore } from "../../../stores/exchangeStore";
 import { useUIStore } from "../../../stores/uiStore";
 import { useToastStore } from "../../../stores/toastStore";
 import { isOffline } from "../../../../offline/index";
-import { exchangeFigures } from "../../../utils/oneScreenExchange";
-import { useExchangeSubmit } from "../../../composables/pos/exchange/useExchangeSubmit";
-import { usePaymentPrinting } from "../../../composables/pos/payments/usePaymentPrinting";
 import { get_invoice_doc, get_payments } from "./document";
 import { callWithoutDialog } from "../../../utils/voucherMessages";
 
 declare const __: (_text: string, _args?: any[]) => string;
-
-const cartPrinter = () => {
-	const ui = useUIStore();
-	const { loadPrintPage } = usePaymentPrinting({
-		invoiceDoc: ref(null),
-		posProfile: computed(() => ui.posProfile),
-		invoiceType: ref("Invoice"),
-		printFormat: ref(null),
-	} as any);
-	return ({ name, settings }: { name: string; settings?: string }) =>
-		loadPrintPage({ doctype: "Sales Invoice", name, doc: { name, doctype: "Sales Invoice" }, settings } as any);
-};
 
 /**
  * The cart's new items as the exchange's sale (null: none). The same payload
@@ -65,12 +52,13 @@ export function finishExchangeInCart(context: any) {
 }
 
 /**
- * The cart's main action during an exchange. True when it was handled here;
- * false when Payments should open (the customer pays more).
+ * The cart's main action during an exchange. True when it was handled here
+ * (offline, saving, or the return review opened); false when Payments
+ * should open as for a sale (the exchange has new items).
  */
 export async function runExchangeMainAction(
 	context: any,
-	ensureDiscountReasons: (_context: any) => Promise<boolean>,
+	_ensureDiscountReasons?: (_context: any) => Promise<boolean>,
 ): Promise<boolean> {
 	const exchange = peekExchangeStore();
 	if (!exchange?.active) return false;
@@ -79,26 +67,39 @@ export async function runExchangeMainAction(
 		return true;
 	}
 	if (exchange.submitting) return true;
-	const items = Array.isArray(context.items) ? context.items : [];
-	const precision = Number(context.currency_precision) || 3;
-	const figures = exchangeFigures(exchange.returned, items.length ? Number(context.subtotal) || 0 : null, precision);
-	if (figures.kind === "pays") return false;
-
-	if (items.length) {
-		if (context.ensure_auto_batch_selection) await context.ensure_auto_batch_selection();
-		if (context.validate && !(await context.validate())) return true;
-		if (!(await ensureDiscountReasons(context))) return true;
+	// Pay waits for the server's figures of the cart as it is now (the
+	// button shows "Checking…"); a failed check stops here with the reason.
+	if (!exchange.serverQuote) {
+		try {
+			await exchange.checkNow();
+		} catch (error: any) {
+			useToastStore().show({
+				title: error?.message || __("The exchange could not be checked."),
+				color: "error",
+			});
+			return true;
+		}
 	}
-	const sale = buildExchangeSale(context);
-	const { submitExchange } = useExchangeSubmit();
-	const submitted = await submitExchange({
-		sale,
-		print: true,
-		expectKinds: items.length ? ["credit", "even"] : ["return"],
-		printDoc: cartPrinter(),
-	});
-	if (submitted) finishExchangeInCart(context);
+	const items = Array.isArray(context.items) ? context.items : [];
+	if (items.length) return false;
+	openReturnReview(context);
 	return true;
+}
+
+/** A return with no new items: the payment screen, as its review step. */
+export function openReturnReview(context: any) {
+	const exchange = useExchangeStore();
+	const ui = context?.uiStore || useUIStore();
+	exchange.reviewingReturn = true;
+	const useDesktopPaymentDialog = typeof window !== "undefined" && window.innerWidth >= 992;
+	if (useDesktopPaymentDialog && ui?.openPaymentDialog) {
+		ui.openPaymentDialog();
+	} else if (ui?.setActiveView) {
+		ui.closePaymentDialog?.();
+		ui.setActiveView("payment");
+	}
+	context?.eventBus?.emit?.("set_compact_panel", "selector");
+	context?.eventBus?.emit?.("show_payment", "true");
 }
 
 /**

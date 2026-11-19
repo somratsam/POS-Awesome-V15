@@ -1154,6 +1154,87 @@ def _credit_row_expiry_key(row, expiry_by_origin):
     return (1, "")
 
 
+def _uses_customer_credit(data):
+    """True when the sale spends store credit ("Use Customer Balance" or a
+    scanned credit note voucher)."""
+    data = data or {}
+    if cint(data.get("customer_credit_redemption_requested")):
+        return True
+    return flt(data.get("redeemed_customer_credit")) > 0
+
+
+def _requested_credit_origins(data):
+    return sorted(
+        {
+            cstr(row.get("credit_origin")).strip()
+            for row in ((data or {}).get("customer_credit_dict") or [])
+            if hasattr(row, "get")
+            and row.get("type") == "Invoice"
+            and flt(row.get("credit_to_redeem")) > 0
+            and cstr(row.get("credit_origin")).strip()
+        }
+    )
+
+
+def _lock_credit_origins(data):
+    """Lock the credit notes this sale spends (in name order, so two tills
+    never wait on each other crosswise) and say how much of each was used
+    since this request's snapshot: {credit note: amount used meanwhile}.
+
+    A plain read in this transaction can still show the balance from before
+    another till's sale committed (REPEATABLE READ); a locking read waits for
+    that sale and reads the latest balance. With MariaDB's snapshot isolation
+    on, a row changed since the snapshot raises a deadlock-class error
+    instead: the credit was just used on another till.
+    """
+    names = _requested_credit_origins(data)
+    if not names:
+        return {}
+    before = {
+        row.name: flt(row.outstanding_amount)
+        for row in frappe.get_all(
+            "Sales Invoice",
+            filters={"name": ["in", names]},
+            fields=["name", "outstanding_amount"],
+            ignore_permissions=True,
+        )
+    }
+    try:
+        locked = frappe.db.sql(
+            """SELECT name, outstanding_amount FROM `tabSales Invoice`
+               WHERE name IN %(names)s ORDER BY name FOR UPDATE""",
+            {"names": tuple(names)},
+            as_dict=True,
+        )
+    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+        frappe.throw(
+            _("This credit note was just used on another till. Open Payments again to see what is left on it."),
+            title=_("Credit note"),
+        )
+    # Credit notes carry a negative outstanding amount; it moves toward 0 as
+    # the credit is used.
+    return {
+        row.name: max(abs(flt(before.get(row.name, row.outstanding_amount))) - abs(flt(row.outstanding_amount)), 0)
+        for row in locked
+    }
+
+
+def _apply_locked_credit(available_credit_rows, used_since):
+    """get_available_credit's rows less what other tills used meanwhile."""
+    if not used_since:
+        return available_credit_rows
+    rows = []
+    for row in available_credit_rows or []:
+        used = flt(used_since.get(row.get("credit_origin"))) if row.get("type") == "Invoice" else 0
+        if used:
+            row = dict(row)
+            row["total_credit"] = flt(flt(row.get("total_credit")) - used)
+            if row["total_credit"] <= 0:
+                continue
+        rows.append(row)
+    return rows
+
+
 def _validate_customer_credit_redemption(invoice_doc, data, available_credit_rows=None):
     """Store credit spent through "Use Customer Balance".
 
@@ -2495,7 +2576,11 @@ def submit_invoice(invoice, data, submit_in_background=False):
         frappe.throw(_("This invoice request is already being processed. Please try again."))
 
     invoice_name = invoice.get("name")
-    if _in_atomic_exchange():
+    # A sale paid with store credit is always submitted now: its credit is
+    # checked under a row lock and its credit Journal Entry is posted in the
+    # same transaction (_lock_credit_origins), so two tills can't both spend
+    # one credit note.
+    if _in_atomic_exchange() or _uses_customer_credit(data):
         submit_in_background = 0
     if (
         submit_in_background
@@ -2628,7 +2713,10 @@ def submit_invoice(invoice, data, submit_in_background=False):
     # request.
     available_credit_rows = None
     if cint((data or {}).get("customer_credit_redemption_requested")) and invoice_doc.customer:
-        available_credit_rows = get_available_credit(invoice_doc.customer, invoice_doc.company)
+        used_since = _lock_credit_origins(data)
+        available_credit_rows = _apply_locked_credit(
+            get_available_credit(invoice_doc.customer, invoice_doc.company), used_since
+        )
 
     _validate_customer_credit_redemption(
         invoice_doc, data, available_credit_rows=available_credit_rows
@@ -2789,9 +2877,10 @@ def submit_invoice(invoice, data, submit_in_background=False):
             total_cash,
             cash_account,
             payments,
-            # One-screen exchange: the credit Journal Entry is made now, in
-            # the same transaction as both invoices.
-            bool(allow_background_submit) and not _in_atomic_exchange(),
+            # One-screen exchange and any sale paid with store credit: the
+            # credit Journal Entry is made now, in the same transaction, while
+            # the credit note rows are locked (_lock_credit_origins).
+            bool(allow_background_submit) and not _in_atomic_exchange() and not _uses_customer_credit(data),
             getattr(getattr(frappe, "session", None), "user", None),
             ledger_doc.name if ledger_doc else None,
         )

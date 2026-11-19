@@ -461,18 +461,27 @@ class TestAutoFill(_Base):
             sales_credit.apply_pos_sales_team(doc, self.allowed_b_only)
             self.assertEqual(_team(doc), [(SP_B, 100)], picked)
 
-    def test_a_return_of_a_sale_without_one_stays_empty(self):
+    def test_a_return_of_a_sale_without_one_goes_to_the_pin_cashier(self):
+        # Section 108: no Sales Person on the original -> the PIN cashier
+        # doing the return (whatever was picked on the till).
         original = self.bare_invoice(cashier=CASHIER)
         doc = self.doc(cashier=USER_A, is_return=1, return_against=original,
-                       sales_team=[{"sales_person": SP_A, "allocated_percentage": 100}])
+                       sales_team=[{"sales_person": SP_B, "allocated_percentage": 100}])
+        sales_credit.apply_pos_sales_team(doc, None)
+        self.assertEqual(_team(doc), [(SP_A, 100)])
+
+    def test_a_return_of_a_sale_without_one_by_a_cashier_without_one_stays_empty(self):
+        original = self.bare_invoice(cashier=CASHIER)
+        doc = self.doc(cashier=CASHIER, is_return=1, return_against=original)
         sales_credit.apply_pos_sales_team(doc, None)
         self.assertEqual(_team(doc), [])
 
-    def test_a_return_of_a_now_disabled_sales_person_stays_empty(self):
+    def test_a_return_keeps_a_sales_person_disabled_since(self):
+        # Section 108: staff who left still carry their returns.
         original = self.bare_invoice(cashier=USER_A, sales_person=SP_OFF)
         doc = self.doc(cashier=USER_A, is_return=1, return_against=original)
         sales_credit.apply_pos_sales_team(doc, None)
-        self.assertEqual(_team(doc), [])
+        self.assertEqual(_team(doc), [(SP_OFF, 100)])
 
     def test_a_return_without_an_original_is_like_a_sale(self):
         doc = self.doc(cashier=USER_A, is_return=1)

@@ -194,6 +194,11 @@ class POSClosingShift(Document):
         _clear_closing_entry_invoices(self)
 
     def delete_draft_invoices(self):
+        from posawesome.posawesome.api.one_screen_exchange import delete_shift_exchange_drafts
+
+        # Unfinished one-screen exchanges of this shift go whatever the
+        # profile's "Auto Delete Draft Invoice" says (section 108).
+        delete_shift_exchange_drafts(self.pos_opening_shift, self.pos_profile)
         delete_draft_invoices(self.pos_opening_shift, self.pos_profile)
 
     @frappe.whitelist()

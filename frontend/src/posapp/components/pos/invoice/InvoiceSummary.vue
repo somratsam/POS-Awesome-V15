@@ -19,7 +19,7 @@
 						data-testid="exchange-metric-new"
 					>
 						<span>{{ __("New items") }}</span>
-						<strong>{{ exchangeMoney(exchangeNewTotal || 0) }}</strong>
+						<strong>{{ exchangeMoney(exchangeServerNewTotal ?? exchangeNewTotal ?? 0) }}</strong>
 					</div>
 					<div class="counter-grid-summary__metric counter-grid-summary__metric--qty">
 						<span>{{ __("Quantity") }}</span>
@@ -92,12 +92,19 @@
 					/>
 				</div>
 				<div
+					v-if="!exchangeStore.active && saleCredit.active"
+					class="counter-grid-summary__metric"
+					data-testid="sale-credit-metric"
+				>
+					<span>{{ __("Credit note") }}</span>
+					<strong>{{ saleCreditLabels.amount }}</strong>
+				</div>
+				<div
 					v-if="exchangeStore.active"
 					class="counter-grid-summary__metric counter-grid-summary__metric--total"
 					data-testid="exchange-metric-result"
 				>
-					<span>{{ exchangeLabels.headline }}</span>
-					<strong v-if="exchangeLabels.amount">{{ exchangeLabels.amount }}</strong>
+					<ExchangeResultLine :result="exchangeResult" compact />
 				</div>
 				<div v-else class="counter-grid-summary__metric counter-grid-summary__metric--total">
 					<span>{{ __("Net total") }}</span>
@@ -120,7 +127,9 @@
 				:exchange-active="exchangeStore.active"
 				:exchange-enabled="exchangeStore.enabled"
 				:exchange-button-label="exchangeLabels.button"
-				:exchange-checking="exchangeStore.checking"
+				:exchange-checking="exchangeStore.checking || exchangeStore.figuresPending"
+				:credit-active="saleCredit.active"
+				:credit-pay-label="saleCreditLabels.pay"
 				@save-and-clear="handleSaveAndClear"
 				@load-drafts="handleLoadDrafts"
 				@select-order="handleSelectOrder"
@@ -156,14 +165,11 @@
 
 				<div v-if="!useCompactSaleDock" class="summary-hero">
 					<div v-if="exchangeStore.active" class="summary-hero__copy" data-testid="exchange-hero">
-						<span class="summary-hero__eyebrow">{{ exchangeLabels.headline }}</span>
-						<strong v-if="exchangeLabels.amount" class="summary-hero__amount">
-							{{ exchangeLabels.amount }}
-						</strong>
+						<ExchangeResultLine :result="exchangeResult" />
 						<div class="summary-hero__meta">
 							<span>{{ __("Returned") }} −{{ exchangeMoney(exchangeStore.returned) }}</span>
 							<span v-if="exchangeNewTotal !== null">
-								{{ __("New items") }} {{ exchangeMoney(exchangeNewTotal) }}
+								{{ __("New items") }} {{ exchangeMoney(exchangeServerNewTotal ?? exchangeNewTotal) }}
 							</span>
 							<span>{{ exchangeQty }}</span>
 						</div>
@@ -173,6 +179,9 @@
 						<strong class="summary-hero__amount">
 							{{ currencySymbol(displayCurrency) }} {{ formatCurrency(subtotal) }}
 						</strong>
+						<div v-if="saleCredit.active" class="summary-hero__credit" data-testid="sale-credit-line">
+							{{ saleCreditLabels.line }}
+						</div>
 						<div class="summary-hero__meta">
 							<span
 								>{{ formatFloat(total_qty, hide_qty_decimals ? 0 : undefined) }}
@@ -259,7 +268,9 @@
 					:exchange-active="exchangeStore.active"
 					:exchange-enabled="exchangeStore.enabled"
 					:exchange-button-label="exchangeLabels.button"
-					:exchange-checking="exchangeStore.checking"
+					:exchange-checking="exchangeStore.checking || exchangeStore.figuresPending"
+				:credit-active="saleCredit.active"
+				:credit-pay-label="saleCreditLabels.pay"
 					@save-and-clear="handleSaveAndClear"
 					@load-drafts="handleLoadDrafts"
 					@select-order="handleSelectOrder"
@@ -365,6 +376,9 @@ import {
 import InvoiceActionButtons from "./InvoiceActionButtons.vue";
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import { exchangeFigures } from "../../../utils/oneScreenExchange";
+import { useSaleCreditStore } from "../../../stores/saleCreditStore";
+import { useExchangeResult } from "../../../composables/pos/exchange/useExchangeResult";
+import ExchangeResultLine from "./ExchangeResultLine.vue";
 import { exchangeCartLabels, exchangeQtyText } from "../../../utils/oneScreenExchangeText";
 import ParkedOrdersList from "./ParkedOrdersList.vue";
 import DocumentSourceSelector from "../shared/DocumentSourceSelector.vue";
@@ -459,6 +473,30 @@ const exchangeLabels = computed(() =>
 		window.__ || ((text) => text),
 	),
 );
+// A credit note voucher on the sale (main screen, section 108): the same
+// figures as the payment screen (saleCreditStore), "Checking…" until the
+// server's total for this exact cart is in.
+const saleCredit = useSaleCreditStore();
+const saleCreditLabels = computed(() => {
+	const t = window.__ || ((text, args) => (args || []).reduce((out, a, i) => out.replace(`{${i}}`, a), text));
+	// No-break space: "OMR" never wraps away from its amount (it did in RTL).
+	const money = (value) =>
+		`${props.currencySymbol(props.displayCurrency)}\u00A0${props.formatCurrency(Math.abs(Number(value) || 0))}`;
+	if (!saleCredit.active) return { line: "", amount: "", pay: "" };
+	const figures = saleCredit.figures;
+	if (!figures) return { line: `${t("Credit note")} · ${t("Checking…")}`, amount: t("Checking…"), pay: "" };
+	if (!(Number(figures.total) > 0)) {
+		const available = saleCredit.vouchers.reduce((sum, voucher) => sum + (Number(voucher?.amount) || 0), 0);
+		return { line: t("Credit note {0} — scan the new items", [money(available)]), amount: money(available), pay: t("Pay") };
+	}
+	return {
+		line: `${t("Credit note")} −${money(figures.credit)} · ${t("To pay")} ${money(figures.pay)}`,
+		amount: `−${money(figures.credit)}`,
+		pay: t("Pay {0}", [money(figures.pay)]),
+	};
+});
+// The big result line (section 109): server-checked figures only.
+const { result: exchangeResult, newItemsTotal: exchangeServerNewTotal } = useExchangeResult();
 const exchangeQty = computed(() =>
 	exchangeQtyText(exchangeStore.backQty, exchangeNewQty.value, window.__ || ((text) => text)),
 );
@@ -911,6 +949,13 @@ defineExpose({
 	font-size: clamp(1.2rem, 2vw, 1.8rem);
 	line-height: 1.1;
 	color: var(--pos-text-primary);
+}
+
+.summary-hero__credit {
+	margin-top: 2px;
+	font-size: 0.85rem;
+	font-weight: 600;
+	color: rgb(var(--v-theme-success));
 }
 
 .summary-hero__meta {

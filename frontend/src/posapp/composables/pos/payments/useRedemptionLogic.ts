@@ -24,6 +24,9 @@ export interface RedemptionLogicOptions {
 	// This sale's shift and whether a POS supervisor is on the till; decides
 	// which credit rows can be used without a voucher (creditAuthorization.ts).
 	getAuthorizationContext?: () => Omit<CreditAuthorizationContext, "vouchers">;
+	// The credit rows chosen for the sale each time they are fetched (the
+	// payment screen compares them with what the main screen showed).
+	onCreditRows?: (_rows: any[]) => void;
 	// Where scanned vouchers are kept; Payments passes the customers store's,
 	// so they survive Payments closing and reopening.
 	creditVouchers?: Ref<Record<string, CreditVoucher>>;
@@ -53,6 +56,64 @@ export function creditUseOrder(rows: any[]): number[] {
 		.map((row, index) => ({ index, key: key(row) }))
 		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index))
 		.map((entry) => entry.index);
+}
+
+/**
+ * How much of each credit row a sale uses: up to `maxRedeemable`, the credit
+ * that expires soonest first, in whole minor units (baisa) so 50.000 - 45.000
+ * is exactly 5.000. Shared by the payment screen and the main screen's
+ * "Credit note −X / Pay Y" line, so both show the same figures. `normalize`
+ * rounds a value to the currency (the payment screen's own normalizeFloat).
+ */
+export function allocateCredit(
+	rows: any[],
+	maxRedeemable: number,
+	precision: number,
+	normalize: (_value: any) => number,
+): number[] {
+	const list = Array.isArray(rows) ? rows : [];
+	const factor = Math.pow(10, Math.max(Number(precision) || 0, 0));
+	const used: number[] = list.map(() => 0);
+	let remainingMinor = Math.round(maxRedeemable * factor);
+	for (const index of creditUseOrder(list)) {
+		// Each balance rounded to the currency first, as the server does.
+		const availableMinor = Math.max(Math.round(normalize(list[index]?.total_credit || 0) * factor), 0);
+		const useMinor = Math.min(availableMinor, Math.max(remainingMinor, 0));
+		used[index] = useMinor / factor;
+		remainingMinor -= useMinor;
+	}
+	return used;
+}
+
+/**
+ * A shared customer account (e.g. Anonymous): only the bearer vouchers
+ * scanned for this sale -- never the account's other credit, never by the
+ * same-shift rule or a supervisor.
+ */
+export function bearerCreditRows(rows: any[], vouchers: Record<string, any>, customer: string | null | undefined) {
+	return (Array.isArray(rows) ? rows : []).flatMap((row: any) => {
+		const voucher = row?.type === "Invoice" ? vouchers?.[row.credit_origin] : undefined;
+		return voucher?.bearer && voucher.customer === customer ? [{ ...row, voucher_code: voucher.code }] : [];
+	});
+}
+
+/**
+ * The credit rows the payment screen applies for a get_available_credit
+ * reply: bearer vouchers on a shared account, else the authorized rows
+ * (scanned vouchers, same-shift returns, or a supervisor's approval).
+ */
+export function creditRowsToApply(
+	message: any,
+	customer: string | null | undefined,
+	context: CreditAuthorizationContext,
+): { rows: any[]; needVoucher: any[]; expired: any[]; generic: boolean } {
+	const data = Array.isArray(message) ? message : message?.credit || [];
+	const expired = Array.isArray(message?.expired) ? message.expired : [];
+	if (message?.generic_customer) {
+		return { rows: bearerCreditRows(data, context.vouchers || {}, customer), needVoucher: [], expired, generic: true };
+	}
+	const { authorized, needVoucher } = selectAuthorizedCredit(data || [], context);
+	return { rows: authorized, needVoucher, expired, generic: false };
 }
 
 export function useRedemptionLogic(options: RedemptionLogicOptions) {
@@ -232,17 +293,18 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 					const message = r.message;
 					const data = Array.isArray(message) ? message : message?.credit || [];
 					const expired = Array.isArray(message?.expired) ? message.expired : [];
-					if (message?.generic_customer) {
+					// The same selection as the main screen's credit line
+					// (creditRowsToApply).
+					const picked = creditRowsToApply(message, customer, {
+						...(options.getAuthorizationContext?.() || {}),
+						vouchers: credit_vouchers.value,
+					});
+					options.onCreditRows?.(picked.rows);
+					if (picked.generic) {
 						// Shared account (e.g. Anonymous): only bearer vouchers
 						// scanned for this sale -- never the account's other credit,
 						// never by the same-shift rule or a supervisor.
-						const bearer = (data || []).flatMap((row: any) => {
-							const voucher =
-								row?.type === "Invoice" ? credit_vouchers.value[row.credit_origin] : undefined;
-							return voucher?.bearer && voucher.customer === customer
-								? [{ ...row, voucher_code: voucher.code }]
-								: [];
-						});
+						const bearer = picked.rows;
 						if (!bearer.length) {
 							resetCustomerCreditState();
 							showCreditProblem(
@@ -263,10 +325,8 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 					if (data && data.length) {
 						saveStoredValueSnapshot(customer, company, data);
 					}
-					const { authorized, needVoucher } = selectAuthorizedCredit(data || [], {
-						...(options.getAuthorizationContext?.() || {}),
-						vouchers: credit_vouchers.value,
-					});
+					const authorized = picked.rows;
+					const needVoucher = picked.needVoucher;
 					// Only when nothing can be used: after a voucher or an exchange is
 					// applied, the customer's other credit simply stays on their account.
 					if (!authorized.length && expired.length) {
@@ -323,19 +383,11 @@ export function useRedemptionLogic(options: RedemptionLogicOptions) {
 		// Computed into a plain local array first and written to each reactive
 		// row once, at its final value: writing twice would re-trigger the deep
 		// watcher that calls this very function.
-		const computed_credit_to_redeem: number[] = rows.map(() => 0);
+		let computed_credit_to_redeem: number[] = rows.map(() => 0);
 		if (genuine) {
-			// Whole minor units (baisa), so 50.000 - 45.000 is exactly 5.000.
+			// Shared with the main screen's credit line (allocateCredit).
 			const prec = unref(currencyPrecision) ?? 2;
-			const factor = Math.pow(10, Math.max(prec, 0));
-			let remainingMinor = Math.round(maxRedeemable * factor);
-			for (const index of creditUseOrder(rows)) {
-				// Each balance rounded to the currency first, as the server does.
-				const availableMinor = Math.max(Math.round(normalizeFloat(rows[index]?.total_credit || 0) * factor), 0);
-				const useMinor = Math.min(availableMinor, Math.max(remainingMinor, 0));
-				computed_credit_to_redeem[index] = useMinor / factor;
-				remainingMinor -= useMinor;
-			}
+			computed_credit_to_redeem = allocateCredit(rows, maxRedeemable, prec, (value) => normalizeFloat(value));
 		} else {
 			// M-Pesa/phone payment (or no redemption in progress): keep whatever
 			// amount was already set on each row, within its balance and the sale.

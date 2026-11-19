@@ -2290,6 +2290,11 @@ class TestManualPostingDatePreservation(unittest.TestCase):
             return [{"type": "Invoice", "credit_origin": "CREDIT-INV-0001", "total_credit": 150}]
 
         self.creation.get_available_credit = counting_get_available_credit
+        # The credit notes are locked before their balance is read (section
+        # 108); the lock itself runs against a real database in
+        # test_voucher_exchange_db.
+        lock_calls = []
+        self.creation._lock_credit_origins = lambda data: lock_calls.append(data) or {}
 
         result = self.creation.submit_invoice(
             json.dumps(
@@ -2329,6 +2334,7 @@ class TestManualPostingDatePreservation(unittest.TestCase):
             [("CUST-0001", "Test Company")],
             "get_available_credit() must be called exactly once per submit, not once per helper",
         )
+        self.assertEqual(len(lock_calls), 1, "the credit notes are locked once, before the balance is read")
         self.assertEqual(invoice_doc.get("posa_redeemed_customer_credit"), 150)
         self.assertEqual(invoice_doc.get("posa_remaining_customer_credit_balance"), 0)
 
