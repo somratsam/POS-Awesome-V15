@@ -500,3 +500,111 @@ describe("useScanProcessor serial scan handling", () => {
 		});
 	});
 });
+
+describe("useScanProcessor: scale barcode round trip and repeat scans", () => {
+	const PARSE = "posawesome.posawesome.api.items.parse_scale_barcode";
+	const serverItem = (code: string) =>
+		createScannableItem({ item_code: `ITEM-${code}`, item_name: `Item ${code}`, barcode: code });
+
+	beforeEach(() => {
+		(globalThis as any).__ = (text: string) => text;
+		(globalThis as any).frappe = {
+			call: vi.fn(async () => ({ message: null })),
+			show_alert: vi.fn(),
+		};
+		offlineMocks.isOffline.mockReturnValue(false);
+		itemServiceMocks.getItemsFromBarcodeData.mockReset();
+		itemServiceMocks.getItemsFromBarcodeData.mockImplementation(async ({ barcode }: any) =>
+			barcode === "MISSING" ? null : serverItem(barcode),
+		);
+	});
+
+	const parseCalls = () =>
+		(globalThis as any).frappe.call.mock.calls.filter((c: any[]) => c[0]?.method === PARSE).length;
+
+	it("skips parse_scale_barcode when the scanner says the code can't be a scale barcode", async () => {
+		const ctx = makeContext();
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => false);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("30410232030045", "high");
+		expect(parseCalls()).toBe(0);
+		expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(1);
+		expect(ctx.itemAddition.addItem.mock.calls[0][0].item_code).toBe("ITEM-30410232030045");
+	});
+
+	it("still asks parse_scale_barcode when the scanner says it may be one", async () => {
+		const ctx = makeContext();
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => true);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("2100012001500", "high");
+		expect(parseCalls()).toBe(1);
+	});
+
+	it("asks parse_scale_barcode as before when the scanner has no such check", async () => {
+		const ctx = makeContext();
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("30410232030045", "high");
+		expect(parseCalls()).toBe(1);
+	});
+
+	it("a repeat scan of a server-found barcode is added without asking the server again", async () => {
+		const ctx = makeContext();
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => false);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("30410232030045", "high");
+		ctx.items.value = []; // Limit Search empties the list when the box clears
+		await processScannedItem("30410232030045", "high");
+		expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledTimes(1);
+		expect(ctx.itemAddition.addItem).toHaveBeenCalledTimes(2);
+		const second = ctx.itemAddition.addItem.mock.calls[1][0];
+		expect(second.item_code).toBe("ITEM-30410232030045");
+		expect(second._scanned_barcode).toBe("30410232030045");
+	});
+
+	it("a repeat scan asks the server again after the price list changes", async () => {
+		const ctx = makeContext();
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => false);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("30410232030045", "high");
+		ctx.items.value = [];
+		ctx.active_price_list.value = "Wholesale";
+		await processScannedItem("30410232030045", "high");
+		expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledTimes(2);
+	});
+
+	it("a repeat scan asks the server again after the customer price list changes", async () => {
+		const ctx = makeContext();
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => false);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("30410232030045", "high");
+		ctx.items.value = [];
+		ctx.customer_price_list.value = "VIP";
+		await processScannedItem("30410232030045", "high");
+		expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledTimes(2);
+	});
+
+	it("a barcode the server didn't find is asked again (misses are not remembered)", async () => {
+		const ctx = makeContext();
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => false);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("MISSING", "high");
+		await processScannedItem("MISSING", "high");
+		expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledTimes(2);
+		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
+	});
+
+	it("a remembered item still goes through the stock check", async () => {
+		const ctx = makeContext({ allowNegativeStock: false });
+		(ctx as any).blockSaleBeyondAvailableQty = computed(() => true);
+		itemServiceMocks.getItemsFromBarcodeData.mockImplementation(async ({ barcode }: any) =>
+			createScannableItem({ item_code: "ITEM-OUT", barcode, actual_qty: 0, available_qty: 0 }),
+		);
+		(ctx.scannerInput as any).shouldAskServerForScaleBarcode = vi.fn(() => false);
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("99999999", "high");
+		ctx.items.value = [];
+		await processScannedItem("99999999", "high");
+		expect(itemServiceMocks.getItemsFromBarcodeData).toHaveBeenCalledTimes(1);
+		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
+	});
+});

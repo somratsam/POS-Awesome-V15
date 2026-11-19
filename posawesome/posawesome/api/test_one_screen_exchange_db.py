@@ -1,8 +1,11 @@
 """One-screen exchange on real invoices: both saved or neither.
 
-Needs a POS Profile with an open POS Opening Shift for Administrator, three
-stock items priced in its price list, a named customer and a generic
-(Anonymous) customer; skipped otherwise. Every test rolls back: nothing is
+Needs a Sales Invoice POS Profile to copy, three stock items priced in its
+price list, a named customer and a generic (Anonymous) customer; skipped
+otherwise. Each test runs on its own copy of that profile (TEST_PROFILE_PREFIX)
+with its own open POS Opening Shift for Administrator, so no real profile or
+shift is ever changed (a test once switched One-screen exchange off on the
+profile of Administrator's open shift). Every test rolls back: nothing is
 committed. The till's PIN cashier is stubbed to Administrator; everything
 else (ERPNext validation, VAT, stock, GL, loyalty, the credit Journal Entry,
 the submission ledger) runs for real.
@@ -30,6 +33,9 @@ COUNTED = (
 )
 
 
+TEST_PROFILE_PREFIX = "_Test One-screen Exchange"
+
+
 def _counts():
     return {dt: frappe.db.count(dt) for dt in COUNTED}
 
@@ -38,17 +44,21 @@ class TestOneScreenExchangeOnInvoices(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         frappe.set_user("Administrator")
-        shift = frappe.db.get_value(
-            "POS Opening Shift",
-            {"user": "Administrator", "status": "Open", "docstatus": 1},
-            ["name", "pos_profile"],
-            as_dict=True,
+        _delete_test_profiles()
+        # The template only: read, never changed. Each test gets its own copy.
+        template = frappe.db.get_value(
+            "POS Profile",
+            {
+                "disabled": 0,
+                "create_pos_invoice_instead_of_sales_invoice": 0,
+                "name": ["not like", f"{TEST_PROFILE_PREFIX}%"],
+            },
+            "name",
+            order_by="modified desc",
         )
-        if not shift:
-            raise unittest.SkipTest("Needs an open POS Opening Shift for Administrator")
-        profile = frappe.get_doc("POS Profile", shift.pos_profile)
-        if cint_(profile.get("create_pos_invoice_instead_of_sales_invoice")):
+        if not template:
             raise unittest.SkipTest("Needs a Sales Invoice POS Profile")
+        profile = frappe.get_doc("POS Profile", template)
         items = frappe.db.sql(
             """
             select ip.item_code, ip.price_list_rate
@@ -73,19 +83,51 @@ class TestOneScreenExchangeOnInvoices(unittest.TestCase):
         generic = frappe.db.get_value("Customer", {"posa_is_generic_customer": 1, "disabled": 0}, "name")
         if not named or not generic:
             raise unittest.SkipTest("Needs a named and a generic customer")
-        cls.profile, cls.shift = profile, shift.name
+        cls.template = profile
         cls.named, cls.generic = named, generic
         # cheap < mid < dear
         cls.cheap, cls.mid, cls.dear = distinct[0][1], distinct[len(distinct) // 2][1], distinct[-1][1]
 
+    @classmethod
+    def tearDownClass(cls):
+        # Each test rolls back; this only catches a copy left by a commit
+        # somewhere inside the code under test.
+        _delete_test_profiles()
+
     def setUp(self):
         frappe.set_user("Administrator")
-        frappe.db.set_value("POS Profile", self.profile.name, "posa_one_screen_exchange", 1)
+        self.addCleanup(frappe.db.rollback)
+        self.profile, self.shift = self._own_profile_and_shift()
         for target in ("_resolve_authoritative_cashier", "get_active_terminal_cashier"):
             patcher = mock.patch.object(creation, target, return_value="Administrator")
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.addCleanup(frappe.db.rollback)
+
+    def _own_profile_and_shift(self):
+        """A copy of the template profile with One-screen exchange on, and an
+        open shift for Administrator on it -- inside this test's transaction."""
+        copy = frappe.copy_doc(self.template)
+        copy.set("__newname", f"{TEST_PROFILE_PREFIX} {uuid.uuid4().hex[:8]}")
+        copy.posa_one_screen_exchange = 1
+        for row in copy.get("applicable_for_users") or []:
+            row.default = 0  # the real profile keeps its users' default
+        copy.insert(ignore_permissions=True)
+        shift = frappe.get_doc(
+            {
+                "doctype": "POS Opening Shift",
+                "period_start_date": frappe.utils.now_datetime(),
+                "posting_date": frappe.utils.nowdate(),
+                "company": copy.company,
+                "pos_profile": copy.name,
+                "user": "Administrator",
+                "balance_details": [
+                    {"mode_of_payment": row.mode_of_payment, "amount": 0} for row in copy.payments
+                ],
+            }
+        )
+        shift.insert(ignore_permissions=True)
+        shift.submit()
+        return frappe.get_doc("POS Profile", copy.name), shift.name
 
     # helpers ---------------------------------------------------------------
 
@@ -496,8 +538,20 @@ class TestOneScreenExchangeOnInvoices(unittest.TestCase):
         self.assertNothingSaved(lambda: self._exchange(original), "not switched on")
 
 
-def cint_(value):
-    return frappe.utils.cint(value)
+def _delete_test_profiles():
+    """Remove copies left behind by a commit inside the code under test.
+    Only names starting with TEST_PROFILE_PREFIX are touched."""
+    names = frappe.get_all("POS Profile", filters={"name": ["like", f"{TEST_PROFILE_PREFIX}%"]}, pluck="name")
+    if not names:
+        return
+    shifts = frappe.get_all("POS Opening Shift", filters={"pos_profile": ["in", names]}, pluck="name")
+    for doctype, parents in (("POS Opening Shift", shifts), ("POS Profile", names)):
+        if not parents:
+            continue
+        for table in frappe.get_meta(doctype).get_table_fields():
+            frappe.db.delete(table.options, {"parenttype": doctype, "parent": ["in", parents]})
+        frappe.db.delete(doctype, {"name": ["in", parents]})
+    frappe.db.commit()
 
 
 if __name__ == "__main__":

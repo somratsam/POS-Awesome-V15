@@ -10859,3 +10859,64 @@ back-from-payment test). Backend N/A (no Python). `bench build` exit 0.
 Migrate N/A. Test cashier disabled and test 222 One-screen exchange off
 again. Left alone: user's own unfinished exchange draft ACC-SINV-2026-00418
 (testfff, 11:40) -- Closing Shift deletes it.
+
+## 111. Faster item scans: no scale-barcode round trip, repeat scans without the server; exchange DB test on its own profile (2026-11-19, on `develop-swan`, NOT on `stable`)
+
+**Measured first** (staging, test 222, Limit Search on; scanner-speed keys in
+a headless browser): item in the cart ~200-330 ms after the last key, almost
+all of it two sequential server calls: `parse_scale_barcode` (every scan,
+before the local lookup, although Scale Barcode Settings is empty) and
+`get_items_from_barcode`. Repeat scans of the same item paid both again:
+with Limit Search, clearing the box after each scan empties the barcode index
+(`useItemsSelectorSearch.clearSearch` -> `resetBarcodeIndex`). The receipt /
+voucher detection (sections 108-110) costs ~0.5 us per scan, no timer, no
+call; all 1,423 staging barcodes go straight to the item path.
+
+**A. Scale barcode parse only when it can be one.** `useScannerInput` loads
+Scale Barcode Settings once when the till opens (one request even when the
+first scan asks at the same time) and keeps `item_code_starting_digit` /
+`item_code_total_digits` too (`normalizeScaleBarcodeSettings`).
+`shouldAskServerForScaleBarcode(code)` = settings not known (not loaded or the
+load failed) OR `mayBeScaleBarcode` -- the server's own rule
+(`barcode.py _parse_scale_barcode_data`): item-code position set and, with a
+prefix, the code starts with it. `useScanProcessor` skips the call otherwise.
+An edit to Scale Barcode Settings reaches a till on its next reload (it used
+to arrive with the next scan).
+
+**B. Repeat scans.** `scannedItemMemory.ts`: an item `get_items_from_barcode`
+found for a raw barcode is remembered per ItemsSelector, used when the local
+index misses, for the same profile + warehouse + price list + customer price
+list + currency, for 5 minutes (the scan's stock check reads the remembered
+stock figure, so it must not be old -- not "the whole shift" as first
+proposed). Never remembered: scale barcodes, serial/batch numbers, misses.
+
+**Test fix.** `test_one_screen_exchange_db` switched One-screen exchange
+on/off on the profile of Administrator's open shift (test 222). Each test now
+runs on its own copy (`_Test One-screen Exchange <hex>`, users not default)
+with its own open shift for Administrator, inside the rolled-back
+transaction; the real profile is only read as the template;
+`tearDownClass` removes copies a commit might have left. Note: test 222 was
+actually found off because section 110's cleanup switched it off.
+
+**Live (Enter-terminated, LS2208 style).** Item first scan: one server call
+(lookup) before the cart, no `parse_scale_barcode`; same item again: no
+server call before the add, qty 2 on every line, box clear ~100-180 ms after
+the last key (was ~300-500). Receipt + Enter -> "Add a return from this
+receipt?"; voucher `C26004157HRG` and `C26-00415-7HRG` + Enter -> one lookup,
+credit on; Counter Grid + Enter unchanged ("Find an item", exact match
+highlighted). User hand test: same item twice -> qty 2 -> Pay -> Submit &
+Print correct.
+
+**Checks.** Vitest 304/304 files, 2044/2044 tests (new: skip / still ask /
+old fallback, repeat scan, price list and customer price list change, misses
+not remembered, stock check on a remembered item, settings unknown / none /
+failed / prefix / one request, memory scope / expiry / limit).
+`test_one_screen_exchange_db` 30 tests: 29 OK, 1 skipped (return validity
+off on the template, as before); System Settings unchanged (precision 3,
+Asia/Muscat, `doc.precision` 3). `bench build` exit 0. Migrate N/A.
+
+**Found, not fixed here:** receipt + Enter fetches the receipt twice (the
+250 ms receipt timer isn't cancelled: Enter in the item box never reaches
+`useScannerInput.handleSearchKeydown`); an unknown 12+ digit barcode + Enter
+is re-tagged low confidence by `_performSearch`, so no "Item not found";
+Counter Grid + Limit Search needs a second Enter (not used, skipped).
