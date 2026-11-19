@@ -11016,3 +11016,44 @@ Ctrl+Shift+R. First load after deploy: Ctrl+F5 (old bundle still intercepts).
 
 **Checks.** Vitest 310/310 files, 2100/2100 tests. Backend N/A. `bench build`
 exit 0. Migrate N/A.
+
+## 114. Browser printing on an 80 mm page (receipt, credit note voucher, Z Report) instead of A4; QZ Tray unchanged (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+**Before.** The QZ fallback (and any print view / browser print) printed on the
+browser's default paper (A4/Letter): the templates' `page-width/page-height`
+only feed wkhtmltopdf. Z Report: 3 Letter pages.
+
+**Change.** A marked block (`/* posa-browser-page:start */ ... :end */`) with
+`@media print { @page { size: 80mm <length>mm; margin: 2mm; } }`:
+- `swan_receipt.html`, `credit_note_voucher.html`: length = their existing
+  `_pdf_h`, margins as the PDF, so browser print looks like the PDF.
+- Z Report fixture: body captured in `{% set _zbody %}`, lines counted
+  (`class="row` / `sub-row` / `hint` / `<div class="payment-mode-name"`);
+  length = 201 + 8.4 mm/line + 12 (safety + margins) + 5.5 mm per 40 chars
+  of variance reason, 23 less without logo. Fitted in Chrome on six staging Z
+  Reports (434-570 mm, within 3.1 mm). `{% set report %}` stays outside the
+  block (the `avg()` macro reads it; inside it broke rendering).
+- `qzTray.ts` `stripBrowserPageBlock()` removes the block (and a `<style>`
+  holding only it) before QZ: QZ HTML identical to before for sale, return,
+  voucher, Z Report (whitespace and Z "Printed" time aside).
+Templates and `qzTray.ts` must deploy together (an old cached bundle would
+send the rule to QZ); migrate for the Z Report; Ctrl+F5 the tills.
+
+**Verified.** Headless Chromium print-to-PDF: one 80 mm page each (sale
+80x355, voucher 80x307, return 80x298, Z Reports 449-583, 6-12 mm spare).
+wkhtmltopdf PDFs unchanged (download_pdf = WhatsApp/email, rewards receipt
+PDF: same page size/count/drawing; Z Report desk PDF still 3 A4). DB Z Report
+= git before migrate (no hand edits); second migrate content-idempotent.
+User: QZ prints unchanged; browser fallback receipt-size.
+
+**Later list.** (1) On the real EPSON TM-T88V the Chrome preview shows a very
+long page -- the driver's roll size overrides our page length; would waste
+paper. (2) Item 3: print-fallback question into appConfirm (7 call sites
+async). (3) Item 4: Z Report browser fallback. Also the start-up bootstrap and
+Close Shift skipped-invoices browser pop-ups. Found, not changed: Z Report rows
+centred in Frappe print view (Bootstrap `.row`).
+
+**Checks.** Vitest 311/311 files, 2107/2107 tests. test_swan_receipt 20 OK,
+test_credit_voucher 78 OK, test_rewards_sync 3 OK, test_print_assets 4 OK,
+test_z_report_layout 16 OK, test_z_report 3 OK (known post-OK teardown
+traceback). `bench build` exit 0. Migrate exit 0 x2. System Settings restored.

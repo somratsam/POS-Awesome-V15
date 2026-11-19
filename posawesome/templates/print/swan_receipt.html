@@ -153,6 +153,12 @@
   /* Centre the receipt vertically on the page (leftover safety space split top/bottom). */
   .print-format .rcpt-page { display: table; width: 100%; height: {{ _pdf_h - 6 }}mm; }
   .print-format .rcpt-cell { display: table-cell; vertical-align: middle; }
+  /* posa-browser-page:start  Browser printing (print view, the QZ fallback):
+     an 80 mm page as long as this document, with the PDF's 2 mm margins,
+     instead of the browser's A4. QZ Tray gets the HTML without this block
+     (stripBrowserPageBlock in qzTray.ts). */
+  @media print { @page { size: 80mm {{ _pdf_h }}mm; margin: 2mm; } }
+  /* posa-browser-page:end */
 </style>
 <div class="rcpt-page"><div class="rcpt-cell">
 
