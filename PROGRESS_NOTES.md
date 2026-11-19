@@ -11207,3 +11207,35 @@ Warm till: correct (ACC-SINV-2026-00449, 18.800 / 0.895).
 returns `frappe.get_cached_doc(doctype, name)` for any doctype with no
 permission check; `payments.repair_overpayment_change_allocations` (writes a
 reconciliation with dry_run=0) has no role check. Both already on stable.
+
+## 118. Draft loader reads only POS invoices the user may read (2026-11-19, on `develop-swan`, NOT on `stable`; user check OK)
+
+**Before.** `invoices.get_draft_invoice_doc(invoice_name, doctype)` (whitelisted)
+returned `frappe.get_cached_doc(doctype, name)` with no permission check and
+any doctype: a logged-in user could read any document by name (a User, a
+setting, another store's invoice). On stable and production too.
+
+**Change.** Only `Sales Invoice` / `POS Invoice` (`DRAFT_INVOICE_DOCTYPES`,
+else PermissionError "Only a Sales Invoice or POS Invoice can be loaded
+here."), then `doc.check_permission("read")` -- the same ERPNext permission as
+the drafts list it is picked from (`get_draft_invoices` uses `get_list`), so
+a supervisor's other-store draft still loads when the list shows it. Callers
+(Drafts dialog, document sources) only send those two doctypes.
+
+**Checks.** New `test_draft_invoice_doc` 3/3 (two fail on the old code: other
+doctype, Guest). HTTP as Administrator: draft 200, `doctype=User` 403; store
+login testserver@swan.com (Sales User / POS Manager) loads a test 222 draft.
+
+**Later list.**
+- `payments.repair_overpayment_change_allocations` is whitelisted with no role
+  check: reads candidates with `get_all` (no permissions) and, with
+  `dry_run=0`, posts a reconciliation. Not fixed now: the Repair button in
+  Invoice Management is shown to every cashier, so a guard on the write takes
+  repair away from store staff (policy decision) and needs the till's POS
+  Profile passed from the frontend. Proposal: dry run via `get_list`; the
+  write only for a POS supervisor (login or PIN, as Edit Invoice) or a manager
+  login; hide the button for others.
+- Offline VAT on the first session after Clear cache / new browser (section
+  117): proposal first.
+- Staging: `posa-e2e-credit-gap@test.invalid` (enabled, POS Awesome
+  Supervisor) disabled 2026-11-19; its open shift POSA-OS-26-0000014 left as is.
