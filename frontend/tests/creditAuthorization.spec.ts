@@ -67,14 +67,33 @@ describe("selectAuthorizedCredit", () => {
 		expect(needVoucher).toEqual([]);
 	});
 
-	it("once a credit note is picked, a supervisor's 'all credit' no longer applies", () => {
+	it("once a credit note is picked, only it is used -- not a supervisor's 'all credit', not a same-shift return", () => {
 		const { authorized, needVoucher } = selectAuthorizedCredit([sameShift, oldNote, advance, { ...oldNote, credit_origin: "CN-OLDER" }], {
 			shift: "SHIFT-1",
 			supervisor: true,
 			vouchers: { "CN-OLD": { ...voucher, code: "" } },
 		});
-		expect(authorized.map((r) => r.credit_origin)).toEqual(["CN-TODAY", "CN-OLD"]);
-		expect(needVoucher.map((r) => r.credit_origin)).toEqual(["ACC-PAY-1", "CN-OLDER"]);
+		expect(authorized.map((r) => r.credit_origin)).toEqual(["CN-OLD"]);
+		expect(needVoucher.map((r) => r.credit_origin)).toEqual(["CN-TODAY", "ACC-PAY-1", "CN-OLDER"]);
+	});
+
+	it("a scanned voucher does not pull in the customer's same-shift return (no supervisor)", () => {
+		const { authorized, needVoucher } = selectAuthorizedCredit([sameShift, oldNote], {
+			shift: "SHIFT-1",
+			vouchers: { "CN-OLD": voucher },
+		});
+		expect(authorized.map((r) => r.credit_origin)).toEqual(["CN-OLD"]);
+		expect(needVoucher.map((r) => r.credit_origin)).toEqual(["CN-TODAY"]);
+	});
+
+	it("two scanned vouchers are used together, and only they", () => {
+		const second = { ...oldNote, credit_origin: "CN-OLDER", total_credit: 10 };
+		const { authorized } = selectAuthorizedCredit([sameShift, oldNote, second], {
+			shift: "SHIFT-1",
+			supervisor: true,
+			vouchers: { "CN-OLD": voucher, "CN-OLDER": { ...voucher, credit_origin: "CN-OLDER", code: "C2600101WXYZ" } },
+		});
+		expect(authorized.map((r) => r.credit_origin)).toEqual(["CN-OLD", "CN-OLDER"]);
 	});
 
 	it("advances are never covered by a voucher or the shift", () => {
@@ -157,15 +176,16 @@ describe("useRedemptionLogic with authorization", () => {
 		expect(toast.mock.calls[0][0]).toMatchObject({ key: "customer-credit-expired", color: "warning" });
 	});
 
-	it("a scanned voucher adds that credit note, with its code for the server", async () => {
+	it("a scanned voucher applies only that credit note, with its code for the server", async () => {
 		const logic = setup({ credit: [sameShift, oldNote], expired: [] });
 		logic.addCreditVoucher(voucher);
 		logic.get_available_credit(true);
 		await flush();
 		const rows = logic.customer_credit_dict.value;
-		expect(rows.map((r: any) => r.credit_origin)).toEqual(["CN-TODAY", "CN-OLD"]);
-		expect(rows[1].voucher_code).toBe("C2600100ABCD");
-		expect(logic.redeemed_customer_credit.value).toBe(65);
+		// The same-shift return is not added once a voucher is picked.
+		expect(rows.map((r: any) => r.credit_origin)).toEqual(["CN-OLD"]);
+		expect(rows[0].voucher_code).toBe("C2600100ABCD");
+		expect(logic.redeemed_customer_credit.value).toBe(25);
 		expect(toast).not.toHaveBeenCalled();
 		logic.addCreditVoucher({ ...voucher, credit_origin: "CN-X", customer: "CUST-2" });
 		logic.clearCreditVouchers("CUST-2");

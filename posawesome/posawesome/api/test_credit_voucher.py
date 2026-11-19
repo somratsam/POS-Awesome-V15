@@ -756,6 +756,8 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
     of the voucher code; nobody else can."""
 
     NAME = "ACC-SINV-2026-00257"
+    # The store (POS Profile) the return was made at.
+    RETURN_STORE = "Test Pos"
 
     def setUp(self):
         frappe.cache.delete_value(credit_voucher._failure_key("Test Pos"))
@@ -785,7 +787,10 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
 
         def get_all(doctype, *args, **kwargs):
             if doctype == "Sales Invoice":
-                name_filter = kwargs.get("filters", {}).get("name", ["", ""])[1]
+                filters = kwargs.get("filters", {})
+                if filters.get("pos_profile") not in (None, self.RETURN_STORE):
+                    return []
+                name_filter = filters.get("name", ["", ""])[1]
                 return [self.NAME] if self.NAME.endswith(name_filter.lstrip("%")) else []
             return real_get_all(doctype, *args, **kwargs)
 
@@ -815,6 +820,28 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
     def test_a_cashier_cannot(self):
         with self.assertRaisesRegex(frappe.ValidationError, "not a valid credit note voucher"):
             self._lookup("2026-00257", supervisor=None)
+
+    def test_another_stores_return_says_where_it_can_be_replaced(self):
+        self.RETURN_STORE = "Other Store"
+        with self.assertRaisesRegex(frappe.ValidationError, "issued at another store"):
+            self._lookup("2026-00257", supervisor="sara@x.test")
+
+    def test_another_stores_return_is_still_not_usable_and_counts_as_wrong(self):
+        self.RETURN_STORE = "Other Store"
+        with patch.object(credit_voucher, "_record_lookup_failure") as failure:
+            with self.assertRaises(frappe.ValidationError):
+                self._lookup("2026-00257", supervisor="sara@x.test")
+        failure.assert_called_once()
+
+    def test_a_cashier_typing_another_stores_return_gets_the_usual_message(self):
+        self.RETURN_STORE = "Other Store"
+        with self.assertRaisesRegex(frappe.ValidationError, "not a valid credit note voucher"):
+            self._lookup("2026-00257", supervisor=None)
+
+    def test_another_stores_shared_customer_return_keeps_the_bearer_message(self):
+        self.RETURN_STORE = "Other Store"
+        with self.assertRaisesRegex(frappe.ValidationError, "works like cash"):
+            self._lookup("2026-00257", supervisor="sara@x.test", generic=True)
 
     def test_text_that_is_not_a_number_finds_nothing(self):
         self.assertIsNone(credit_voucher.find_return_by_number("hello"))

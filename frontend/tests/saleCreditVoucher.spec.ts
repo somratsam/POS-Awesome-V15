@@ -357,31 +357,37 @@ describe("Credit note −X / Pay Y: the payment screen's own figures", () => {
 		expect(store.figures).toEqual({ credit: 8.25, pay: 0, total: 8.25, left: 4.25 });
 	});
 
-	it("also counts the customer's same-shift credit, as the payment screen does", async () => {
+	it("uses only the scanned voucher -- not the customer's same-shift credit -- exactly as the payment screen does", async () => {
 		const sameShift = { ...CREDIT_ROW, credit_origin: "MCO-CN-2026-00009", total_credit: 3, pos_opening_shift: "SHIFT-1" };
 		const otherShift = { ...CREDIT_ROW, credit_origin: "MCO-CN-2026-00010", total_credit: 50, pos_opening_shift: "OLD" };
 		const store = await quoted(20, [CREDIT_ROW, sameShift, otherShift]);
-		expect(store.figures).toEqual({ credit: 15.5, pay: 4.5, total: 20, left: 0 });
-		// Exactly the payment screen's selection and allocation:
-		const picked = creditRowsToApply({ credit: [CREDIT_ROW, sameShift, otherShift] }, "CUST-AHMED", {
-			shift: "SHIFT-1",
-			vouchers: useCustomersStore().creditVouchers,
-		});
-		const used = allocateCredit(picked.rows, 20, 3, (v) => Number(v));
-		expect(used.reduce((a, b) => a + b, 0)).toBe(15.5);
+		expect(store.figures).toEqual({ credit: 12.5, pay: 7.5, total: 20, left: 0 });
+		// Exactly the payment screen's selection and allocation, a supervisor on the till too:
+		for (const supervisor of [false, true]) {
+			const picked = creditRowsToApply({ credit: [CREDIT_ROW, sameShift, otherShift] }, "CUST-AHMED", {
+				shift: "SHIFT-1",
+				supervisor,
+				vouchers: useCustomersStore().creditVouchers,
+			});
+			expect(picked.rows.map((row: any) => row.credit_origin)).toEqual([CREDIT_ROW.credit_origin]);
+			const used = allocateCredit(picked.rows, 20, 3, (v) => Number(v));
+			expect(used.reduce((a, b) => a + b, 0)).toBe(12.5);
+		}
 	});
 
-	it("the BALANCE voucher figure is what stays on the scanned voucher, never the customer's other credit", async () => {
+	it("the BALANCE voucher on the main screen is the payment screen's remainder", async () => {
 		const sameShift = { ...CREDIT_ROW, credit_origin: "MCO-CN-2026-00009", total_credit: 3, pos_opening_shift: "SHIFT-1" };
 		const store = await quoted(5, [CREDIT_ROW, sameShift]);
 		const picked = creditRowsToApply({ credit: [CREDIT_ROW, sameShift] }, "CUST-AHMED", {
 			shift: "SHIFT-1",
+			supervisor: true,
 			vouchers: useCustomersStore().creditVouchers,
 		});
-		const used = allocateCredit(picked.rows, 5, 3, (v) => Number(v));
-		const voucherIndex = picked.rows.findIndex((row: any) => row.credit_origin === CREDIT_ROW.credit_origin);
+		// Payments: credit applied minus the sale = the credit note remainder it offers.
+		const applied = picked.rows.reduce((sum: number, row: any) => sum + Number(row.total_credit), 0);
 		expect(store.figures?.credit).toBe(5);
-		expect(store.figures?.left).toBe(Number((12.5 - used[voucherIndex]).toFixed(3)));
+		expect(store.figures?.left).toBe(7.5);
+		expect(Number((applied - 5).toFixed(3))).toBe(store.figures?.left);
 	});
 
 	it("a voucher going on the sale counts up (the card flashes) and beeps", async () => {
