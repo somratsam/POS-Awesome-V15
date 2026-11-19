@@ -4,6 +4,7 @@ import {
 	parseScaleBarcodeSettingsResponse,
 	getScaleBarcodePrefix,
 	scaleBarcodeMatches,
+	mayBeScaleBarcode,
 } from "../../../utils/scaleBarcode.js";
 import {
 	getScanTimestamp,
@@ -88,6 +89,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	const awaitingScanResult = ref(false);
 	const scaleBarcodeSettings = ref(normalizeScaleBarcodeSettings());
 	const scaleBarcodeSettingsLoaded = ref(false);
+	// True only when the settings came from the server (or the server said
+	// there are none). After a failed load they are defaults, so every scan
+	// keeps asking the server, as before.
+	const scaleBarcodeSettingsKnown = ref(false);
+	let scaleBarcodeSettingsRequest: Promise<any> | null = null;
 
 	const searchFromScanner = ref(false);
 	const scanAudioContext = ref<AudioContext | null>(null);
@@ -286,14 +292,11 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			...normalized,
 		};
 		scaleBarcodeSettingsLoaded.value = true;
+		scaleBarcodeSettingsKnown.value = true;
 		return scaleBarcodeSettings.value;
 	};
 
-	const ensureScaleBarcodeSettings = async (force = false) => {
-		if (!force && scaleBarcodeSettingsLoaded.value) {
-			return scaleBarcodeSettings.value;
-		}
-
+	const loadScaleBarcodeSettings = async () => {
 		try {
 			const res = await frappe.call({
 				method: "posawesome.posawesome.api.items.parse_scale_barcode",
@@ -305,14 +308,40 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			} else {
 				scaleBarcodeSettings.value = normalizeScaleBarcodeSettings();
 				scaleBarcodeSettingsLoaded.value = true;
+				// A real answer with no settings: no Scale Barcode Settings
+				// record, so no code is a scale barcode.
+				scaleBarcodeSettingsKnown.value = Boolean(res);
 			}
 		} catch (error) {
 			console.error("Failed to load scale barcode settings", error);
 			scaleBarcodeSettings.value = normalizeScaleBarcodeSettings();
 			scaleBarcodeSettingsLoaded.value = true;
+			scaleBarcodeSettingsKnown.value = false;
 		}
 		return scaleBarcodeSettings.value;
 	};
+
+	const ensureScaleBarcodeSettings = async (force = false) => {
+		if (!force && scaleBarcodeSettingsLoaded.value) {
+			return scaleBarcodeSettings.value;
+		}
+		// One request at a time: the load when the till opens and the first
+		// scan must not both ask.
+		if (!scaleBarcodeSettingsRequest) {
+			scaleBarcodeSettingsRequest = loadScaleBarcodeSettings().finally(() => {
+				scaleBarcodeSettingsRequest = null;
+			});
+		}
+		return scaleBarcodeSettingsRequest;
+	};
+
+	/**
+	 * Whether a scan must ask the server to parse it as a scale barcode
+	 * (useScanProcessor). Settings not known (not loaded yet, or the load
+	 * failed): yes, as before. Known: only when the code can be one.
+	 */
+	const shouldAskServerForScaleBarcode = (code: string) =>
+		!scaleBarcodeSettingsKnown.value || mayBeScaleBarcode(scaleBarcodeSettings.value, code);
 
 	// --- Main Scan Handler ---
 	const onBarcodeScanned = (
@@ -697,6 +726,10 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	// Lifecycle
 	onMounted(() => {
 		initScanner();
+		// Load the scale settings now, so the first scan doesn't wait for them.
+		if (typeof frappe !== "undefined" && typeof frappe?.call === "function") {
+			void ensureScaleBarcodeSettings();
+		}
 	});
 
 	onUnmounted(() => {
@@ -748,6 +781,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			getScaleBarcodePrefix(scaleBarcodeSettings.value),
 		scaleBarcodeMatches: (_val: string) =>
 			scaleBarcodeMatches(scaleBarcodeSettings.value, _val),
+		shouldAskServerForScaleBarcode,
 		setScanHandler,
 		setInputHandlers,
 	};

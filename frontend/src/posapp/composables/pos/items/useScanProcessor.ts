@@ -20,6 +20,7 @@ import {
 import { toCompanyCurrency } from "../../../utils/erpnextCurrency";
 import itemService from "../../../services/itemService";
 import type { ScanConfidence } from "./useScannerInput";
+import { createScannedItemMemory } from "./scannedItemMemory";
 // @ts-ignore
 import placeholderImage from "../../../components/pos/placeholder-image.png";
 
@@ -405,6 +406,17 @@ export function useScanProcessor(context: ScanProcessorContext) {
 	const catalogScope = () =>
 		`${pos_profile.value?.name || "no_profile"}_${pos_profile.value?.warehouse || "no_warehouse"}`;
 
+	// Items the server found by barcode, for a repeat scan (scannedItemMemory).
+	const scannedItems = createScannedItemMemory();
+	const scannedItemScope = () =>
+		[
+			pos_profile.value?.name || "",
+			pos_profile.value?.warehouse || "",
+			active_price_list.value || "",
+			customer_price_list.value || "",
+			context.selected_currency?.value || pos_profile.value?.currency || "",
+		].join("\u0001");
+
 	const processScannedItem = async (
 		scannedCode: string,
 		confidence: ScanConfidence = "low",
@@ -429,16 +441,25 @@ export function useScanProcessor(context: ScanProcessorContext) {
 		let scaleResponse: any = null;
 		let scanAssignment: ScanAssignment = emptyScanAssignment();
 
-		try {
-			const res = await frappe.call({
-				method: "posawesome.posawesome.api.items.parse_scale_barcode",
-				args: { barcode: scannedCode },
-			});
-			if (res && res.message) {
-				scaleResponse = res.message;
+		// Ask the server to parse a scale barcode only when this code can be
+		// one (scale settings loaded and matching). An ordinary item barcode
+		// skips that round trip.
+		const askServerForScale =
+			typeof scannerInput.shouldAskServerForScaleBarcode === "function"
+				? scannerInput.shouldAskServerForScaleBarcode(scannedCode)
+				: true;
+		if (askServerForScale) {
+			try {
+				const res = await frappe.call({
+					method: "posawesome.posawesome.api.items.parse_scale_barcode",
+					args: { barcode: scannedCode },
+				});
+				if (res && res.message) {
+					scaleResponse = res.message;
+				}
+			} catch (error) {
+				console.error("Failed to parse scale barcode via API:", error);
 			}
-		} catch (error) {
-			console.error("Failed to parse scale barcode via API:", error);
 		}
 
 		if (
@@ -529,6 +550,18 @@ export function useScanProcessor(context: ScanProcessorContext) {
 				qtyFromBarcode !== null ||
 				priceFromBarcode !== null,
 		);
+
+		// Scanned a little earlier and found by the server then: add it
+		// without asking again.
+		if (!foundItem && !isScaleBarcodeScan) {
+			foundItem = scannedItems.recall(searchCode, scannedItemScope());
+			if (foundItem) {
+				logScanFlow("Remembered scan resolved", {
+					item_code: foundItem?.item_code,
+					scannedCode,
+				});
+			}
+		}
 
 		if (!foundItem && qtyFromBarcode === null) {
 			const searchSerialNo = parseBooleanSetting(
@@ -672,6 +705,11 @@ export function useScanProcessor(context: ScanProcessorContext) {
 					eventBus.emit("set_all_items", items.value);
 
 				await itemDetailFetcher.update_items_details([newItem]);
+				// A raw barcode the server matched exactly: remember it for a
+				// repeat scan (not scale or serial/batch codes).
+				if (!isScaleBarcodeScan && !resolvedToItemCode) {
+					scannedItems.remember(searchCode, scannedItemScope(), newItem);
+				}
 				const localAssignment = extractScanAssignmentFromItem(
 					newItem,
 					scannedCode,

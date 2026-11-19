@@ -9,6 +9,11 @@ export interface ScaleBarcodeSettings {
     prefix: string;
     prefix_included_or_not: number;
     no_of_prefix_characters: number;
+    // Where the item code sits in a scale barcode. The server parses a code
+    // as a scale barcode only when both are set (barcode.py
+    // _parse_scale_barcode_data), so the till needs them too.
+    item_code_starting_digit: number;
+    item_code_total_digits: number;
 }
 
 /**
@@ -24,11 +29,17 @@ export const normalizeScaleBarcodeSettings = (rawSettings: any = {}): ScaleBarco
 
     const prefixIncluded = Number.isFinite(prefixIncludedRaw) ? prefixIncludedRaw : 0;
     const prefixLength = Number.isFinite(prefixLengthRaw) ? prefixLengthRaw : 0;
+    const whole = (value: unknown) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
 
     return {
         prefix,
         prefix_included_or_not: prefixIncluded,
         no_of_prefix_characters: prefixLength,
+        item_code_starting_digit: whole(settings.item_code_starting_digit),
+        item_code_total_digits: whole(settings.item_code_total_digits),
     };
 };
 
@@ -83,4 +94,25 @@ export const scaleBarcodeMatches = (settings: Partial<ScaleBarcodeSettings> = {}
         return false;
     }
     return String(value || "").startsWith(prefix);
+};
+
+/**
+ * Could the server read this code as a scale barcode? Same rule as
+ * barcode.py _parse_scale_barcode_data: the item-code position must be set,
+ * and when a prefix is set the code must start with it. False means asking
+ * the server (parse_scale_barcode) can only come back empty, so a scan can
+ * skip that round trip. Only use it once the settings have actually been
+ * loaded from the server; until then the caller must still ask.
+ */
+export const mayBeScaleBarcode = (
+    settings: Partial<ScaleBarcodeSettings> = {},
+    value: string | null | undefined,
+): boolean => {
+    const code = String(value || "").trim();
+    if (!code) return false;
+    if (!(Number(settings?.item_code_starting_digit) > 0 && Number(settings?.item_code_total_digits) > 0)) {
+        return false;
+    }
+    const prefix = getScaleBarcodePrefix(settings);
+    return !prefix || code.startsWith(prefix);
 };

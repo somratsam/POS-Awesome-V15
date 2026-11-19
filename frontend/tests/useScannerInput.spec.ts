@@ -333,3 +333,59 @@ describe("useScannerInput", () => {
 		expect(finalCall).toEqual(["PA4 79SF", "low"]);
 	});
 });
+
+describe("useScannerInput: when a scan must ask the server about scale barcodes", () => {
+	afterEach(() => {
+		delete (globalThis as any).frappe;
+	});
+
+	const withServer = (reply: () => Promise<any>) => {
+		const call = vi.fn(reply);
+		(globalThis as any).frappe = { call };
+		return call;
+	};
+
+	it("asks while the settings are not loaded yet", () => {
+		const scanner = useScannerInput({});
+		expect(scanner.shouldAskServerForScaleBarcode("30410232030045")).toBe(true);
+	});
+
+	it("doesn't ask once the server says no scale barcodes are set up", async () => {
+		withServer(async () => ({ message: { settings: { prefix: "", item_code_starting_digit: 0, item_code_total_digits: 0 } } }));
+		const scanner = useScannerInput({});
+		await scanner.ensureScaleBarcodeSettings();
+		expect(scanner.shouldAskServerForScaleBarcode("30410232030045")).toBe(false);
+	});
+
+	it("doesn't ask when there is no Scale Barcode Settings record at all", async () => {
+		withServer(async () => ({ message: null }));
+		const scanner = useScannerInput({});
+		await scanner.ensureScaleBarcodeSettings();
+		expect(scanner.shouldAskServerForScaleBarcode("30410232030045")).toBe(false);
+	});
+
+	it("keeps asking after a failed load (as before)", async () => {
+		withServer(async () => {
+			throw new Error("network");
+		});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const scanner = useScannerInput({});
+		await scanner.ensureScaleBarcodeSettings();
+		expect(scanner.shouldAskServerForScaleBarcode("30410232030045")).toBe(true);
+	});
+
+	it("asks only for codes with the scale prefix when scale barcodes are set up", async () => {
+		withServer(async () => ({ message: { settings: { prefix: "21", item_code_starting_digit: 3, item_code_total_digits: 5 } } }));
+		const scanner = useScannerInput({});
+		await scanner.ensureScaleBarcodeSettings();
+		expect(scanner.shouldAskServerForScaleBarcode("2100012001500")).toBe(true);
+		expect(scanner.shouldAskServerForScaleBarcode("30410232030045")).toBe(false);
+	});
+
+	it("loads the settings once when two callers ask at the same time", async () => {
+		const call = withServer(async () => ({ message: null }));
+		const scanner = useScannerInput({});
+		await Promise.all([scanner.ensureScaleBarcodeSettings(), scanner.ensureScaleBarcodeSettings()]);
+		expect(call).toHaveBeenCalledTimes(1);
+	});
+});
