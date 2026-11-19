@@ -11057,3 +11057,33 @@ centred in Frappe print view (Bootstrap `.row`).
 test_credit_voucher 78 OK, test_rewards_sync 3 OK, test_print_assets 4 OK,
 test_z_report_layout 16 OK, test_z_report 3 OK (known post-OK teardown
 traceback). `bench build` exit 0. Migrate exit 0 x2. System Settings restored.
+
+## 115. Closing Shift view: no "OMR OMR"; "Left on credit notes" line as on the Z Report (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+**Before.** On the desk POS Closing Shift form (`closing_shift_details.html`,
+rendered by `overview.get_payment_reconciliation_details`) each amount had a
+grey second line `{{ row.currency }} {{ fmt_money(..., currency=...) }}`:
+fmt_money already prints the symbol, so "OMR OMR 470.400", and with only the
+company currency the line just repeated the amount. The view also had no way
+to see why Cash differs from Grand Total.
+
+**Audit (POSA-CS-26-0000061, staging).** Grand Total 470.400 = sales 663.600
+- returns 193.200; Cash 582.750 = the four cash sales; the 112.350 gap = credit
+still held by customers (15.750 left after exchange 00415 -> 00416 via JE
+ACC-JV-2026-00083, plus 96.600 from return 00421). No cash double counting
+(credit JEs never reach Payment Reconciliation); Total Quantity 6 = 8 sold - 2
+returned; every Z Report figure matched. Draft 00423 (unprinted) correctly
+excluded.
+
+**Change.** `overview.py`: `_foreign_currency_rows()` keeps the per-currency
+lines (sales, net, each payment mode) only when one is not the company
+currency; `_left_as_store_credit()` = `get_sales_breakdown(...)["left_as_store_credit"]`
+over the closing's `pos_transactions` (same function and invoices as the Z
+Report's "Left on credit notes"). Template: currency prefix removed; "Left on
+credit notes" row under Total Quantity, only when not 0. Z Report label was
+already "Left on credit notes" (no change).
+
+**Checks.** Vitest 311/311 files, 2107/2107 tests (run from `frontend/`; from
+the app root npx picks a stray vitest without jsdom). 13 closing-shift backend
+modules OK (test_pos_closing_shift 13 incl. 3 new). Build/migrate N/A (Python +
+server template only). System Settings checked: precision 3, Asia/Muscat.
