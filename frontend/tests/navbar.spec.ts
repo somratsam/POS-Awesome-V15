@@ -20,6 +20,8 @@ vi.mock("../src/offline/index", () => ({
 
 vi.mock("../src/utils/clearAllCaches", () => ({
 	clearAllCaches: vi.fn(async () => undefined),
+	// Nothing unsent and "Clear data" pressed (tested in navbarClearCacheGuard.spec.ts).
+	confirmClearSavedData: vi.fn(async () => true),
 }));
 
 import Navbar from "../src/posapp/components/Navbar.vue";

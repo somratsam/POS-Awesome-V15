@@ -2,6 +2,7 @@
 	<v-app class="container1 posapp pos-theme-root" :class="rtlClasses">
 		<AppLoadingOverlay :visible="globalLoading" />
 		<UpdatePrompt />
+		<AppConfirmDialog />
 		<v-main class="main-content">
 			<ClosingDialog />
 			<ExchangeCreditPrompt />
@@ -89,6 +90,8 @@ import ClosingDialog from "../components/pos/shell/ClosingDialog.vue";
 import ExchangeCreditPrompt from "../components/pos/shell/ExchangeCreditPrompt.vue";
 import AppLoadingOverlay from "../components/ui/LoadingOverlay.vue";
 import UpdatePrompt from "../components/ui/UpdatePrompt.vue";
+import AppConfirmDialog from "../components/ui/AppConfirmDialog.vue";
+import { appNotice } from "../services/appDialog";
 import { useLoading } from "../composables/core/useLoading.js";
 import { usePosShift } from "../composables/pos/shared/usePosShift";
 import {
@@ -1064,7 +1067,13 @@ const initializeData = async () => {
 	if (queueHealthCheck()) {
 		const pruned = purgeOldQueueEntries();
 		if (pruned > 0) {
-			alert("Old synced offline queue entries were pruned.");
+			// Information only: not awaited, so start-up carries on.
+			void appNotice({
+				title: __("Offline data tidied up"),
+				message: __(
+					"Old offline sales that were already sent to the server have been removed from this till. Nothing needs to be done.",
+				),
+			});
 		}
 	}
 

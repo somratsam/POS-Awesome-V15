@@ -1,3 +1,12 @@
+import { appConfirm, appNotice } from "../posapp/services/appDialog";
+import { countUnsentOfflineWork } from "./unsentOfflineWork";
+
+function __(text: string, args?: unknown[]) {
+	const translator = (globalThis as any).__ || (globalThis as any).frappe?._;
+	if (typeof translator === "function") return translator(text, args);
+	return args ? text.replace(/\{(\d+)\}/g, (_m, i) => String(args[Number(i)] ?? "")) : text;
+}
+
 const DEFAULT_INDEXED_DB_NAMES = ["posawesome_offline"];
 
 async function delay(ms: number) {
@@ -231,6 +240,57 @@ export async function unregisterServiceWorkers(scopes: string[] = []) {
 	}
 }
 
+/**
+ * Asked before the till's saved data is cleared (the Navbar "Clear cache"
+ * button). Clearing deletes offline sales not yet sent, so:
+ * anything unsent (or the check failing) -> a notice and false, nothing
+ * cleared; nothing unsent -> the "Clear data" confirm. True = go ahead.
+ */
+export async function confirmClearSavedData(): Promise<boolean> {
+	let unsent;
+	try {
+		unsent = await countUnsentOfflineWork();
+	} catch (error) {
+		console.error("[ClearAllCaches] Could not check for unsent offline sales", error);
+		await appNotice({
+			title: __("Saved data not cleared"),
+			message: __(
+				"Could not check this till for offline sales not sent yet, so nothing was cleared. Reload the page and try again.",
+			),
+		});
+		return false;
+	}
+	if (unsent.sales > 0 || unsent.other > 0) {
+		const lines: string[] = [];
+		if (unsent.sales > 0) {
+			lines.push(__("{0} offline sales not sent yet — connect and sync first.", [unsent.sales]));
+		}
+		if (unsent.other > 0) {
+			lines.push(
+				__(
+					"{0} other offline records (customers, payments or cash movements) not sent yet — connect and sync first.",
+					[unsent.other],
+				),
+			);
+		}
+		lines.push(__("Nothing was cleared."));
+		await appNotice({
+			title: __("Saved data not cleared"),
+			message: lines.join("\n"),
+		});
+		return false;
+	}
+	return appConfirm({
+		title: __("Clear saved data on this till?"),
+		message: __(
+			"Items, customers and settings will be downloaded again from the server. There are no offline sales waiting to be sent.",
+		),
+		confirmText: __("Clear data"),
+		cancelText: __("Keep data"),
+		danger: true,
+	});
+}
+
 type ClearAllCachesOptions = {
 	confirmBeforeClear?: boolean;
 	onSuccess?: () => void;
@@ -261,9 +321,7 @@ export async function clearAllCaches(options: ClearAllCachesOptions = {}) {
 
 	try {
 		if (opts.confirmBeforeClear && typeof window !== "undefined") {
-			const confirmMsg =
-				"Are you sure you want to clear application cache?";
-			if (!window.confirm(confirmMsg)) {
+			if (!(await confirmClearSavedData())) {
 				return;
 			}
 		}
@@ -294,20 +352,6 @@ export async function clearAllCaches(options: ClearAllCachesOptions = {}) {
 	}
 }
 
-if (typeof window !== "undefined") {
-	document.addEventListener("keydown", (e) => {
-		if (e.ctrlKey && e.shiftKey && e.code === "KeyR") {
-			e.preventDefault();
-			clearAllCaches().catch(() => {});
-		}
-	});
-
-	document.addEventListener("DOMContentLoaded", () => {
-		const btn = document.getElementById("clear-cache-btn");
-		if (btn) {
-			btn.addEventListener("click", () =>
-				clearAllCaches().catch(() => {}),
-			);
-		}
-	});
-}
+// No keyboard shortcut: Ctrl+Shift+R is the browser's hard refresh (used on
+// the tills after every deploy). Clearing saved data is only the Navbar
+// "Clear cache" button, which runs confirmClearSavedData() first.

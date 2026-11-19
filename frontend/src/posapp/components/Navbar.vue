@@ -200,7 +200,7 @@ import EmployeeSwitchDialog from "./pos/employee/EmployeeSwitchDialog.vue";
 import posLogo from "./pos/pos.png";
 import { POS_BRAND_NAME } from "../config/branding";
 import { forceClearAllCache } from "../../offline/index";
-import { clearAllCaches } from "../../utils/clearAllCaches";
+import { clearAllCaches, confirmClearSavedData } from "../../utils/clearAllCaches";
 import { isOffline } from "../../offline/index";
 import { useRtl } from "../composables/core/useRtl";
 import { withRequestTimeout } from "../utils/requestTimeout";
@@ -1078,6 +1078,21 @@ export default {
 					color: "warning",
 					title: this.__("Cannot clear cache while offline"),
 				});
+				return;
+			}
+			// confirmClearSavedData(): blocked while offline sales are unsent,
+			// otherwise the "Clear data" dialog.
+			this.clearingCache = true;
+			let confirmed = false;
+			try {
+				confirmed = await confirmClearSavedData();
+			} catch (e) {
+				console.error("Clear cache check failed", e);
+				confirmed = false;
+			} finally {
+				this.clearingCache = false;
+			}
+			if (!confirmed) {
 				return;
 			}
 			let shouldReload = false;

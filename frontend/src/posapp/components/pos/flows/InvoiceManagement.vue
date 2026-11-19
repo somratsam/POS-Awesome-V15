@@ -1994,6 +1994,7 @@ import format from "../../../format";
 import { useTheme } from "../../../composables/core/useTheme";
 import { useResponsive } from "../../../composables/core/useResponsive";
 import { useToastStore } from "../../../stores/toastStore";
+import { appConfirm } from "../../../services/appDialog";
 import { useUIStore } from "../../../stores/uiStore";
 import { useInvoiceStore } from "../../../stores/invoiceStore";
 import { useCustomersStore } from "../../../stores/customersStore";
@@ -3975,11 +3976,17 @@ export default {
 				});
 				return;
 			}
-			if (
-				!window.confirm(
-					__("Cancel {0} and submit a corrected amendment?", [this.editInvoiceDoc.name]),
-				)
-			) {
+			const confirmed = await appConfirm({
+				title: __("Save the corrected invoice?"),
+				message: __(
+					"Invoice {0} will be cancelled and replaced by a corrected copy. This cannot be undone.",
+					[this.editInvoiceDoc.name],
+				),
+				confirmText: __("Cancel and replace"),
+				cancelText: __("Go back"),
+				danger: true,
+			});
+			if (!confirmed) {
 				return;
 			}
 			this.editSubmitting = true;
@@ -4042,7 +4049,14 @@ export default {
 		},
 		async deleteDraft(invoice) {
 			if (!this.canDeleteActiveDraftSource) return;
-			if (!window.confirm(__("Delete draft invoice {0}?", [invoice.name]))) return;
+			const confirmed = await appConfirm({
+				title: __("Delete this draft?"),
+				message: __("Draft invoice {0} will be deleted. This cannot be undone.", [invoice.name]),
+				confirmText: __("Delete draft"),
+				cancelText: __("Keep draft"),
+				danger: true,
+			});
+			if (!confirmed) return;
 			try {
 				await frappe.call({
 					method: "posawesome.posawesome.api.invoices.delete_invoice",
