@@ -11239,3 +11239,7 @@ login testserver@swan.com (Sales User / POS Manager) loads a test 222 draft.
   117): proposal first.
 - Staging: `posa-e2e-credit-gap@test.invalid` (enabled, POS Awesome
   Supervisor) disabled 2026-11-19; its open shift POSA-OS-26-0000014 left as is.
+
+## 119. Bigger bottom bar, no scrollbar, wider gap around Cancel Sale (2026-11-20, on `develop-swan`, NOT on `stable`; user OK on screenshots)
+
+- Left for later: the horizontal scrollbar under the item table at 1366x768 is still there (columns 51 px too wide for the table; also before this change).
