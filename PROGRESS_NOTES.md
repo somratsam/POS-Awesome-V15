@@ -10980,3 +10980,39 @@ PAY bottom 7 px past the window with or without a voucher.
 
 **Checks.** Vitest 306/306 files, 2074/2074 tests. test_credit_voucher 78
 OK. `bench build` exit 0. Migrate N/A. System Settings unchanged.
+
+## 113. App dialogs instead of browser pop-ups; Clear cache blocked while offline sales are unsent; no Ctrl+Shift+R (2026-11-19, on `develop-swan`, NOT on `stable`; user hand test OK)
+
+**1. Shared dialog.** `services/appDialog.ts` (`appConfirm()` -> true/false,
+`appNotice()`), shown by `components/ui/AppConfirmDialog.vue`, mounted once in
+`DefaultLayout.vue`. Esc / click outside = No; red confirm + focus on the safe
+button for cancel/delete; key guard copied from DiscountReasonDialog (a scan
+doesn't reach the cart). No dialog mounted -> frappe.confirm / msgprint.
+Replaced 7 browser pop-ups, all text through `__()`: customer already exists
+(UpdateCustomer), save corrected invoice + delete draft (InvoiceManagement),
+cancel / delete cash movement (CashMovementView), "Offline data tidied up"
+notice (DefaultLayout, not awaited), Clear saved data. Still browser pop-ups
+(part 2, later): QZ print fallback (`documentPrint.ts`, 7 callers), start-up
+bootstrap check (DefaultLayout), Close Shift skipped-invoices check
+(`usePosShift.ts`); a test fails if any other appears.
+
+**2. Clear cache safety.** Clearing deletes all IndexedDB/localStorage,
+unsent offline sales included. `confirmClearSavedData()` (clearAllCaches.ts)
+counts unsent work (`utils/unsentOfflineWork.ts`: sales = max(legacy queue,
+invoice outbox); other = customers + payments + cash movements): any -> "X
+offline sales not sent yet — connect and sync first." notice, nothing cleared;
+check fails -> blocked too; none -> "Clear saved data on this till?" [Clear
+data] / [Keep data]. The Navbar "Clear cache" button (which asked nothing)
+now uses it; still refused while offline.
+Correction: "refresh items" uses itemsStore's own items-only clearAllCaches,
+not this one, and never showed the pop-up.
+
+**3. Ctrl+Shift+R removed.** It was the browser's hard refresh (used on the
+tills after every deploy); the POS listener cleared caches and the browser
+reloaded over the dialog. Listener and dead `#clear-cache-btn` hook removed;
+`posawesome.bundle.ts` no longer imports clearAllCaches for side effects.
+No shortcut for Clear cache (user decision). A test fails if any source binds
+Ctrl+Shift+R. First load after deploy: Ctrl+F5 (old bundle still intercepts).
+
+**Checks.** Vitest 310/310 files, 2100/2100 tests. Backend N/A. `bench build`
+exit 0. Migrate N/A.

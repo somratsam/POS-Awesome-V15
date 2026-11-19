@@ -62,6 +62,7 @@
 import { computed, ref, watch } from "vue";
 import { useUIStore } from "../../../stores/uiStore";
 import { useToastStore } from "../../../stores/toastStore";
+import { appConfirm } from "../../../services/appDialog";
 import { useCashMovement } from "../../../composables/pos/cash/useCashMovement";
 import {
 	getPendingOfflineCashMovementCount,
@@ -220,7 +221,13 @@ function handleDuplicate(row: any) {
 async function handleCancel(row: any) {
 	if (!row?.name) return;
 	try {
-		const confirmed = window.confirm(__("Cancel cash movement {0}?", [row.name]));
+		const confirmed = await appConfirm({
+			title: __("Cancel this cash movement?"),
+			message: __("Cash movement {0} will be cancelled.", [row.name]),
+			confirmText: __("Cancel movement"),
+			cancelText: __("Go back"),
+			danger: true,
+		});
 		if (!confirmed) {
 			return;
 		}
@@ -235,7 +242,13 @@ async function handleCancel(row: any) {
 async function handleDelete(row: any) {
 	if (!row?.name) return;
 	try {
-		const confirmed = window.confirm(__("Delete cancelled cash movement {0}?", [row.name]));
+		const confirmed = await appConfirm({
+			title: __("Delete this cash movement?"),
+			message: __("Cancelled cash movement {0} will be deleted. This cannot be undone.", [row.name]),
+			confirmText: __("Delete movement"),
+			cancelText: __("Go back"),
+			danger: true,
+		});
 		if (!confirmed) {
 			return;
 		}

@@ -247,6 +247,7 @@
 import { isOffline, saveOfflineCustomer } from "../../../../../offline/index";
 import { useCustomersStore } from "../../../../stores/customersStore.js";
 import { useUIStore } from "../../../../stores/uiStore.js";
+import { appConfirm } from "../../../../services/appDialog";
 import { storeToRefs } from "pinia";
 import { useToastStore } from "../../../../stores/toastStore.js";
 import { cleanMobileNumber, createMobileDuplicateCheck } from "../../../../utils/customerMobile";
@@ -726,11 +727,15 @@ export default {
 				if (duplicateCustomers.length) {
 					const existing = duplicateCustomers[0];
 					const existingLabel = existing.customer_name || existing.name;
-					const useExisting = window.confirm(
-						__("An existing customer matches these details: {0}. Select it instead?", [
-							existingLabel,
-						]),
-					);
+					const useExisting = await appConfirm({
+						title: __("Customer already exists"),
+						message: __(
+							"A customer with these details already exists: {0}. Use this customer instead of creating a new one?",
+							[existingLabel],
+						),
+						confirmText: __("Use existing customer"),
+						cancelText: __("Go back"),
+					});
 					if (useExisting) {
 						await customersStore.addOrUpdateCustomer(existing);
 						vm.toastStore.show({
