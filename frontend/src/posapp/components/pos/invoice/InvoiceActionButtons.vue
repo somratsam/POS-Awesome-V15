@@ -124,6 +124,7 @@
 			variant="flat"
 			prepend-icon="mdi-credit-card-check-outline"
 			class="counter-grid-action counter-grid-action--pay"
+			:class="{ 'pay-btn--credit-pending': creditPending }"
 			data-pos-keyboard-target="pay"
 			data-testid="invoice-action-pay"
 			:loading="paymentLoading && !exchangeChecking"
@@ -265,6 +266,7 @@
 				prepend-icon="mdi-credit-card"
 				@click="$emit('show-payment')"
 				class="summary-btn pay-btn"
+				:class="{ 'pay-btn--credit-pending': creditPending }"
 				data-pos-keyboard-target="pay"
 				data-testid="invoice-action-pay"
 				:loading="paymentLoading && !exchangeChecking"
@@ -312,6 +314,9 @@ const props = defineProps({
 	// as the payment screen), "Checking…" until the server's total is in.
 	creditActive: Boolean,
 	creditPayLabel: { type: String, default: "" },
+	// The cart is being re-checked: the label is the last amount, dimmed
+	// (section 112). Pay stays usable; the payment screen checks again.
+	creditPayPending: { type: Boolean, default: false },
 });
 
 defineEmits([
@@ -330,6 +335,10 @@ defineEmits([
 
 const __ = window.__;
 const isCounterGrid = computed(() => props.presentation === "counter-grid");
+// Only while a credit voucher is on the sale and an amount is already shown.
+const creditPending = computed(
+	() => !props.exchangeActive && props.creditActive && props.creditPayPending && Boolean(props.creditPayLabel),
+);
 const showCustomerDisplayButton = computed(() =>
 	parseBooleanSetting(props.pos_profile?.posa_enable_customer_display),
 );
@@ -421,6 +430,10 @@ const showMoreActions = computed(
 }
 
 /* Special styling for the PAY button */
+.pay-btn--credit-pending {
+	opacity: 0.6;
+}
+
 .pay-btn {
 	font-weight: 600 !important;
 	font-size: 1.1rem !important;

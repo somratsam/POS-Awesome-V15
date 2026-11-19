@@ -550,7 +550,7 @@ class TestLookupCreditVoucher(unittest.TestCase):
         self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key("Test Pos"))
         self.code = credit_voucher.credit_voucher_code(self.NAME)
 
-    def _lookup(self, code, company="Swan", customer="CUST-1", credit=None, expired=None, generic=False, candidates=None, linked=True):
+    def _lookup(self, code, company="Swan", customer="CUST-1", credit=None, expired=None, generic=False, candidates=None, linked=True, pos_profile="MCO Avenues"):
         credit = [{"type": "Invoice", "credit_origin": self.NAME, "total_credit": 139.3, "expires_on": getdate("2027-02-05")}] if credit is None else credit
 
         real_get_value = frappe.db.get_value
@@ -573,6 +573,7 @@ class TestLookupCreditVoucher(unittest.TestCase):
                     is_return=1,
                     docstatus=1,
                     return_against="ACC-SINV-2026-00260" if linked else "",
+                    pos_profile=pos_profile,
                 )
             if doctype == "Customer" and fields == "posa_is_generic_customer":
                 return 1 if generic else 0
@@ -598,6 +599,12 @@ class TestLookupCreditVoucher(unittest.TestCase):
         self.assertEqual(result["amount"], 139.3)
         self.assertEqual(result["code"], self.code)
         self.assertEqual(result["mobile_no"], "99887766")
+        # The till it was made on, for the main screen's voucher card (section 112).
+        self.assertEqual(result["store"], "MCO Avenues")
+        self.assertEqual(result["expires_on"], "2027-02-05")
+
+    def test_a_return_made_in_desk_has_no_store(self):
+        self.assertEqual(self._lookup(self.code, pos_profile=None)["store"], "")
 
     def test_wrong_check_is_refused(self):
         wrong = self.code[:-1] + ("2" if self.code[-1] != "2" else "3")

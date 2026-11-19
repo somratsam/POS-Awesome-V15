@@ -464,7 +464,7 @@ def lookup_credit_voucher(code=None, pos_profile=None, quiet_miss=0):
         frappe.throw(_("This is not a valid credit note voucher number. Check it and try again."))
 
     voucher = frappe.db.get_value(
-        "Sales Invoice", name, ["name", "customer", "customer_name", "company"], as_dict=True
+        "Sales Invoice", name, ["name", "customer", "customer_name", "company", "pos_profile"], as_dict=True
     )
     label = credit_voucher_label(credit_voucher_code(name))
     if voucher.company != profile.get("company"):
@@ -504,6 +504,9 @@ def lookup_credit_voucher(code=None, pos_profile=None, quiet_miss=0):
         "amount": flt(credit["total_credit"]),
         "expires_on": str(credit["expires_on"]),
         "bearer": 1 if bearer else 0,
+        # The till (POS Profile) the credit note was made on, for the main
+        # screen's voucher card; "" for a return made in Desk.
+        "store": voucher.pos_profile or "",
     }
 
 

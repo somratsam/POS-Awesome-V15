@@ -141,17 +141,6 @@
 				data-testid="shared-customer-lock-note"
 			>
 				{{ sharedCustomerLockNote }}
-				<v-btn
-					v-if="saleCreditVoucherNote"
-					class="sale-credit-remove-btn"
-					data-testid="sale-credit-remove"
-					variant="text"
-					size="x-small"
-					color="primary"
-					@click="removeSaleCredit"
-				>
-					{{ __("Remove") }}
-				</v-btn>
 			</p>
 		</div>
 		<!-- Update customer modal -->
@@ -322,7 +311,6 @@ import { useUIStore } from "../../../stores/uiStore.js";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import { useSaleCreditStore } from "../../../stores/saleCreditStore";
-import { joinMoney, useFormat } from "../../../format";
 import { ensureCustomersReady } from "../../../modules/customers/customerLoadingCoordinator";
 
 export default {
@@ -338,7 +326,6 @@ export default {
 		const customersStore = useCustomersStore();
 		const exchangeStore = useExchangeStore();
 		const saleCredit = useSaleCreditStore();
-		const { formatCurrency: formatMoney, currencySymbol: moneySymbol } = useFormat();
 		const toastStore = useToastStore();
 		const uiStore = useUIStore();
 		const invoiceStore = useInvoiceStore();
@@ -370,24 +357,14 @@ export default {
 		// A return of a sale to a shared customer (e.g. Anonymous) keeps that
 		// customer: its credit is a bearer voucher. So does a sale paid with
 		// such a voucher (its credit can only go to a sale to that customer).
+		// Short: the voucher card in the Active sale box (SaleCreditCard,
+		// section 112) shows the voucher, its figures and [Remove].
 		const saleCreditVoucherNote = computed(() => {
 			const doc = invoiceStore.invoiceDoc || {};
 			if (doc.is_return || exchangeStore.receipt) return "";
-			const vouchers = saleCredit.vouchers || [];
-			if (!vouchers.length) return "";
-			const amount = vouchers.reduce((sum, voucher) => sum + (Number(voucher?.amount) || 0), 0);
-			const currency = doc.currency || useUIStore().posProfile?.currency;
-			const name =
-				doc.customer_name ||
-				vouchers.find((voucher) => voucher?.customer_name)?.customer_name ||
-				vouchers[0]?.customer;
-			return __("Paying with credit note {0} ({1}) — the customer stays {2}.", [
-				vouchers.map((voucher) => String(voucher.voucher || voucher.credit_origin)).join(", "),
-				joinMoney(moneySymbol(currency), formatMoney(amount)),
-				name,
-			]);
+			if (!(saleCredit.vouchers || []).length) return "";
+			return __("Customer from credit note");
 		});
-		const removeSaleCredit = () => saleCredit.remove();
 		const sharedCustomerLockNote = computed(() => {
 			// One-screen exchange: the return must be to the receipt's customer.
 			const exchangeReceipt = exchangeStore.receipt;
@@ -401,8 +378,7 @@ export default {
 			const customer = doc.customer || selectedCustomer.value;
 			if (!customer) return "";
 			// Credit note vouchers on the sale (scanned on the main screen or in
-			// Payments): "Paying with credit note X (OMR 12.500) — the customer
-			// stays Y." with [Remove] (removeSaleCredit).
+			// Payments): "Customer from credit note"; the card has [Remove].
 			if (saleCreditVoucherNote.value) return saleCreditVoucherNote.value;
 			if (customersStore.isSharedCustomer(customer)) {
 				if (doc.is_return && doc.return_against) {
@@ -788,7 +764,6 @@ export default {
 			effectiveReadonly,
 			sharedCustomerLockNote,
 			saleCreditVoucherNote,
-			removeSaleCredit,
 			onCustomerMenuToggle,
 			onCustomerChange,
 			onCustomerSearch,

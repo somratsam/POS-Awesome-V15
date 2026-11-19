@@ -608,3 +608,31 @@ describe("useScanProcessor: scale barcode round trip and repeat scans", () => {
 		expect(ctx.itemAddition.addItem).not.toHaveBeenCalled();
 	});
 });
+
+describe("useScanProcessor: an unknown barcode", () => {
+	beforeEach(() => {
+		(globalThis as any).__ = (text: string) => text;
+		(globalThis as any).frappe = { call: vi.fn(async () => ({ message: null })), show_alert: vi.fn() };
+		offlineMocks.isOffline.mockReturnValue(false);
+		itemServiceMocks.getItemsFromBarcodeData.mockReset();
+		itemServiceMocks.getItemsFromBarcodeData.mockResolvedValue(null);
+	});
+
+	it("a hardware scan (high) shows Item not found with the error sound", async () => {
+		const ctx = makeContext();
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("99999999999999", "high");
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(true);
+		expect(ctx.scannerInput.scanErrorMessage.value).toContain("Item not found");
+		expect(ctx.scannerInput.playScanTone).toHaveBeenCalledWith("error");
+		expect(ctx.onItemNotFound).toHaveBeenCalledWith("99999999999999");
+	});
+
+	it("a low-confidence guess stays silent (unchanged)", async () => {
+		const ctx = makeContext();
+		const { processScannedItem } = useScanProcessor(ctx as any);
+		await processScannedItem("99999999999999", "low");
+		expect(ctx.scannerInput.scanErrorDialog.value).toBe(false);
+		expect(ctx.scannerInput.playScanTone).not.toHaveBeenCalled();
+	});
+});

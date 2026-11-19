@@ -7,7 +7,10 @@
 		}"
 	>
 		<div v-if="isCounterGrid" class="counter-grid-summary" data-testid="counter-grid-summary">
-			<div class="counter-grid-summary__metrics">
+			<div
+				class="counter-grid-summary__metrics"
+				:class="{ 'counter-grid-summary__metrics--credit': !exchangeStore.active && saleCredit.active }"
+			>
 				<template v-if="exchangeStore.active">
 					<div class="counter-grid-summary__metric" data-testid="exchange-metric-returned">
 						<span>{{ __("Returned") }}</span>
@@ -96,8 +99,7 @@
 					class="counter-grid-summary__metric"
 					data-testid="sale-credit-metric"
 				>
-					<span>{{ __("Credit note") }}</span>
-					<strong>{{ saleCreditLabels.amount }}</strong>
+					<SaleCreditCard variant="counter" :card="saleCreditCard" :credit-used="saleCreditLabels.amount" />
 				</div>
 				<div
 					v-if="exchangeStore.active"
@@ -130,6 +132,7 @@
 				:exchange-checking="exchangeStore.checking || exchangeStore.figuresPending"
 				:credit-active="saleCredit.active"
 				:credit-pay-label="saleCreditLabels.pay"
+				:credit-pay-pending="saleCreditLabels.pending"
 				@save-and-clear="handleSaveAndClear"
 				@load-drafts="handleLoadDrafts"
 				@select-order="handleSelectOrder"
@@ -179,8 +182,12 @@
 						<strong class="summary-hero__amount">
 							{{ currencySymbol(displayCurrency) }} {{ formatCurrency(subtotal) }}
 						</strong>
-						<div v-if="saleCredit.active" class="summary-hero__credit" data-testid="sale-credit-line">
-							{{ saleCreditLabels.line }}
+						<div
+							v-if="saleCredit.active && heroCreditVariant === 'compact'"
+							class="summary-hero__credit"
+							data-testid="sale-credit-line"
+						>
+							<SaleCreditCard variant="compact" :card="saleCreditCard" />
 						</div>
 						<div class="summary-hero__meta">
 							<span
@@ -250,9 +257,26 @@
 							class="summary-field summary-field--dock"
 						/>
 					</div>
+					<!-- Large screens: the full voucher card on its own row across
+					     the box (section 112); medium/small: two lines above. -->
+					<div
+						v-if="!exchangeStore.active && saleCredit.active && heroCreditVariant === 'full'"
+						class="summary-hero__credit-row"
+						data-testid="sale-credit-line"
+					>
+						<SaleCreditCard variant="full" :card="saleCreditCard" />
+					</div>
 				</div>
 			</v-col>
 
+			<v-col
+				v-if="useCompactSaleDock && saleCredit.active"
+				cols="12"
+				class="pb-0"
+				data-testid="sale-credit-compact"
+			>
+				<SaleCreditCard variant="compact" :card="saleCreditCard" />
+			</v-col>
 			<v-col cols="12" :md="useCompactSaleDock ? 12 : 5" class="invoice-summary-actions">
 				<InvoiceActionButtons
 					:pos_profile="pos_profile"
@@ -271,6 +295,7 @@
 					:exchange-checking="exchangeStore.checking || exchangeStore.figuresPending"
 				:credit-active="saleCredit.active"
 				:credit-pay-label="saleCreditLabels.pay"
+				:credit-pay-pending="saleCreditLabels.pending"
 					@save-and-clear="handleSaveAndClear"
 					@load-drafts="handleLoadDrafts"
 					@select-order="handleSelectOrder"
@@ -377,6 +402,8 @@ import InvoiceActionButtons from "./InvoiceActionButtons.vue";
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import { exchangeFigures } from "../../../utils/oneScreenExchange";
 import { useSaleCreditStore } from "../../../stores/saleCreditStore";
+import { useSaleCreditCard } from "../../../composables/pos/payments/useSaleCreditCard";
+import SaleCreditCard from "./SaleCreditCard.vue";
 import { useExchangeResult } from "../../../composables/pos/exchange/useExchangeResult";
 import ExchangeResultLine from "./ExchangeResultLine.vue";
 import { exchangeCartLabels, exchangeQtyText } from "../../../utils/oneScreenExchangeText";
@@ -477,24 +504,17 @@ const exchangeLabels = computed(() =>
 // figures as the payment screen (saleCreditStore), "Checking…" until the
 // server's total for this exact cart is in.
 const saleCredit = useSaleCreditStore();
-const saleCreditLabels = computed(() => {
-	const t = window.__ || ((text, args) => (args || []).reduce((out, a, i) => out.replace(`{${i}}`, a), text));
-	// No-break space: "OMR" never wraps away from its amount (it did in RTL).
-	const money = (value) =>
-		`${props.currencySymbol(props.displayCurrency)}\u00A0${props.formatCurrency(Math.abs(Number(value) || 0))}`;
-	if (!saleCredit.active) return { line: "", amount: "", pay: "" };
-	const figures = saleCredit.figures;
-	if (!figures) return { line: `${t("Credit note")} · ${t("Checking…")}`, amount: t("Checking…"), pay: "" };
-	if (!(Number(figures.total) > 0)) {
-		const available = saleCredit.vouchers.reduce((sum, voucher) => sum + (Number(voucher?.amount) || 0), 0);
-		return { line: t("Credit note {0} — scan the new items", [money(available)]), amount: money(available), pay: t("Pay") };
-	}
-	return {
-		line: `${t("Credit note")} −${money(figures.credit)} · ${t("To pay")} ${money(figures.pay)}`,
-		amount: `−${money(figures.credit)}`,
-		pay: t("Pay {0}", [money(figures.pay)]),
-	};
-});
+// No-break space: "OMR" never wraps away from its amount (it did in RTL).
+const saleCreditMoney = (value) =>
+	`${props.currencySymbol(props.displayCurrency)}\u00A0${props.formatCurrency(Math.abs(Number(value) || 0))}`;
+// The voucher card (section 112): useSaleCreditCard, from the vouchers and
+// the payment screen's figures.
+const { card: saleCreditCard, labels: saleCreditLabels } = useSaleCreditCard(saleCreditMoney);
+// Full card on large screens (>= 1600 x 960, the large bottom bar tier of
+// section 107); two lines on medium and small ones.
+const heroCreditVariant = computed(() =>
+	responsive.windowWidth.value >= 1600 && responsive.windowHeight.value >= 960 ? "full" : "compact",
+);
 // The big result line (section 109): server-checked figures only.
 const { result: exchangeResult, newItemsTotal: exchangeServerNewTotal } = useExchangeResult();
 const exchangeQty = computed(() =>
@@ -848,6 +868,13 @@ defineExpose({
 	min-width: 0;
 }
 
+/* A credit note voucher adds one figure: six columns, one row (section 112). */
+.counter-grid-summary__metrics--credit {
+	grid-template-columns:
+		minmax(104px, 1fr) minmax(108px, 1fr) minmax(70px, 0.6fr)
+		minmax(150px, 1.15fr) minmax(190px, 1.4fr) minmax(140px, 1.1fr);
+}
+
 .counter-grid-summary__metric {
 	display: flex;
 	min-width: 0;
@@ -919,6 +946,7 @@ defineExpose({
 
 .summary-hero {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
 	gap: 14px;
@@ -935,6 +963,8 @@ defineExpose({
 	flex-direction: column;
 	gap: 4px;
 	min-width: 0;
+	/* Fills the space up to the discount field (the voucher card needs it). */
+	flex: 1 1 auto;
 }
 
 .summary-hero__eyebrow {
@@ -949,6 +979,12 @@ defineExpose({
 	font-size: clamp(1.2rem, 2vw, 1.8rem);
 	line-height: 1.1;
 	color: var(--pos-text-primary);
+}
+
+.summary-hero__credit-row {
+	flex: 1 0 100%;
+	min-width: 0;
+	margin-top: -8px;
 }
 
 .summary-hero__credit {

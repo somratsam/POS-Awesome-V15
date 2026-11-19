@@ -74,6 +74,7 @@ import scannerSource from "../src/posapp/composables/pos/items/useScannerInput.t
 import selectorSource from "../src/posapp/components/pos/items/ItemsSelector.vue?raw";
 import posSource from "../src/posapp/components/pos/shell/Pos.vue?raw";
 import customerSource from "../src/posapp/components/pos/customer/Customer.vue?raw";
+import cardSource from "../src/posapp/components/pos/invoice/SaleCreditCard.vue?raw";
 import summarySource from "../src/posapp/components/pos/invoice/InvoiceSummary.vue?raw";
 import buttonsSource from "../src/posapp/components/pos/invoice/InvoiceActionButtons.vue?raw";
 import dialogsSource from "../src/posapp/components/pos/invoice_utils/dialogs.ts?raw";
@@ -238,9 +239,12 @@ describe("using a voucher from the main screen", () => {
 		expect(customers.creditOnSaleFor("CUST-AHMED")).toBeNull();
 		expect(useSaleCreditStore().active).toBe(false);
 		// The lock note and the Walk-in button follow creditOnSaleFor / the vouchers.
-		expect(customerSource).toContain('data-testid="sale-credit-remove"');
-		expect(customerSource).toContain("const removeSaleCredit = () => saleCredit.remove();");
-		expect(customerSource).toContain("Paying with credit note {0} ({1}) — the customer stays {2}.");
+		// Section 112: [Remove] is on the voucher card; the customer box only
+		// says where the customer came from.
+		expect(cardSource).toContain('data-testid="sale-credit-remove"');
+		expect(cardSource).toContain("const remove = () => saleCredit.remove();");
+		expect(customerSource).toContain('__("Customer from credit note")');
+		expect(customerSource).not.toContain('data-testid="sale-credit-remove"');
 	});
 
 	for (const [label, message] of [
@@ -345,19 +349,19 @@ describe("Credit note −X / Pay Y: the payment screen's own figures", () => {
 		const store = await quoted(20, [CREDIT_ROW]);
 		const quote = call.mock.calls.find(([method]) => method.endsWith("quote_sale_credit"));
 		expect(quote[1].invoice.items).toEqual([{ item_code: "A", qty: 1 }]);
-		expect(store.figures).toEqual({ credit: 12.5, pay: 7.5, total: 20 });
+		expect(store.figures).toEqual({ credit: 12.5, pay: 7.5, total: 20, left: 0 });
 	});
 
 	it("credit worth more than the sale: used up to the sale, nothing to pay", async () => {
 		const store = await quoted(8.25, [CREDIT_ROW]);
-		expect(store.figures).toEqual({ credit: 8.25, pay: 0, total: 8.25 });
+		expect(store.figures).toEqual({ credit: 8.25, pay: 0, total: 8.25, left: 4.25 });
 	});
 
 	it("also counts the customer's same-shift credit, as the payment screen does", async () => {
 		const sameShift = { ...CREDIT_ROW, credit_origin: "MCO-CN-2026-00009", total_credit: 3, pos_opening_shift: "SHIFT-1" };
 		const otherShift = { ...CREDIT_ROW, credit_origin: "MCO-CN-2026-00010", total_credit: 50, pos_opening_shift: "OLD" };
 		const store = await quoted(20, [CREDIT_ROW, sameShift, otherShift]);
-		expect(store.figures).toEqual({ credit: 15.5, pay: 4.5, total: 20 });
+		expect(store.figures).toEqual({ credit: 15.5, pay: 4.5, total: 20, left: 0 });
 		// Exactly the payment screen's selection and allocation:
 		const picked = creditRowsToApply({ credit: [CREDIT_ROW, sameShift, otherShift] }, "CUST-AHMED", {
 			shift: "SHIFT-1",
@@ -365,6 +369,27 @@ describe("Credit note −X / Pay Y: the payment screen's own figures", () => {
 		});
 		const used = allocateCredit(picked.rows, 20, 3, (v) => Number(v));
 		expect(used.reduce((a, b) => a + b, 0)).toBe(15.5);
+	});
+
+	it("the BALANCE voucher figure is what stays on the scanned voucher, never the customer's other credit", async () => {
+		const sameShift = { ...CREDIT_ROW, credit_origin: "MCO-CN-2026-00009", total_credit: 3, pos_opening_shift: "SHIFT-1" };
+		const store = await quoted(5, [CREDIT_ROW, sameShift]);
+		const picked = creditRowsToApply({ credit: [CREDIT_ROW, sameShift] }, "CUST-AHMED", {
+			shift: "SHIFT-1",
+			vouchers: useCustomersStore().creditVouchers,
+		});
+		const used = allocateCredit(picked.rows, 5, 3, (v) => Number(v));
+		const voucherIndex = picked.rows.findIndex((row: any) => row.credit_origin === CREDIT_ROW.credit_origin);
+		expect(store.figures?.credit).toBe(5);
+		expect(store.figures?.left).toBe(Number((12.5 - used[voucherIndex]).toFixed(3)));
+	});
+
+	it("a voucher going on the sale counts up (the card flashes) and beeps", async () => {
+		call.mockResolvedValueOnce(VOUCHER);
+		const store = useSaleCreditStore();
+		const before = store.appliedCount;
+		await store.applyFromScan("C26-MCO-00001-K7Q4");
+		expect(store.appliedCount).toBe(before + 1);
 	});
 
 	it("a cart change is checked again 0.4 s after the last change: one call", async () => {
@@ -391,7 +416,7 @@ describe("Credit note −X / Pay Y: the payment screen's own figures", () => {
 		} finally {
 			vi.useRealTimers();
 		}
-		await vi.waitFor(() => expect(store.figures).toEqual({ credit: 12.5, pay: 27.5, total: 40 }));
+		await vi.waitFor(() => expect(store.figures).toEqual({ credit: 12.5, pay: 27.5, total: 40, left: 0 }));
 	});
 
 	it("the payment screen and the main screen share the selection and the allocation", () => {

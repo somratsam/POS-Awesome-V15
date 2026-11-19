@@ -24,6 +24,7 @@ import { isOffline } from "../../offline/index";
 import { callWithoutDialog, voucherErrorToast } from "../utils/voucherMessages";
 import { allocateCredit, creditRowsToApply } from "../composables/pos/payments/useRedemptionLogic";
 import { useFormat } from "../format";
+import { playScanTone } from "../utils/scanTone";
 
 declare const frappe: any;
 declare const __: (text: string, args?: any[]) => string;
@@ -47,6 +48,10 @@ export const useSaleCreditStore = defineStore("saleCredit", () => {
 	const quote = ref<SaleCreditQuote | null>(null);
 	const checking = ref(false);
 	const applying = ref(false);
+	/** Goes up by one each time a voucher goes on the sale (the card flashes). */
+	const appliedCount = ref(0);
+	/** Date.now() of the last one: a card that mounts just after still flashes. */
+	const appliedAt = ref(0);
 	/** The customer-change question ("Use credit note X? The customer changes to Y."). */
 	const prompt = ref<{ voucher: any; currentCustomer: string } | null>(null);
 	let resolvePrompt: ((value: boolean) => void) | null = null;
@@ -84,8 +89,10 @@ export const useSaleCreditStore = defineStore("saleCredit", () => {
 
 	/**
 	 * The figures under the cart, or null while they are being checked.
-	 * {credit, pay, total}: credit the payment screen will apply, what the
-	 * customer then pays, the sale's total (0 with no new items yet).
+	 * {credit, pay, total, left}: credit the payment screen will apply, what
+	 * the customer then pays, the sale's total (0 with no new items yet), and
+	 * what stays on the scanned vouchers after this sale (the BALANCE
+	 * voucher) -- their own rows only, never the customer's other credit.
 	 */
 	const figures = computed(() => {
 		if (!active.value || !quote.value || quote.value.key !== currentKey()) return null;
@@ -100,7 +107,14 @@ export const useSaleCreditStore = defineStore("saleCredit", () => {
 		const total = normalize(quote.value.total);
 		const used = allocateCredit(picked.rows, total, precision(), normalize);
 		const credit = normalize(used.reduce((sum, value) => sum + value, 0));
-		return { credit, pay: normalize(Math.max(total - credit, 0)), total };
+		const scanned = new Set(vouchers.value.map((voucher: any) => voucher.credit_origin));
+		let leftRaw = 0;
+		picked.rows.forEach((row: any, index: number) => {
+			if (scanned.has(row?.credit_origin)) {
+				leftRaw += Math.max(normalize(row?.total_credit || 0) - (used[index] || 0), 0);
+			}
+		});
+		return { credit, pay: normalize(Math.max(total - credit, 0)), total, left: normalize(leftRaw) };
 	});
 
 	const setProviders = (sale: (() => any) | null, signature: (() => string) | null) => {
@@ -241,6 +255,9 @@ export const useSaleCreditStore = defineStore("saleCredit", () => {
 			if (voucher.bearer) store.markSharedCustomer(voucher.customer);
 			store.addCreditVoucher(voucher);
 			refresh(0);
+			appliedAt.value = Date.now();
+			appliedCount.value += 1;
+			playScanTone("success");
 			return "applied";
 		} finally {
 			applying.value = false;
@@ -271,6 +288,8 @@ export const useSaleCreditStore = defineStore("saleCredit", () => {
 		quote,
 		checking,
 		applying,
+		appliedCount,
+		appliedAt,
 		prompt,
 		vouchers,
 		active,

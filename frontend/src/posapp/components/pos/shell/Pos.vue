@@ -194,6 +194,13 @@
 					<template v-else>
 						<span class="mobile-sale-dock__eyebrow">{{ __("Active sale") }}</span>
 						<strong class="mobile-sale-dock__amount">{{ formattedCartTotal }}</strong>
+						<!-- Credit note voucher on the sale: the two-line card (section 112). -->
+						<SaleCreditCard
+							v-if="dockSaleCredit.active"
+							variant="compact"
+							:card="dockSaleCreditCard"
+							data-testid="sale-credit-dock"
+						/>
 					</template>
 					<div class="mobile-sale-dock__meta">
 						<span>{{ cartMetaLabel }}</span>
@@ -331,6 +338,9 @@ import Returns from "../flows/Returns.vue";
 import ExchangeHost from "../flows/ExchangeHost.vue";
 import SaleCreditHost from "../payments/SaleCreditHost.vue";
 import ExchangeResultLine from "../invoice/ExchangeResultLine.vue";
+import SaleCreditCard from "../invoice/SaleCreditCard.vue";
+import { useSaleCreditCard } from "../../../composables/pos/payments/useSaleCreditCard";
+import { useFormat } from "../../../format";
 import { useExchangeResult } from "../../../composables/pos/exchange/useExchangeResult";
 import { looksLikeVoucher } from "../../../composables/pos/items/voucherScanRoute";
 import { useSaleCreditStore } from "../../../stores/saleCreditStore";
@@ -491,6 +501,12 @@ export default {
 			}
 			return currency || "";
 		};
+		// The voucher card in the small-screen sale dock (section 112).
+		const dockFormat = useFormat();
+		const { saleCredit: dockSaleCredit, card: dockSaleCreditCard } = useSaleCreditCard(
+			(value) =>
+				`${dockFormat.currencySymbol(activeCurrency.value)}\u00A0${dockFormat.formatCurrency(Math.abs(Number(value) || 0))}`,
+		);
 		const formattedCartTotal = computed(() => {
 			const symbol = getCurrencySymbol(activeCurrency.value);
 			return `${symbol} ${formatCompactNumber(invoiceTotal.value)}`.trim();
@@ -992,6 +1008,8 @@ export default {
 			handleCounterAuxiliaryAfterLeave,
 			discountPercentageOfferName,
 			getCurrencySymbol,
+			dockSaleCredit,
+			dockSaleCreditCard,
 			invoicePanel,
 			counterItemsSelector,
 			eventBus,
@@ -1007,6 +1025,7 @@ export default {
 	},
 
 	components: {
+		SaleCreditCard,
 		ItemsSelector,
 		Invoice,
 		CounterGridHealthStrip,
