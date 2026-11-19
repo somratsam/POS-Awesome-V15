@@ -11087,3 +11087,81 @@ already "Left on credit notes" (no change).
 the app root npx picks a stray vitest without jsdom). 13 closing-shift backend
 modules OK (test_pos_closing_shift 13 incl. 3 new). Build/migrate N/A (Python +
 server template only). System Settings checked: precision 3, Asia/Muscat.
+
+## 116. Pre-deploy check of everything on `develop-swan` since stable `bcae9fec` (2026-11-19, staging only; stable and production untouched)
+
+**Scope.** Stable's code = develop-swan at `d3a6f3ba` (trees differ only in
+CLAUDE.md / PROGRESS_NOTES; stable is cherry-picked, so `git log
+bcae9fec..develop-swan` lists August history). To deploy: e6a8efe2 (103),
+996057a2 (104), 10e8c7c1 (105, tests), 7786685f (106), 69d22626 (107),
+472120c6 (docs), 3a7146e5 (108-110), 1a8dfe02 (111), 8422448b (112), 93d3e330
+(113), 9ae9c51b (114), 13386674 (115).
+
+**Automated.** Vitest (from `frontend/`) 311/311 files, 2107/2107 tests.
+Backend, 105 modules one at a time: 92 OK, 6 without tests, 7 failed in the
+batch; rerun alone with System Settings restored first: `test_sales_by_cashier`
+24 OK and `test_closing_variance` 12 OK (the batch's precision-2 reset);
+`test_exchange_links_db` (9 errors) and `test_voucher_exchange_db` (17 errors)
+borrow `setUp` from `test_one_screen_exchange_db` but not section 111's new
+`_own_profile_and_shift` (test files only; fixed after the report, see below); `test_customer_store`
+1 failure (its backfill check takes the first POS invoice's customer, now
+Anonymous -- generic customers stay blank by design; test and code identical
+to stable); `test_gift_card_invoice_fields` / `test_workspace_gift_card`
+pre-existing (section 92). `bench build` exit 0. Migrate x2 exit 0, Z Report
+DB md5 = git. System Settings restored (3, Asia/Muscat).
+
+**End to end** (headless, T108 Cashier on test 222, own shift
+POSA-OS-26-0000070 -> POSA-CS-26-0000062): cash (20.000 tendered, 3.400 change),
+Visa with Sales Person aziz, Maal to test 777 (no Sales Person -> credited to
+PIN cashier); return only (review explains the empty Sales Person); exchanges
+pays more 5.200 / even / credit left 2.200 (BALANCE); vouchers on the main
+screen: full (bearer), partial (test x MCO-CN-00018 + 16.870 cash; 00019
+untouched), two vouchers (test 6666, 6.700 cash), BALANCE (bearer 21.800 on
+16.600 -> 5.200 stays on the same note); lost voucher: plain cashier refused,
+supervisor + return number approved and recorded; Invoice Management labels,
+History and Returns chips, reprint, delete draft (app dialog), Edit Invoice
+(amended to -1); Clear cache online (app dialog, reload); receipt / voucher /
+Z Report print view on 80 mm. Closing overview, Closing Shift, Z data, Desk
+view and printed Z Report all equal: Net 192.600, Gross 325.800, Returned
+133.200, Qty 10 (17-7), VAT 9.170, Cash expected 74.170 (10 + 64.170), Visa
+18.800, Maal 40.600, credit issued 133.200, used 202.230, Exchanges Today
+87.400, Left on credit notes 45.800, Takings 123.570. Every setting restored
+(T108 disabled, no PIN, no profile row, role and modified as before; test 222
+fields and modified as before). Test invoices ACC-SINV-2026-00424..00447-1
+left on staging; they used up test x MCO-CN-2026-00018, test 6666 00326/00335
+and 80.000 of testfff 00421 remains.
+
+**Findings (not changed).**
+- A supervisor on the till, or a same-shift return of the same customer,
+  authorizes all of a named customer's credit: scanning one voucher then uses
+  the others too. The main-screen card said "Credit covers it" while the
+  payment screen asked to issue the 18.800 remainder (card counts only the
+  scanned vouchers' balance).
+- Lost voucher by return number accepts only this till's own store; another
+  store's return gives "This is not a valid credit note voucher number".
+- The approver recorded is the signed-in user when it is a supervisor
+  (Administrator on staging), before the PIN cashier -- existing rule; a store
+  login with the supervisor role makes every till a supervisor.
+- A bearer voucher from a return made earlier in the same shift is labelled
+  "Exchange" in Invoice Management (section 104 rule).
+
+**Later list.**
+- Cash Movement from the till fails on every profile without the
+  source-account fields: the till always sends `source_account`, and
+  `posa_allow_source_account_override` / `posa_default_source_account` /
+  `posa_allowed_source_accounts` / `posa_allowed_expense_accounts` are in
+  hooks.py's fixture filter but not in custom_field.json, so they don't
+  exist; the server answers "Source account override is disabled for this POS
+  Profile." Pre-existing (only 113's dialogs changed). Not used now; check later.
+  Cancel / delete dialogs (113) not live-tested: the buttons are disabled by
+  the profile.
+- Offline on staging after Clear cache: stock 0 for every item and prices with
+  VAT added again (warning "Missing prerequisites: tax_inclusive"), so no
+  offline sale could be made; "Clear cache blocked while offline sales are
+  unsent" (113) is covered by unit tests only.
+- Make `test_customer_store`'s backfill check skip generic customers.
+
+**Test fix (approved).** `test_exchange_links_db` and `test_voucher_exchange_db`
+now also borrow `_own_profile_and_shift` and `tearDownClass` from
+`TestOneScreenExchangeOnInvoices`: 10/10 and 17/17 OK, no `_Test One-screen
+Exchange` profile left, System Settings unchanged (3, Asia/Muscat).

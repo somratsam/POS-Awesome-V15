@@ -21,7 +21,9 @@ from posawesome.posawesome.api import sales_credit
 from posawesome.posawesome.api.invoice_processing import creation
 from posawesome.posawesome.api import test_one_screen_exchange_db as _exchange_db
 
-_HELPERS = ("_base", "_total", "_pay", "_original", "_return", "_return_total", "_exchange", "_doc", "_draft")
+_HELPERS = (
+    "_own_profile_and_shift", "_base", "_total", "_pay", "_original", "_return", "_return_total", "_exchange", "_doc", "_draft",
+)
 
 
 def _second_connection():
@@ -41,6 +43,9 @@ class _OnInvoices(unittest.TestCase):
     # The exchange tests' set-up and helpers, without running their tests here.
     setUpClass = classmethod(_exchange_db.TestOneScreenExchangeOnInvoices.setUpClass.__func__)
     setUp = _exchange_db.TestOneScreenExchangeOnInvoices.setUp
+    # Each test runs on its own profile copy (section 111); this removes any
+    # copy a commit inside the code under test left behind.
+    tearDownClass = classmethod(_exchange_db.TestOneScreenExchangeOnInvoices.tearDownClass.__func__)
 
 
 for _name in _HELPERS:
