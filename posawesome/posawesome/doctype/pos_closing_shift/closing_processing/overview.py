@@ -904,6 +904,29 @@ def get_closing_shift_overview(pos_opening_shift):
     }
 
 
+def _foreign_currency_rows(rows, company_currency):
+    """The per-currency lines under an amount, only when one of them is in a
+    currency other than the company's; a shift taken all in the company
+    currency would only repeat the amount above."""
+    return rows if any(row.get("currency") != company_currency for row in rows) else []
+
+
+def _left_as_store_credit(closing_shift_doc):
+    """The Z Report's "Left on credit notes" for this closing (same function,
+    sales_breakdown.get_sales_breakdown, over the same invoices)."""
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
+        _shift_invoice_names_by_doctype,
+    )
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.sales_breakdown import (
+        get_sales_breakdown,
+    )
+
+    breakdown = get_sales_breakdown(
+        closing_shift_doc.get("pos_opening_shift"), _shift_invoice_names_by_doctype(closing_shift_doc)
+    )
+    return breakdown["left_as_store_credit"]
+
+
 @frappe.whitelist()
 def get_payment_reconciliation_details(closing_shift_doc):
     company_currency = frappe.get_cached_value("Company", closing_shift_doc.company, "default_currency")
@@ -1018,7 +1041,7 @@ def get_payment_reconciliation_details(closing_shift_doc):
                     "opening_amount": flt(detail.opening_amount),
                     "expected_amount": flt(detail.expected_amount),
                     "difference": flt(detail.difference),
-                    "currency_breakdown": currencies,
+                    "currency_breakdown": _foreign_currency_rows(currencies, company_currency),
                 }
             )
         )
@@ -1032,25 +1055,34 @@ def get_payment_reconciliation_details(closing_shift_doc):
                     "opening_amount": 0,
                     "expected_amount": breakdown["base"],
                     "difference": 0,
-                    "currency_breakdown": [
-                        frappe._dict({"currency": currency, "amount": amount})
-                        for currency, amount in sorted(breakdown["currencies"].items())
-                        if amount
-                    ],
+                    "currency_breakdown": _foreign_currency_rows(
+                        [
+                            frappe._dict({"currency": currency, "amount": amount})
+                            for currency, amount in sorted(breakdown["currencies"].items())
+                            if amount
+                        ],
+                        company_currency,
+                    ),
                 }
             )
         )
 
-    sales_currency_breakdown = [
-        frappe._dict({"currency": currency, "amount": amount})
-        for currency, amount in sorted(sales_breakdown.items())
-        if amount
-    ]
-    net_currency_breakdown = [
-        frappe._dict({"currency": currency, "amount": amount})
-        for currency, amount in sorted(net_breakdown.items())
-        if amount
-    ]
+    sales_currency_breakdown = _foreign_currency_rows(
+        [
+            frappe._dict({"currency": currency, "amount": amount})
+            for currency, amount in sorted(sales_breakdown.items())
+            if amount
+        ],
+        company_currency,
+    )
+    net_currency_breakdown = _foreign_currency_rows(
+        [
+            frappe._dict({"currency": currency, "amount": amount})
+            for currency, amount in sorted(net_breakdown.items())
+            if amount
+        ],
+        company_currency,
+    )
 
     return frappe.render_template(
         "posawesome/posawesome/doctype/pos_closing_shift/closing_shift_details.html",
@@ -1061,6 +1093,7 @@ def get_payment_reconciliation_details(closing_shift_doc):
             "mode_summaries": mode_summaries,
             "sales_currency_breakdown": sales_currency_breakdown,
             "net_currency_breakdown": net_currency_breakdown,
+            "left_as_store_credit": _left_as_store_credit(closing_shift_doc),
         },
     )
 

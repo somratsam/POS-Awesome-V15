@@ -64,8 +64,9 @@ class TestPOSClosingShift(unittest.TestCase):
         doc.check_permission = Mock()
         return doc
 
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview._left_as_store_credit", return_value=0)
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
-    def test_reconciliation_checks_invoice_read_permission(self, mock_frappe):
+    def test_reconciliation_checks_invoice_read_permission(self, mock_frappe, _left):
         invoice_doc = self._make_doc(
             {
                 "currency": "USD",
@@ -103,8 +104,9 @@ class TestPOSClosingShift(unittest.TestCase):
 
         invoice_doc.check_permission.assert_called_once_with("read")
 
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview._left_as_store_credit", return_value=0)
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
-    def test_reconciliation_checks_payment_entry_read_permission(self, mock_frappe):
+    def test_reconciliation_checks_payment_entry_read_permission(self, mock_frappe, _left):
         payment_doc = self._make_doc(
             {
                 "payment_type": "Receive",
@@ -140,6 +142,68 @@ class TestPOSClosingShift(unittest.TestCase):
         overview.get_payment_reconciliation_details(closing_shift_doc)
 
         payment_doc.check_permission.assert_called_once_with("read")
+
+    def _render_details(self, mock_frappe, invoice_currency):
+        invoice_doc = self._make_doc(
+            {
+                "currency": invoice_currency,
+                "conversion_rate": 1,
+                "grand_total": 96.6,
+                "net_total": 92,
+                "payments": [AttrDict(mode_of_payment="Cash", amount=96.6, base_amount=96.6)],
+                "change_amount": 0,
+            }
+        )
+        closing_shift_doc = DummyClosingShift(
+            tables={
+                "pos_transactions": [{"sales_invoice": "SINV-0001"}],
+                "pos_payments": [],
+                "payment_reconciliation": [
+                    SimpleNamespace(mode_of_payment="Cash", opening_amount=0, expected_amount=96.6, difference=0)
+                ],
+            }
+        )
+        mock_frappe.get_cached_value.return_value = "OMR"
+        mock_frappe.db.get_value.return_value = "Cash"
+        mock_frappe.db.exists.return_value = True
+        mock_frappe.get_cached_doc.return_value = invoice_doc
+        mock_frappe._dict.side_effect = lambda d: AttrDict(d)
+        mock_frappe.render_template.return_value = "<html/>"
+
+        overview.get_payment_reconciliation_details(closing_shift_doc)
+        return mock_frappe.render_template.call_args[0][1]
+
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview._left_as_store_credit", return_value=112.35)
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
+    def test_details_hide_currency_lines_when_all_in_company_currency(self, mock_frappe, _left):
+        # Everything in OMR: no second line repeating the amount ("OMR OMR 470.400").
+        context = self._render_details(mock_frappe, "OMR")
+        self.assertEqual(context["sales_currency_breakdown"], [])
+        self.assertEqual(context["net_currency_breakdown"], [])
+        self.assertEqual(context["mode_summaries"][0]["currency_breakdown"], [])
+        self.assertEqual(context["left_as_store_credit"], 112.35)
+
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview._left_as_store_credit", return_value=0)
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.overview.frappe")
+    def test_details_keep_currency_lines_for_another_currency(self, mock_frappe, _left):
+        context = self._render_details(mock_frappe, "USD")
+        self.assertEqual([r["currency"] for r in context["sales_currency_breakdown"]], ["USD"])
+        self.assertEqual([r["currency"] for r in context["net_currency_breakdown"]], ["USD"])
+        self.assertEqual([r["currency"] for r in context["mode_summaries"][0]["currency_breakdown"]], ["USD"])
+
+    @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.sales_breakdown.get_sales_breakdown")
+    def test_left_as_store_credit_is_the_z_report_figure(self, mock_breakdown):
+        mock_breakdown.return_value = {"left_as_store_credit": 112.35}
+        doc = DummyClosingShift(
+            tables={
+                "pos_opening_shift": "POSA-OS-1",
+                "pos_transactions": [{"sales_invoice": "SINV-1"}, {"sales_invoice": "SINV-2"}],
+            }
+        )
+        self.assertEqual(overview._left_as_store_credit(doc), 112.35)
+        mock_breakdown.assert_called_once_with(
+            "POSA-OS-1", {"Sales Invoice": ["SINV-1", "SINV-2"], "POS Invoice": []}
+        )
 
     @patch("posawesome.posawesome.doctype.pos_closing_shift.closing_processing.creation.frappe")
     def test_supplier_payment_reference_does_not_populate_customer_link(self, mock_frappe):
