@@ -15,6 +15,9 @@ _Base = _db.TestOneScreenExchangeOnInvoices
 class TestExchangeLinks(unittest.TestCase):
     setUpClass = classmethod(_Base.setUpClass.__func__)
     setUp = _Base.setUp
+    # Each test runs on its own profile copy (section 111).
+    tearDownClass = classmethod(_Base.tearDownClass.__func__)
+    _own_profile_and_shift = _Base._own_profile_and_shift
     _base, _total, _pay, _original = _Base._base, _Base._total, _Base._pay, _Base._original
     _return, _return_total, _exchange, _doc = _Base._return, _Base._return_total, _Base._exchange, _Base._doc
 
