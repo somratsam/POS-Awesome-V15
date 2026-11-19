@@ -10,6 +10,9 @@ import {
 	isBarcodeCandidateChar,
 	isLikelyKeyboardScan,
 	isSearchFieldPrimedForScan,
+	isReceiptScanChar,
+	isReceiptScanCandidate,
+	isFullReceiptCode,
 } from "../../../utils/keyboardScan.js";
 import {
 	perfMarkStart,
@@ -18,7 +21,8 @@ import {
 } from "../../../utils/perf.js";
 import { classifyClipboardScanText } from "./scannerInput/clipboardScan";
 import { dispatchStockLookupScan } from "./stockLookupScanRoute";
-import { dispatchExchangeScan } from "./exchangeScanRoute";
+import { dispatchExchangeScan, receiptRouteAvailable } from "./exchangeScanRoute";
+import { dispatchVoucherScan } from "./voucherScanRoute";
 
 declare const frappe: any;
 declare const __: (_str: string, _args?: any[]) => string;
@@ -113,6 +117,14 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 	const keyboardScanMaxInterval = 45;
 	const keyboardScanMaxDuration = 250;
 	const keyboardScanProcessingDelay = 100;
+	// A complete receipt number in the box opens after this much quiet
+	// (section 109): any scanner speed; a half number is never complete.
+	const receiptSettleDelay = 250;
+	let receiptSettleTimer: ReturnType<typeof setTimeout> | null = null;
+	const clearReceiptSettle = () => {
+		if (receiptSettleTimer) clearTimeout(receiptSettleTimer);
+		receiptSettleTimer = null;
+	};
 
 	// --- Audio ---
 	const ensureScanAudioContext = () => {
@@ -345,6 +357,12 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			if (clearSearchHandler.value) clearSearchHandler.value();
 			return;
 		}
+		// A credit note voucher: its credit goes on the sale and the customer
+		// becomes the voucher's (voucherScanRoute); not a voucher -> item.
+		if (dispatchVoucherScan(normalizedCode, (code) => onBarcodeScanned(code, confidence))) {
+			if (clearSearchHandler.value) clearSearchHandler.value();
+			return;
+		}
 
 		const runScanPipeline = async (code: string) => {
 			const mark = perfMarkStart("pos:scan-handler");
@@ -413,6 +431,33 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 			? now - keyboardScanStartTime.value
 			: 0;
 
+		// A receipt's barcode (section 109): scanner-speed keystrokes and a
+		// complete receipt number, with One-screen exchange on -- then it
+		// opens the receipt like Enter does. Anything else with a dash is
+		// left in the box for Enter, exactly as before.
+		const live = String(currentInput || "").trim();
+		if (live.includes("-") || code.includes("-")) {
+			// The field's own value (a stale pending value from before the
+			// first dash could be a prefix); keystroke span, not the settle.
+			const receipt = live || code;
+			const span =
+				keyboardScanStartTime.value >= 0 && keyboardScanLastTime.value >= 0
+					? keyboardScanLastTime.value - keyboardScanStartTime.value
+					: -1;
+			const fast =
+				span > 0 &&
+				span <= keyboardScanMaxDuration &&
+				keyboardScanMaxGapObserved.value <= keyboardScanMaxInterval &&
+				span / receipt.length <= keyboardScanMaxInterval;
+			resetKeyboardScanDetection();
+			if (fast && isFullReceiptCode(receipt) && receiptRouteAvailable()) {
+				clearReceiptSettle();
+				onBarcodeScanned(receipt, "high");
+				return true;
+			}
+			return false;
+		}
+
 		if (
 			isLikelyKeyboardScan({
 				code,
@@ -441,7 +486,14 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 
 		// Pass-through navigation keys
 		if (key === "ArrowDown" || key === "ArrowUp") return false;
-		if (key === "Enter" || key === "Escape") return false;
+		if (key === "Enter" || key === "Escape") {
+			// A scanner that sends Enter after a receipt's barcode, or Enter
+			// typed by hand: Enter opens it (ItemsSelector.onEnter); don't
+			// open it a second time.
+			clearReceiptSettle();
+			if (keyboardScanBuffer.value.includes("-")) resetKeyboardScanDetection();
+			return false;
+		}
 
 		// Reset on modifiers
 		if (event.metaKey || event.ctrlKey || event.altKey) {
@@ -453,7 +505,9 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		// this only rejects characters no real barcode format uses at all.
 		// Timing (isLikelyKeyboardScan below) is what actually distinguishes a
 		// real scan from ordinary typing now that charset can't.
-		if (!isBarcodeCandidateChar(key)) {
+		// A dash only for a receipt's barcode (isReceiptScanChar): decided at
+		// the end, on timing plus the complete receipt shape.
+		if (!isBarcodeCandidateChar(key) && !isReceiptScanChar(key)) {
 			resetKeyboardScanDetection();
 			return false;
 		}
@@ -461,7 +515,7 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		const currentVal = getSearchInputHandler.value
 			? (getSearchInputHandler.value as any)()
 			: "";
-		if (!isSearchFieldPrimedForScan(currentVal)) {
+		if (!isSearchFieldPrimedForScan(currentVal) && !isReceiptScanCandidate(currentVal)) {
 			resetKeyboardScanDetection();
 			return false;
 		}
@@ -517,6 +571,30 @@ export function useScannerInput(options: ScannerInputOptions = {}) {
 		}
 
 		if (!isSearchFieldPrimedForScan(currentValue)) {
+			// A receipt's barcode arriving (dashes): handleSearchKeydown's
+			// timing decides; no idle-settle scan for dashed text, so a typed
+			// receipt number still waits for Enter.
+			if (isReceiptScanCandidate(currentValue)) {
+				keyboardScanPendingValue.value = "";
+				// A complete receipt number: opens once the box has been
+				// quiet for 250 ms, whatever the scanner's speed. A half
+				// number never is complete; Enter cancels this.
+				clearReceiptSettle();
+				if (isFullReceiptCode(currentValue) && receiptRouteAvailable()) {
+					receiptSettleTimer = setTimeout(() => {
+						receiptSettleTimer = null;
+						const latest = String(
+							(getSearchInputHandler.value ? (getSearchInputHandler.value as any)() : currentValue) || "",
+						).trim();
+						if (latest !== currentValue) return;
+						resetKeyboardScanDetection();
+						onBarcodeScanned(latest, "low");
+					}, receiptSettleDelay);
+				}
+				if (keyboardScanBuffer.value) return false;
+				resetKeyboardScanDetection();
+				return false;
+			}
 			resetKeyboardScanDetection();
 			return false;
 		}

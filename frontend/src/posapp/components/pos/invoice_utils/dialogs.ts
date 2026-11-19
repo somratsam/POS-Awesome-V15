@@ -6,6 +6,7 @@ import {
 } from "../../../utils/documentSources";
 import { resolvePosDocumentDoctype } from "../../../utils/posDocumentMode";
 import { runExchangeMainAction } from "./exchange";
+import { peekSaleCreditStore } from "../../../stores/saleCreditStore";
 import {
 	findLinesMissingDiscountReason,
 	isDiscountReasonRequired,
@@ -82,6 +83,11 @@ export async function show_payment(context: any) {
 	} finally {
 		context._exchangeInFlight = false;
 	}
+	// A credit note voucher on the sale: Pay waits for the server's total
+	// (the main button shows "Checking…") so the payment screen opens with
+	// the figures the main screen showed.
+	const saleCredit = peekSaleCreditStore();
+	if (saleCredit?.active) await saleCredit.settle();
 	context._paymentInFlight = true;
 	context.eventBus?.emit?.("payment_processing", true);
 

@@ -1,11 +1,13 @@
-// Submitting a one-screen exchange: the server's figures first
-// (quote_exchange), one confirmation with Back focused, then the return and
-// the new sale together (submit_exchange), then printing:
-//   - with new items: the exchange receipt (the sale), and the BALANCE
-//     voucher of the return when credit is left (section 87's voucher);
-//   - no new items: the credit note voucher of the return.
-// Used by the cart's main button (credit left, even, plain return) and by
-// Payments (customer pays more).
+// Submitting a one-screen exchange from the payment screen -- every case
+// goes there, like a normal sale, and the payment screen is the review step:
+// no confirmation (section 108). The server's figures first (quote_exchange,
+// unless the payment screen already shows them), then the return and the new
+// sale together (submit_exchange), then printing:
+//   - the exchange receipt only when "Submit exchange & Print" was pressed
+//     (customer pays more, credit left, even exchange);
+//   - the credit always prints its voucher, whichever button: the BALANCE
+//     voucher when credit is left (section 87), the credit note voucher of a
+//     return with no new items -- the customer can't use the credit without it.
 
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import { useToastStore } from "../../../stores/toastStore";
@@ -38,11 +40,6 @@ export interface ExchangeSubmitOptions {
 	 * ("Checking…"). submit_exchange re-checks everything either way.
 	 */
 	figures?: { returned: number; sale_total: number | null; pay: number | null } | null;
-	/**
-	 * Ask "Submit this exchange?" first (the cart's one-click buttons).
-	 * Payments passes false: staff have just reviewed the amounts there.
-	 */
-	confirm?: boolean;
 	/** After a successful submit, before the cart is cleared. */
 	onSubmitted?: (result: any) => void;
 }
@@ -133,20 +130,6 @@ export function useExchangeSubmit() {
 				}
 			}
 
-			const confirmed =
-				options.confirm === false ||
-				(await store.ask("submit", {
-				kind: figures.kind,
-				backQty: store.backQty,
-				returned: quote.returned,
-				newQty: options.sale ? newItemsQty(options.sale) : 0,
-				saleTotal: quote.sale_total,
-				pay: figures.pay,
-				credit: figures.credit,
-			}));
-			if (!confirmed) return false;
-			// The dialog stays open, its button showing "Saving…" (ExchangeHost).
-
 			let result: any;
 			try {
 				result = await callWithoutDialog(`${API}.submit_exchange`, {
@@ -166,13 +149,11 @@ export function useExchangeSubmit() {
 			}
 			frappe?.utils?.play_sound?.("submit");
 			options.onSubmitted?.(result);
-			const alwaysPrint = figures.kind !== "pays";
-			void printAfter(result, alwaysPrint || options.print, options.printDoc);
+			void printAfter(result, options.print, options.printDoc);
 			store.reset();
 			return true;
 		} finally {
 			store.submitting = false;
-			if (store.prompt?.saving) store.closePrompt();
 		}
 	};
 

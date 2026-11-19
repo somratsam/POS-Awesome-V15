@@ -18,19 +18,20 @@ export function exchangeCartLabels(figures: CartFigures, money: Money, __: Trans
 	switch (figures.kind) {
 		case "pays":
 			return { headline: __("Customer pays"), amount: money(figures.pay), button: __("Pay {0}", [money(figures.pay)]) };
+		// Every case goes on to the payment screen (section 108).
 		case "credit":
 			return {
 				headline: __("Credit note issued"),
 				amount: money(figures.credit),
-				button: __("Submit exchange"),
+				button: __("Continue"),
 			};
 		case "even":
-			return { headline: __("Even exchange"), amount: null, button: __("Submit exchange") };
+			return { headline: __("Even exchange"), amount: null, button: __("Continue") };
 		default:
 			return {
 				headline: __("Credit note issued"),
 				amount: money(figures.credit),
-				button: __("Submit return → Credit note"),
+				button: __("Continue"),
 			};
 	}
 }
@@ -42,7 +43,7 @@ export function exchangeQtyText(backQty: number, newQty: number, __: Translate):
 		: __("{0} back", [formatQty(backQty)]);
 }
 
-/** Title, lines and OK button of an exchange prompt (ExchangeHost). */
+/** Title, lines and OK button of an exchange question (ExchangeHost). */
 export function exchangeConfirmText(
 	prompt: { type: string; data: Record<string, any> },
 	money: Money,
@@ -57,24 +58,28 @@ export function exchangeConfirmText(
 	if (prompt.type === "discard") {
 		return { title: __("Discard? Nothing saved."), body: [], ok: __("Discard") };
 	}
-	const back = __("{0} back ({1})", [formatQty(data.backQty), money(data.returned)]);
-	if (data.kind === "return") {
-		return {
-			title: __("Submit this return?"),
-			body: [`${back}, ${__("credit note issued {0}", [money(data.credit)])}.`],
-			ok: __("Submit return → Credit note"),
-		};
+	return { title: "", body: [], ok: __("OK") };
+}
+
+export type ExchangeResultTone = "pays" | "credit" | "even" | "checking" | "error";
+
+/**
+ * The big highlighted result line of an exchange (section 109), from the
+ * server-checked figures (null: being checked).
+ */
+export function exchangeResultLine(
+	figures: CartFigures | null,
+	money: Money,
+	__: Translate,
+): { tone: ExchangeResultTone; text: string } {
+	if (!figures) return { tone: "checking", text: __("Checking…") };
+	switch (figures.kind) {
+		case "pays":
+			return { tone: "pays", text: __("Customer pays: {0}", [money(figures.pay)]) };
+		case "even":
+			return { tone: "even", text: __("Even exchange — nothing to pay") };
+		default:
+			// Credit left, or a return with no new items.
+			return { tone: "credit", text: __("Credit note to issue: {0}", [money(figures.credit)]) };
 	}
-	const added = __("{0} new ({1})", [formatQty(data.newQty), money(data.saleTotal)]);
-	const result =
-		data.kind === "pays"
-			? __("customer pays {0}", [money(data.pay)])
-			: data.kind === "credit"
-				? __("credit note issued {0}", [money(data.credit)])
-				: __("even exchange");
-	return {
-		title: __("Submit this exchange?"),
-		body: [`${back}, ${added}, ${result}.`],
-		ok: __("Submit exchange"),
-	};
 }

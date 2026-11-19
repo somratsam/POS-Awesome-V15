@@ -2111,3 +2111,27 @@ Credit notes issued in this shift,الإشعارات الدائنة الصادر
 Credit Notes Issued,الإشعارات الدائنة الصادرة
 Credit Notes Used,الإشعارات الدائنة المستخدمة
 The return's value is issued as a credit note.,تُصدر قيمة المرتجع كإشعار دائن.
+Continue,متابعة
+Paying with credit note {0} ({1}) — the customer stays {2}.,الدفع بإشعار دائن {0} ({1}) — يبقى العميل {2}.
+To pay,المتبقي للدفع
+Credit note {0} — scan the new items,إشعار دائن {0} — امسح الأصناف الجديدة
+Credit note {0} is already on this sale.,الإشعار الدائن {0} مضاف إلى هذا البيع بالفعل.
+Credit note {0} now has {1} left — part of it was used on another till.,تبقّى في الإشعار الدائن {0} مبلغ {1} — استُخدم جزء منه على جهاز آخر.
+Nothing to pay,لا يوجد مبلغ للدفع
+Even exchange — nothing to pay,استبدال متساوٍ — لا يوجد مبلغ للدفع
+Credit note issued {0} — the BALANCE voucher prints.,إشعار دائن صادر {0} — تُطبع قسيمة الرصيد المتبقي.
+Return credited to: {0},يُحتسب المرتجع على: {0}
+{0} (no Sales Person),{0} (بدون مندوب مبيعات)
+the cashier,أمين الصندوق
+Returning from {0},إرجاع من {0}
+For {0} — the credit note voucher prints.,لـ {0} — تُطبع قسيمة الإشعار الدائن.
+Submit return & Print voucher,تأكيد الإرجاع وطباعة القسيمة
+The original sale has no Sales Person: the return goes to the cashier doing it.,لا يوجد مندوب مبيعات في البيع الأصلي: يُحتسب المرتجع على أمين الصندوق الذي يقوم به.
+"The original sale has no Sales Person, and the cashier has none linked.",لا يوجد مندوب مبيعات في البيع الأصلي، ولا يوجد مندوب مرتبط بأمين الصندوق.
+"Too many wrong voucher numbers on this till. Wait 15 minutes, or switch the till to a POS supervisor with their PIN and try again.",أرقام قسائم خاطئة كثيرة على هذا الجهاز. انتظر 15 دقيقة، أو حوّل الجهاز إلى مشرف نقاط البيع برمزه السري ثم حاول مرة أخرى.
+This credit note was just used on another till. Open Payments again to see what is left on it.,استُخدم هذا الإشعار الدائن للتو على جهاز آخر. افتح شاشة الدفع مرة أخرى لترى المتبقي فيه.
+"A credit note pays for a sale, not a return.",يُستخدم الإشعار الدائن لدفع بيع، لا لمرتجع.
+Customer pays: {0},يدفع العميل: {0}
+Credit note to issue: {0},إشعار دائن سيصدر: {0}
+Totals not checked,لم يتم التحقق من المبالغ
+The exchange check took too long.,استغرق التحقق من الاستبدال وقتاً طويلاً.

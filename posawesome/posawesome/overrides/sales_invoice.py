@@ -31,3 +31,10 @@ class CustomSalesInvoice(ERPNextSalesInvoice):
         if self.has_subcontracted:
             self.update_stock = 0
         return self.has_subcontracted
+
+    def validate_sales_team(self, sales_team):
+        """A return keeps the original sale's Sales Persons even when they
+        were disabled since (sales_credit.validate_return_sales_team)."""
+        from posawesome.posawesome.api.sales_credit import validate_return_sales_team
+
+        return super().validate_sales_team(validate_return_sales_team(self, sales_team))

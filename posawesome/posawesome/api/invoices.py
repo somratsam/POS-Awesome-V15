@@ -81,6 +81,11 @@ def get_draft_invoices(
         filters["posa_pos_opening_shift"] = pos_opening_shift
     if frappe.db.has_column(doctype, "posa_is_printed"):
         filters["posa_is_printed"] = 0
+    # An unfinished one-screen exchange's sale draft is not a parked sale:
+    # loaded on its own it would sell the new items without the return.
+    # Deleted at Closing Shift (delete_shift_exchange_drafts).
+    if frappe.db.has_column(doctype, "posa_client_request_id"):
+        filters["posa_client_request_id"] = ["not like", "%:sale"]
 
     fields = [
         "name",

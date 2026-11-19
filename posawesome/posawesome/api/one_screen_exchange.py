@@ -644,6 +644,21 @@ def get_exchange_receipt(receipt, pos_profile=None):
 QUOTE_SAVEPOINT = "posa_exchange_quote"
 
 
+def _return_sales_person(original, profile_doc):
+    """The Sales Person the return will be saved with (the original sale's,
+    else the PIN cashier's), for the till's locked field."""
+    from posawesome.posawesome.api.sales_credit import return_sales_person_label
+    from posawesome.posawesome.api.terminal_state import get_active_terminal_cashier
+
+    name = original.get("name") if hasattr(original, "get") else original
+    try:
+        cashier = get_active_terminal_cashier(profile_doc.get("name"))
+    except frappe.PermissionError:
+        frappe.clear_last_message()
+        cashier = None
+    return return_sales_person_label("Sales Invoice", name, cashier)
+
+
 @frappe.whitelist(methods=["POST"])
 def quote_exchange(return_invoice, sale_invoice=None):
     """The server's own figures for an exchange, without saving anything:
@@ -678,7 +693,13 @@ def quote_exchange(return_invoice, sale_invoice=None):
         return_doc = frappe.get_doc("Sales Invoice", ret.get("name"))
         precision = return_doc.precision("grand_total") or 2
         returned = _money(abs(flt(return_doc.rounded_total or return_doc.grand_total)), precision)
-        result = {"returned": returned, "sale_total": None, "pay": None, "credit_left": returned}
+        result = {
+            "returned": returned,
+            "sale_total": None,
+            "pay": None,
+            "credit_left": returned,
+            "return_sales_person": _return_sales_person(original, profile_doc),
+        }
         if sale_invoice is not None:
             sale = creation.update_invoice(json.dumps(sale_invoice))
             sale_doc = frappe.get_doc("Sales Invoice", sale.get("name"))
@@ -701,6 +722,53 @@ def quote_exchange(return_invoice, sale_invoice=None):
         if isinstance(getattr(frappe.local, "_realtime_log", None), list):
             del frappe.local._realtime_log[realtime_mark:]
     return result
+
+
+EXCHANGE_SALE_SUFFIX = ":sale"
+
+
+def is_exchange_sale_key(value):
+    """True for an exchange's sale request key, "<exchange id>:sale"."""
+    value = cstr(value).strip()
+    if not value.endswith(EXCHANGE_SALE_SUFFIX):
+        return False
+    exchange_id = value[: -len(EXCHANGE_SALE_SUFFIX)]
+    return bool(exchange_id) and len(exchange_id) <= MAX_EXCHANGE_ID_LENGTH and ":" not in exchange_id
+
+
+def delete_shift_exchange_drafts(pos_opening_shift, pos_profile, doctype="Sales Invoice"):
+    """At Closing Shift: the unfinished exchange sale drafts of this shift
+    (left when the till's browser was closed mid-exchange), whatever the
+    profile's "Auto Delete Draft Invoice" says. Only unsubmitted sales of
+    this opening shift and profile whose request key is "<exchange id>:sale";
+    never another draft, a submitted or cancelled invoice, a return or the
+    shift itself. Returns the deleted names."""
+    from posawesome.posawesome.api.invoice import delete_invoice_submission_ledger_entries_for_invoice
+
+    if not pos_opening_shift or not pos_profile:
+        return []
+    if not frappe.get_meta(doctype).has_field("posa_client_request_id"):
+        return []
+    rows = frappe.get_all(
+        doctype,
+        filters={
+            "docstatus": 0,
+            "is_return": 0,
+            "posa_pos_opening_shift": pos_opening_shift,
+            "pos_profile": pos_profile,
+            "posa_client_request_id": ["like", f"%{EXCHANGE_SALE_SUFFIX}"],
+        },
+        fields=["name", "posa_client_request_id"],
+        ignore_permissions=True,
+    )
+    deleted = []
+    for row in rows:
+        if not is_exchange_sale_key(row.posa_client_request_id):
+            continue
+        frappe.delete_doc(doctype, row.name, force=1, ignore_permissions=True)
+        delete_invoice_submission_ledger_entries_for_invoice(doctype, row.name)
+        deleted.append(row.name)
+    return deleted
 
 
 @frappe.whitelist(methods=["POST"])

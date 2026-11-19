@@ -24,6 +24,13 @@
 					@update:model-value="$emit('update:sales-person', $event)"
 				></v-select>
 				<p
+					v-if="returnCreditedTo"
+					class="mt-1 mb-0 text-caption text-medium-emphasis"
+					data-testid="sales-person-return-credited-to"
+				>
+					{{ $__("Return credited to: {0}", [returnCreditedTo]) }}
+				</p>
+				<p
 					v-if="followsOriginal"
 					class="mt-1 mb-0 text-caption text-medium-emphasis"
 					data-testid="sales-person-follows-original"
@@ -73,6 +80,12 @@ defineProps({
 	followsOriginal: {
 		type: Boolean,
 		default: false,
+	},
+	// One-screen exchange: who the return half is credited to (the field
+	// above is the new sale's).
+	returnCreditedTo: {
+		type: String,
+		default: "",
 	},
 	printFormats: {
 		type: Array,

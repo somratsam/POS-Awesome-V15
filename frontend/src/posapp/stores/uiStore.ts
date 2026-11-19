@@ -84,6 +84,18 @@ export const useUIStore = defineStore("ui", () => {
     activeView.value = view;
   };
 
+  // A receipt scanned on the main screen with One-screen exchange off: the
+  // old Return dialog opens with it searched (Returns.vue watches this;
+  // section 110). { invoice, company, at } -- `at` makes the same receipt
+  // twice a new request.
+  const returnRequest = ref<{ invoice: string; company: string; at: number } | null>(null);
+  const requestReturnFor = (invoice: string, company: string) => {
+    returnRequest.value = { invoice, company, at: Date.now() };
+  };
+  const clearReturnRequest = () => {
+    returnRequest.value = null;
+  };
+
   const openPaymentDialog = () => {
     paymentDialogOpen.value = true;
   };
@@ -370,6 +382,9 @@ export const useUIStore = defineStore("ui", () => {
   }
 
   return {
+    returnRequest,
+    requestReturnFor,
+    clearReturnRequest,
     isLoading,
     loadingText,
     isFrozen,

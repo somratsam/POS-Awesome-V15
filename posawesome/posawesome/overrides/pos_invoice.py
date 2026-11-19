@@ -24,3 +24,10 @@ class CustomPOSInvoice(ERPNextPOSInvoice):
 
         # No POS Awesome shift - use ERPNext's validation
         super().validate_pos_opening_entry()
+
+    def validate_sales_team(self, sales_team):
+        """A return keeps the original sale's Sales Persons even when they
+        were disabled since (sales_credit.validate_return_sales_team)."""
+        from posawesome.posawesome.api.sales_credit import validate_return_sales_team
+
+        return super().validate_sales_team(validate_return_sales_team(self, sales_team))

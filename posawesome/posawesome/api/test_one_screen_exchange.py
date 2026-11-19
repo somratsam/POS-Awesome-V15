@@ -386,7 +386,8 @@ class TestNothingQueued(unittest.TestCase):
         source = open(creation.__file__).read()
         submit = source[source.index("def submit_invoice("):source.index("def submit_in_background_job(")]
         self.assertIn("bool(allow_background_submit) and not _in_atomic_exchange()", submit)
-        self.assertIn("if _in_atomic_exchange():\n        submit_in_background = 0", submit)
+        # A credit sale is never queued either (section 108).
+        self.assertIn("if _in_atomic_exchange() or _uses_customer_credit(data):\n        submit_in_background = 0", submit)
 
 
 if __name__ == "__main__":

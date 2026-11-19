@@ -3,10 +3,12 @@
 // lines in invoiceStore; the two become one return + one sale only on the
 // server (one_screen_exchange.submit_exchange), together or not at all.
 //
-// Confirmations are asked through `prompt` and shown by ExchangeHost.vue.
+// Questions ("Add a return from this receipt?", "Discard?") are asked
+// through `prompt` and shown by ExchangeHost.vue. Submitting has no
+// confirmation: every case goes through the payment screen (section 108).
 
 import { defineStore, getActivePinia } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import { useUIStore } from "./uiStore";
 import { useToastStore } from "./toastStore";
 import { useCustomersStore } from "./customersStore";
@@ -29,16 +31,15 @@ import {
 declare const __: (text: string, args?: any[]) => string;
 
 const API = "posawesome.posawesome.api.one_screen_exchange";
+const QUOTE_TIMEOUT_MS = 15000;
 const t = (text: string, args?: any[]) =>
 	typeof __ === "function" ? __(text, args) : text.replace(/\{(\d+)\}/g, (_m, i) => String(args?.[i] ?? ""));
 
-export type ExchangePromptType = "add_return" | "discard" | "submit";
+export type ExchangePromptType = "add_return" | "discard";
 
 export interface ExchangePrompt {
 	type: ExchangePromptType;
 	data: Record<string, any>;
-	/** Submit confirmed: the dialog stays open showing "Saving…". */
-	saving?: boolean;
 }
 
 /** The server's figures for one exact cart (quote_exchange). */
@@ -48,6 +49,8 @@ export interface ExchangeQuote {
 	sale_total: number | null;
 	pay: number | null;
 	credit_left: number;
+	/** The return's Sales Person as the server will save it (sales_credit). */
+	return_sales_person?: { sales_person: string; source: string; cashier_name: string } | null;
 }
 
 /** What decides the server's figures for a sale -- nothing volatile. */
@@ -83,6 +86,8 @@ export const useExchangeStore = defineStore("exchange", () => {
 	const quoting = ref(false);
 	const submitting = ref(false);
 	const exchangeId = ref("");
+	/** A return with no new items is on the payment screen for review. */
+	const reviewingReturn = ref(false);
 	const prompt = ref<ExchangePrompt | null>(null);
 	let resolvePrompt: ((value: boolean) => void) | null = null;
 	let quoteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -91,8 +96,11 @@ export const useExchangeStore = defineStore("exchange", () => {
 	const quote = ref<ExchangeQuote | null>(null);
 	/** A check the cashier is waiting for ("Checking…" on the button). */
 	const checking = ref(false);
+	/** The last check failed or timed out (offline, server error): shown with Retry. */
+	const quoteError = ref("");
 	// The cart's new items as a sale payload (registered by Invoice.vue).
-	let saleProvider: (() => any) | null = null;
+	// Reactive, so `serverFigures` follows a provider registered after it.
+	const saleProvider = shallowRef<(() => any) | null>(null);
 
 	const enabled = computed(() => isOneScreenExchangeOn(useUIStore().posProfile));
 	const receiptLines = computed<ExchangeLine[]>(() => receipt.value?.lines || []);
@@ -116,11 +124,9 @@ export const useExchangeStore = defineStore("exchange", () => {
 			prompt.value = { type, data };
 		});
 	const settlePrompt = (value: boolean) => {
-		if (prompt.value?.saving) return;
 		const resolve = resolvePrompt;
 		resolvePrompt = null;
-		// A confirmed submit keeps the dialog open ("Saving…") until it ends.
-		prompt.value = value && prompt.value?.type === "submit" ? { ...prompt.value, saving: true } : null;
+		prompt.value = null;
 		resolve?.(Boolean(value));
 	};
 	const closePrompt = () => {
@@ -134,7 +140,9 @@ export const useExchangeStore = defineStore("exchange", () => {
 		quotedReturned.value = null;
 		quote.value = null;
 		checking.value = false;
+		quoteError.value = "";
 		exchangeId.value = "";
+		reviewingReturn.value = false;
 		if (quoteTimer) clearTimeout(quoteTimer);
 		quoteTimer = null;
 		quoteSeq += 1;
@@ -162,14 +170,14 @@ export const useExchangeStore = defineStore("exchange", () => {
 	};
 
 	const setSaleProvider = (provider: (() => any) | null) => {
-		saleProvider = provider;
+		saleProvider.value = provider;
 		return () => {
-			if (saleProvider === provider) saleProvider = null;
+			if (saleProvider.value === provider) saleProvider.value = null;
 		};
 	};
 	const currentSale = () => {
 		try {
-			return saleProvider ? saleProvider() : null;
+			return saleProvider.value ? saleProvider.value() : null;
 		} catch (error) {
 			console.warn("Exchange sale not built", error);
 			return null;
@@ -179,9 +187,20 @@ export const useExchangeStore = defineStore("exchange", () => {
 
 	const fetchQuote = async (sale: any): Promise<ExchangeQuote> => {
 		const key = quoteKey(sale);
-		const message: any = await callWithoutDialog(`${API}.quote_exchange`, {
-			return_invoice: returnRequest(),
-			sale_invoice: sale || null,
+		let timeout: ReturnType<typeof setTimeout> | null = null;
+		const message: any = await Promise.race([
+			callWithoutDialog(`${API}.quote_exchange`, {
+				return_invoice: returnRequest(),
+				sale_invoice: sale || null,
+			}),
+			new Promise((_resolve, reject) => {
+				timeout = setTimeout(
+					() => reject(new Error(t("The exchange check took too long."))),
+					QUOTE_TIMEOUT_MS,
+				);
+			}),
+		]).finally(() => {
+			if (timeout) clearTimeout(timeout);
 		});
 		return {
 			key,
@@ -189,11 +208,38 @@ export const useExchangeStore = defineStore("exchange", () => {
 			sale_total: message?.sale_total ?? null,
 			pay: message?.pay ?? null,
 			credit_left: Number(message?.credit_left) || 0,
+			return_sales_person: message?.return_sales_person || null,
 		};
 	};
+	/**
+	 * The server's figures for the cart exactly as it is now (section 109's
+	 * result line), or null while the cart has changed since the last check.
+	 */
+	const serverQuote = computed<ExchangeQuote | null>(() => {
+		if (!active.value || !quote.value) return null;
+		return quote.value.key === quoteKey(currentSale()) ? quote.value : null;
+	});
+	/**
+	 * Whatever changed the cart -- an item scanned, a line ticked, or the
+	 * sale coming back from the payment screen with the server's own draft
+	 * (prices, taxes) -- the cart is checked again when it no longer matches
+	 * the last check (section 110: it used to stay "Checking…" after Pay ->
+	 * Cancel, because the cart's own watch didn't see those fields).
+	 */
+	const liveKey = computed(() => (active.value ? quoteKey(currentSale()) : ""));
+	watch(liveKey, (key) => {
+		if (key && (!quote.value || quote.value.key !== key)) refreshQuote(400);
+	});
+	/** The figures for the cart as it is now are being checked. */
+	const figuresPending = computed(() => active.value && !serverQuote.value && !quoteError.value);
+	/** Check the cart as it is now (Pay waits for this). */
+	const checkNow = () => figuresFor(currentSale());
+	/** Retry after a failed or timed-out check. */
+	const retryQuote = () => refreshQuote(0);
 	const keepQuote = (result: ExchangeQuote) => {
 		quote.value = result;
 		quotedReturned.value = result.returned;
+		quoteError.value = "";
 	};
 
 	/**
@@ -204,7 +250,12 @@ export const useExchangeStore = defineStore("exchange", () => {
 	const refreshQuote = (delay = 400) => {
 		if (quoteTimer) clearTimeout(quoteTimer);
 		quoteTimer = null;
-		if (!active.value || isOffline()) return;
+		if (!active.value) return;
+		if (isOffline()) {
+			quoteError.value = t("Return / Exchange needs the server connection.");
+			return;
+		}
+		quoteError.value = "";
 		const seq = ++quoteSeq;
 		quoteTimer = setTimeout(async () => {
 			quoteTimer = null;
@@ -214,8 +265,9 @@ export const useExchangeStore = defineStore("exchange", () => {
 			try {
 				const result = await fetchQuote(sale);
 				if (seq === quoteSeq) keepQuote(result);
-			} catch (error) {
+			} catch (error: any) {
 				console.warn("Exchange quote failed", error);
+				if (seq === quoteSeq) quoteError.value = error?.message || t("The exchange could not be checked.");
 			} finally {
 				if (seq === quoteSeq) quoting.value = false;
 			}
@@ -234,6 +286,7 @@ export const useExchangeStore = defineStore("exchange", () => {
 		quoteTimer = null;
 		const seq = ++quoteSeq;
 		checking.value = true;
+		quoteError.value = "";
 		try {
 			const result = await fetchQuote(sale);
 			if (seq === quoteSeq) {
@@ -241,6 +294,12 @@ export const useExchangeStore = defineStore("exchange", () => {
 				quoting.value = false;
 			}
 			return result;
+		} catch (error: any) {
+			if (seq === quoteSeq) {
+				quoting.value = false;
+				quoteError.value = error?.message || t("The exchange could not be checked.");
+			}
+			throw error;
 		} finally {
 			checking.value = false;
 		}
@@ -356,6 +415,7 @@ export const useExchangeStore = defineStore("exchange", () => {
 		quoting,
 		submitting,
 		exchangeId,
+		reviewingReturn,
 		prompt,
 		enabled,
 		receiptLines,
@@ -365,7 +425,12 @@ export const useExchangeStore = defineStore("exchange", () => {
 		estimate,
 		returned,
 		quote,
+		serverQuote,
 		checking,
+		quoteError,
+		figuresPending,
+		retryQuote,
+		checkNow,
 		ask,
 		settlePrompt,
 		closePrompt,

@@ -1,4 +1,5 @@
 import { useItemAddition } from "../../../composables/pos/items/useItemAddition";
+import { peekSaleCreditStore } from "../../../stores/saleCreditStore";
 import { get_invoice_doc, get_invoice_items, get_payments } from "./document";
 import { peekExchangeStore } from "../../../stores/exchangeStore";
 import { deleteExchangeDraft } from "./exchange";
@@ -195,8 +196,10 @@ export async function cancel_invoice(context: any) {
 	peekExchangeStore()?.reset();
 	// Use the clear_invoice logic
 	clearInvoice(context);
-	// A cancelled sale drops its bearer voucher (customersStore).
+	// A cancelled sale drops its bearer voucher (customersStore) and every
+	// credit note voucher scanned for it (section 108).
 	context.customersStore?.dropBearerVouchers?.();
+	peekSaleCreditStore()?.remove();
 
 	context.customer = context.pos_profile?.customer || "";
 	if (context.customersStore?.setSelectedCustomer) {
@@ -255,8 +258,10 @@ export async function save_and_clear_invoice(context: any) {
 			});
 		} else {
 			clearInvoice(context);
-			// A parked sale doesn't keep a bearer voucher (customersStore).
+			// A parked sale doesn't keep a bearer voucher (customersStore), nor
+			// any credit note voucher: scan it again when the sale is resumed.
 			context.customersStore?.dropBearerVouchers?.();
+			peekSaleCreditStore()?.remove();
 			if (context.eventBus) {
 				context.eventBus.emit("focus_item_search");
 			}

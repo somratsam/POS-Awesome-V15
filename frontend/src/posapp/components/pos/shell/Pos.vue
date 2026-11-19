@@ -11,6 +11,7 @@
 		<SalesByCashierDialog></SalesByCashierDialog>
 		<Returns></Returns>
 		<ExchangeHost />
+		<SaleCreditHost />
 		<NewAddress></NewAddress>
 		<MpesaPayments></MpesaPayments>
 		<Variants></Variants>
@@ -188,8 +189,12 @@
 		<div v-if="showBottomDock" ref="mobileDock" class="mobile-pos-stack">
 			<div class="mobile-sale-dock">
 				<div class="mobile-sale-dock__copy">
-					<span class="mobile-sale-dock__eyebrow">{{ __("Active sale") }}</span>
-					<strong class="mobile-sale-dock__amount">{{ formattedCartTotal }}</strong>
+					<!-- One-screen exchange: the result line instead of the sale total (section 109). -->
+					<ExchangeResultLine v-if="exchangeStore.active" :result="exchangeResult" compact />
+					<template v-else>
+						<span class="mobile-sale-dock__eyebrow">{{ __("Active sale") }}</span>
+						<strong class="mobile-sale-dock__amount">{{ formattedCartTotal }}</strong>
+					</template>
 					<div class="mobile-sale-dock__meta">
 						<span>{{ cartMetaLabel }}</span>
 						<span>{{ formattedDiscountTotal }}</span>
@@ -324,6 +329,11 @@ import StockLookupDialog from "../items/StockLookupDialog.vue";
 import DiscountReasonDialog from "../invoice/DiscountReasonDialog.vue";
 import Returns from "../flows/Returns.vue";
 import ExchangeHost from "../flows/ExchangeHost.vue";
+import SaleCreditHost from "../payments/SaleCreditHost.vue";
+import ExchangeResultLine from "../invoice/ExchangeResultLine.vue";
+import { useExchangeResult } from "../../../composables/pos/exchange/useExchangeResult";
+import { looksLikeVoucher } from "../../../composables/pos/items/voucherScanRoute";
+import { useSaleCreditStore } from "../../../stores/saleCreditStore";
 import { useExchangeStore } from "../../../stores/exchangeStore";
 import MpesaPayments from "../payments/Mpesa-Payments.vue";
 import { inject, ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from "vue";
@@ -374,6 +384,7 @@ export default {
 		const uiStore = useUIStore();
 		const invoiceStore = useInvoiceStore();
 		const exchangeStore = useExchangeStore();
+		const { result: exchangeResult } = useExchangeResult();
 		const toastStore = useToastStore();
 		const __ = window.__;
 		const { activeView, posProfile, paymentDialogOpen, stockSettings } = storeToRefs(uiStore);
@@ -643,6 +654,14 @@ export default {
 				invoicePanel.value?.clearCounterGridEntry?.();
 				return;
 			}
+			// A credit note voucher number (section 108); not one -> item.
+			if (looksLikeVoucher(normalizedQuery)) {
+				const result = await useSaleCreditStore().applyFromScan(normalizedQuery);
+				if (result !== "not_voucher") {
+					invoicePanel.value?.clearCounterGridEntry?.();
+					return;
+				}
+			}
 
 			counterDirectEntryPending.value = true;
 			try {
@@ -910,6 +929,8 @@ export default {
 		);
 
 		return {
+			exchangeResult,
+			exchangeStore,
 			...responsive,
 			...rtl,
 			...shift,
@@ -997,6 +1018,8 @@ export default {
 
 		Returns,
 		ExchangeHost,
+		SaleCreditHost,
+		ExchangeResultLine,
 		PosOffers,
 		PosCoupons,
 		NewAddress,

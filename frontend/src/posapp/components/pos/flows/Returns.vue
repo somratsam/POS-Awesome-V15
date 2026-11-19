@@ -52,6 +52,7 @@
 								clearable
 								ref="invoiceIdInput"
 								@keydown.enter.prevent="search_invoices_by_enter"
+								@keydown="onInvoiceIdKeydown"
 							></v-text-field>
 						</v-col>
 						<v-col cols="12" sm="3">
@@ -333,6 +334,7 @@
 </template>
 
 <script>
+import { createReceiptScanWatcher } from "../../../utils/keyboardScan";
 import format, { formatUtils } from "../../../format";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
 import { useExchangeStore } from "../../../stores/exchangeStore";
@@ -577,6 +579,51 @@ export default {
 		// default series, its number part ("2026-00210" for
 		// ACC-SINV-2026-00210, see print_barcode.invoice_scan_code) plus
 		// Enter, so a single matching invoice is loaded straight away.
+		// The Return button sends the company; a receipt scanned on the main
+		// screen sends { company, invoice } (section 110).
+		openReturns(data) {
+			const scanned = data && typeof data === "object" ? String(data.invoice || "") : "";
+			this.invoicesDialog = true;
+			this.company = data && typeof data === "object" ? data.company : data;
+			this.invoice_name = "";
+			this.customer_name = "";
+			this.customer_id = "";
+			this.mobile_no = "";
+			this.tax_id = "";
+			this.from_date = null;
+			this.to_date = null;
+			this.from_date_formatted = null;
+			this.to_date_formatted = null;
+			this.min_amount = "";
+			this.max_amount = "";
+			this.dialog_data = [];
+			this.selected = [];
+			this.page = 1;
+			this.has_more_invoices = false;
+			this.searched_once = false;
+			if (scanned) {
+				// Scanned on the main screen: search it straight away and open
+				// the exact match, as Enter in the Invoice ID box does.
+				this.invoice_name = scanned;
+				this.$nextTick(() => this.search_invoices_by_enter());
+				return;
+			}
+			// Ready for a receipt barcode scan without a click first.
+			this.$nextTick(() => {
+				setTimeout(() => this.$refs.invoiceIdInput?.focus?.(), 150);
+			});
+		},
+		// A scanned receipt searches by itself, like Enter (section 109);
+		// typing by hand still waits for Enter.
+		onInvoiceIdKeydown(event) {
+			if (!this._receiptScanWatcher) {
+				this._receiptScanWatcher = createReceiptScanWatcher({
+					getValue: () => this.invoice_name || "",
+					onScan: () => this.search_invoices_by_enter(),
+				});
+			}
+			this._receiptScanWatcher.onKeydown(event);
+		},
 		search_invoices_by_enter() {
 			this.search_invoices({ autoLoadExactMatch: true });
 		},
@@ -914,30 +961,17 @@ export default {
 		},
 	},
 	created: function () {
-		this.eventBus.on("open_returns", (data) => {
-			this.invoicesDialog = true;
-			this.company = data;
-			this.invoice_name = "";
-			this.customer_name = "";
-			this.customer_id = "";
-			this.mobile_no = "";
-			this.tax_id = "";
-			this.from_date = null;
-			this.to_date = null;
-			this.from_date_formatted = null;
-			this.to_date_formatted = null;
-			this.min_amount = "";
-			this.max_amount = "";
-			this.dialog_data = [];
-			this.selected = [];
-			this.page = 1;
-			this.has_more_invoices = false;
-			this.searched_once = false;
-			// Ready for a receipt barcode scan without a click first.
-			this.$nextTick(() => {
-				setTimeout(() => this.$refs.invoiceIdInput?.focus?.(), 150);
-			});
-		});
+		// A receipt scanned on the main screen (One-screen exchange off):
+		// open with it searched, like the Return button + Enter (section 110).
+		this._stopReturnRequestWatch = this.$watch(
+			() => this.uiStore?.returnRequest,
+			(request) => {
+				if (!request?.invoice) return;
+				this.uiStore.clearReturnRequest();
+				this.openReturns({ company: request.company, invoice: request.invoice });
+			},
+		);
+		this.eventBus.on("open_returns", (data) => this.openReturns(data));
 
 		this.$watch(
 			() => this.uiStore.posProfile,
@@ -948,6 +982,8 @@ export default {
 		);
 	},
 	beforeUnmount() {
+		this._receiptScanWatcher?.reset();
+		this._stopReturnRequestWatch?.();
 		this.eventBus.off("open_returns");
 	},
 };

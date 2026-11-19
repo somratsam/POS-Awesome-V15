@@ -328,22 +328,45 @@ def find_return_by_number(text, pos_profile=None):
     return matches[0] if len(matches) == 1 else None
 
 
-def _failure_key():
-    return f"posa_credit_voucher_failures:{frappe.session.user}"
+def _failure_key(pos_profile=None):
+    """Wrong voucher numbers are counted per login and till (POS Profile), so
+    one till's mistakes never block the store's other tills."""
+    return f"posa_credit_voucher_failures:{frappe.session.user}:{cstr(pos_profile).strip()}"
 
 
-def _guard_lookup_attempts():
-    if cint(frappe.cache.get_value(_failure_key())) >= LOOKUP_FAILURE_LIMIT:
+def _failure_state(pos_profile=None):
+    value = frappe.cache.get_value(_failure_key(pos_profile))
+    if isinstance(value, dict):
+        return {"count": cint(value.get("count")), "codes": list(value.get("codes") or [])}
+    return {"count": cint(value), "codes": []}
+
+
+def _guard_lookup_attempts(pos_profile=None):
+    if _failure_state(pos_profile)["count"] >= LOOKUP_FAILURE_LIMIT:
         frappe.throw(
-            _("Too many wrong voucher numbers. Wait 15 minutes, or ask a POS supervisor."),
+            _(
+                "Too many wrong voucher numbers on this till. Wait 15 minutes, or switch the till to a POS supervisor with their PIN and try again."
+            ),
             frappe.PermissionError,
         )
 
 
-def _record_lookup_failure():
-    key = _failure_key()
-    count = cint(frappe.cache.get_value(key)) + 1
-    frappe.cache.set_value(key, count, expires_in_sec=LOOKUP_FAILURE_WINDOW_SECONDS)
+def _record_lookup_failure(pos_profile=None, code=None):
+    """One more wrong number for this login and till; the 15 minutes start
+    again. The same wrong code again (a scanner reading twice, a cashier
+    scanning the same damaged voucher) is counted once. Only a digest of the
+    code is kept."""
+    state = _failure_state(pos_profile)
+    digest = hashlib.sha256(normalize_voucher_code(code).encode()).hexdigest()[:16]
+    if digest in state["codes"]:
+        return
+    state["count"] += 1
+    state["codes"].append(digest)
+    frappe.cache.set_value(_failure_key(pos_profile), state, expires_in_sec=LOOKUP_FAILURE_WINDOW_SECONDS)
+
+
+def clear_lookup_failures(pos_profile=None):
+    frappe.cache.delete_value(_failure_key(pos_profile))
 
 
 def is_generic_customer(customer):
@@ -404,26 +427,40 @@ def generic_customer_credit_message(customer):
 
 
 @frappe.whitelist()
-def lookup_credit_voucher(code=None, pos_profile=None):
-    """Check a scanned or typed credit note voucher before it is used in
-    Payments. Returns the credit note, its customer and the credit left on it.
-    Refuses a wrong number (limited per user), another company's voucher, and
-    a used or expired one. Spending is checked again at submit."""
+def lookup_credit_voucher(code=None, pos_profile=None, quiet_miss=0):
+    """Check a scanned or typed credit note voucher before it is used (main
+    screen or Payments). Returns the credit note, its customer and the credit
+    left on it. Refuses a wrong number (limited per login and till; a POS
+    supervisor switched in by PIN clears the count), another company's
+    voucher, and a used or expired one. Spending is checked again at submit.
+
+    quiet_miss: the main screen's scan box -- a code that is not a voucher
+    returns {"found": 0} (still counted as a wrong number) so the till can
+    look it up as an item instead."""
     from posawesome.posawesome.api.payments import get_available_credit
     from posawesome.posawesome.api.pos_access import get_authorized_pos_profile
 
     profile = get_authorized_pos_profile(pos_profile)
-    _guard_lookup_attempts()
+    till = profile.get("name")
+    # The supervisor comes from the till's server-side terminal state, which
+    # is written only after their PIN was verified (terminal_state).
+    supervisor = _credit_supervisor(till)
+    if supervisor:
+        clear_lookup_failures(till)
+    else:
+        _guard_lookup_attempts(till)
 
     name = find_voucher_invoice(code)
     approved_by = None
-    if not name:
+    if not name and supervisor:
         # Lost voucher: a POS supervisor on the till may give the return's
         # number instead; spending it is recorded under their name at submit.
-        approved_by = _credit_supervisor(profile.get("name"))
-        name = find_return_by_number(code, profile.get("name")) if approved_by else None
+        approved_by = supervisor
+        name = find_return_by_number(code, till)
     if not name:
-        _record_lookup_failure()
+        _record_lookup_failure(till, code)
+        if cint(quiet_miss):
+            return {"found": 0}
         frappe.throw(_("This is not a valid credit note voucher number. Check it and try again."))
 
     voucher = frappe.db.get_value(

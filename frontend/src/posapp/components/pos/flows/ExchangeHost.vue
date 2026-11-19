@@ -18,7 +18,6 @@
 					ref="backButton"
 					variant="tonal"
 					data-testid="exchange-prompt-back"
-					:disabled="saving"
 					@click="answer(false)"
 				>
 					{{ __("Back") }}
@@ -27,11 +26,9 @@
 					:color="prompt.type === 'discard' ? 'error' : 'primary'"
 					variant="flat"
 					data-testid="exchange-prompt-ok"
-					:disabled="saving"
 					@click="answer(true)"
 				>
-					<v-progress-circular v-if="saving" indeterminate size="16" width="2" class="me-2" />
-					{{ saving ? __("Saving…") : okLabel }}
+					{{ okLabel }}
 				</v-btn>
 			</v-card-actions>
 		</v-card>
@@ -64,8 +61,6 @@ const text = computed(() => (prompt.value ? exchangeConfirmText(prompt.value, mo
 const title = computed(() => text.value?.title || "");
 const body = computed(() => text.value?.body || []);
 const okLabel = computed(() => text.value?.ok || __("OK"));
-// Confirmed: the pair is being saved; Back, Escape and a second press do nothing.
-const saving = computed(() => Boolean(prompt.value?.saving));
 
 const focusBack = () => nextTick(() => backButton.value?.$el?.focus?.());
 const answer = (value) => exchange.settlePrompt(value);

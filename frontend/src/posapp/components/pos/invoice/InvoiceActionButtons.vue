@@ -130,7 +130,7 @@
 			:disabled="paymentLoading || exchangeChecking"
 			@click="$emit('show-payment')"
 		>
-			{{ exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : __("Pay") }}
+			{{ exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : creditActive ? creditPayLabel || __("Checking…") : __("Pay") }}
 		</v-btn>
 	</div>
 
@@ -270,7 +270,7 @@
 				:loading="paymentLoading && !exchangeChecking"
 				:disabled="paymentLoading || exchangeChecking"
 			>
-				{{ exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : __("PAY") }}
+				{{ exchangeActive ? (exchangeChecking ? __("Checking…") : exchangeButtonLabel) : creditActive ? creditPayLabel || __("Checking…") : __("PAY") }}
 			</v-btn>
 		</v-col>
 	</v-row>
@@ -307,6 +307,11 @@ const props = defineProps({
 	exchangeButtonLabel: { type: String, default: "" },
 	// The exchange's figures are being checked before its confirmation.
 	exchangeChecking: Boolean,
+	// A credit note voucher on the sale (main screen, section 108): the main
+	// button reads "Pay OMR 7.500" (what is left after the credit, the same
+	// as the payment screen), "Checking…" until the server's total is in.
+	creditActive: Boolean,
+	creditPayLabel: { type: String, default: "" },
 });
 
 defineEmits([

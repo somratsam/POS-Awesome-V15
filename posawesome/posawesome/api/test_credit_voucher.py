@@ -546,8 +546,8 @@ class TestLookupCreditVoucher(unittest.TestCase):
     NAME = "ACC-SINV-2026-00269"
 
     def setUp(self):
-        frappe.cache.delete_value(credit_voucher._failure_key())
-        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key())
+        frappe.cache.delete_value(credit_voucher._failure_key("Test Pos"))
+        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key("Test Pos"))
         self.code = credit_voucher.credit_voucher_code(self.NAME)
 
     def _lookup(self, code, company="Swan", customer="CUST-1", credit=None, expired=None, generic=False, candidates=None, linked=True):
@@ -609,12 +609,103 @@ class TestLookupCreditVoucher(unittest.TestCase):
             with self.assertRaisesRegex(frappe.ValidationError, "not a valid"):
                 self._lookup(text)
 
+    def _wrong_codes(self, count):
+        # Same shape as a real voucher, wrong check characters, all different.
+        alphabet = credit_voucher.CHECK_ALPHABET
+        codes = []
+        for i in range(len(alphabet)):
+            for j in range(len(alphabet)):
+                candidate = self.code[:-2] + alphabet[i] + alphabet[j]
+                if candidate != self.code:
+                    codes.append(candidate)
+                if len(codes) == count:
+                    return codes
+        return codes
+
     def test_guessing_is_stopped_after_ten_wrong_numbers(self):
-        wrong = self.code[:-1] + ("2" if self.code[-1] != "2" else "3")
-        for _ in range(credit_voucher.LOOKUP_FAILURE_LIMIT):
+        for wrong in self._wrong_codes(credit_voucher.LOOKUP_FAILURE_LIMIT):
             with self.assertRaises(frappe.ValidationError):
                 self._lookup(wrong)
-        with self.assertRaisesRegex(frappe.PermissionError, "Too many wrong voucher numbers"):
+        with self.assertRaisesRegex(frappe.PermissionError, "Too many wrong voucher numbers on this till"):
+            self._lookup(self.code)
+
+    def test_the_same_wrong_code_again_counts_once(self):
+        wrong = self._wrong_codes(1)[0]
+        for _ in range(credit_voucher.LOOKUP_FAILURE_LIMIT + 5):
+            with self.assertRaisesRegex(frappe.ValidationError, "not a valid"):
+                self._lookup(wrong)
+        self.assertEqual(credit_voucher._failure_state("Test Pos")["count"], 1)
+        self.assertEqual(self._lookup(self.code)["credit_origin"], self.NAME)
+
+    def test_dashes_and_case_of_the_same_wrong_code_count_once(self):
+        wrong = self._wrong_codes(1)[0]
+        for text in (wrong, wrong.lower(), credit_voucher.credit_voucher_label(wrong)):
+            with self.assertRaises(frappe.ValidationError):
+                self._lookup(text)
+        self.assertEqual(credit_voucher._failure_state("Test Pos")["count"], 1)
+
+    def test_the_count_is_per_till(self):
+        frappe.cache.delete_value(credit_voucher._failure_key("Other Till"))
+        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key("Other Till"))
+        for wrong in self._wrong_codes(credit_voucher.LOOKUP_FAILURE_LIMIT):
+            with self.assertRaises(frappe.ValidationError):
+                self._lookup(wrong)
+        with patch(
+            "posawesome.posawesome.api.pos_access.get_authorized_pos_profile",
+            return_value=frappe._dict(name="Other Till", company="Swan"),
+        ):
+            # Another till on the same login is not blocked.
+            self.assertEqual(credit_voucher._failure_state("Other Till")["count"], 0)
+            credit_voucher._guard_lookup_attempts("Other Till")
+        with self.assertRaises(frappe.PermissionError):
+            credit_voucher._guard_lookup_attempts("Test Pos")
+
+    def test_only_a_digest_of_the_wrong_code_is_kept(self):
+        wrong = self._wrong_codes(1)[0]
+        with self.assertRaises(frappe.ValidationError):
+            self._lookup(wrong)
+        stored = frappe.cache.get_value(credit_voucher._failure_key("Test Pos"))
+        self.assertNotIn(wrong, str(stored))
+
+    def test_main_screen_miss_returns_not_found_and_still_counts(self):
+        wrong = self._wrong_codes(1)[0]
+        with patch(
+            "posawesome.posawesome.api.pos_access.get_authorized_pos_profile",
+            return_value=frappe._dict(name="Test Pos", company="Swan"),
+        ), patch.object(credit_voucher, "_credit_supervisor", return_value=None), patch(
+            "frappe.get_all", return_value=[]
+        ):
+            self.assertEqual(credit_voucher.lookup_credit_voucher(wrong, "Test Pos", quiet_miss=1), {"found": 0})
+        self.assertEqual(credit_voucher._failure_state("Test Pos")["count"], 1)
+
+    def test_main_screen_used_voucher_is_still_an_error(self):
+        # quiet_miss only covers "not a voucher": used / expired / another
+        # company stay errors with their reason.
+        with self.assertRaisesRegex(frappe.ValidationError, "another company"):
+            self._lookup(self.code, company="Other Co")
+
+    def test_a_supervisor_on_the_till_clears_the_block(self):
+        for wrong in self._wrong_codes(credit_voucher.LOOKUP_FAILURE_LIMIT):
+            with self.assertRaises(frappe.ValidationError):
+                self._lookup(wrong)
+        with patch.object(credit_voucher, "_credit_supervisor", return_value="super@example.com"):
+            with patch(
+                "posawesome.posawesome.api.pos_access.get_authorized_pos_profile",
+                return_value=frappe._dict(name="Test Pos", company="Swan"),
+            ), patch("frappe.get_all", return_value=[]), patch("frappe.db.exists", return_value=False):
+                with self.assertRaisesRegex(frappe.ValidationError, "not a valid"):
+                    credit_voucher.lookup_credit_voucher(self._wrong_codes(11)[-1], "Test Pos")
+        # Cleared, then that one wrong number counted.
+        self.assertEqual(credit_voucher._failure_state("Test Pos")["count"], 1)
+        self.assertEqual(self._lookup(self.code)["credit_origin"], self.NAME)
+
+    def test_a_cashier_is_not_treated_as_supervisor(self):
+        # _credit_supervisor reads the PIN-verified terminal state: None for a
+        # plain cashier, so the block stays.
+        for wrong in self._wrong_codes(credit_voucher.LOOKUP_FAILURE_LIMIT):
+            with self.assertRaises(frappe.ValidationError):
+                self._lookup(wrong)
+        with self.assertRaises(frappe.PermissionError):
             self._lookup(self.code)
 
     def test_another_companys_voucher_is_refused(self):
@@ -660,8 +751,8 @@ class TestLostVoucherBySupervisor(unittest.TestCase):
     NAME = "ACC-SINV-2026-00257"
 
     def setUp(self):
-        frappe.cache.delete_value(credit_voucher._failure_key())
-        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key())
+        frappe.cache.delete_value(credit_voucher._failure_key("Test Pos"))
+        self.addCleanup(frappe.cache.delete_value, credit_voucher._failure_key("Test Pos"))
 
     def _lookup(self, text, supervisor, generic=False):
         real_get_value = frappe.db.get_value
