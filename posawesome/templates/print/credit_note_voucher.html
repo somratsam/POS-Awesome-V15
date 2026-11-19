@@ -92,6 +92,12 @@
   .print-format .meta td { padding: 1px 0 !important; }
   .print-format .rcpt-feed { display: none; }
   .print-format { page-width: 80mm; page-height: {{ _pdf_h }}mm; margin: 2mm; }
+  /* posa-browser-page:start  Browser printing (print view, the QZ fallback):
+     an 80 mm page as long as this document, with the PDF's 2 mm margins,
+     instead of the browser's A4. QZ Tray gets the HTML without this block
+     (stripBrowserPageBlock in qzTray.ts). */
+  @media print { @page { size: 80mm {{ _pdf_h }}mm; margin: 2mm; } }
+  /* posa-browser-page:end */
 </style>
 
 {% set logo_data_uri = frappe.call("posawesome.posawesome.api.print_assets.get_receipt_logo_data_uri", pos_profile=(doc.pos_profile or "")) %}

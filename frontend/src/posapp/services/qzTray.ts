@@ -91,6 +91,18 @@ async function callServer<T>(method: string, args: Record<string, unknown> = {})
 	return extractMessage<T>(response);
 }
 
+// The receipt, credit note voucher and Z Report carry an 80 mm @page rule for
+// browser printing, between "posa-browser-page:start" / ":end" comments. QZ
+// Tray sizes the paper itself (printHtmlViaQz), so it gets the HTML without
+// that block: exactly what it printed before the rule was added.
+// A <style> holding only the block (the Z Report's) goes with it.
+const BROWSER_PAGE_BLOCK =
+	/<style>\s*\/\* posa-browser-page:start[\s\S]*?posa-browser-page:end \*\/\s*<\/style>\n?|[ \t]*\/\* posa-browser-page:start[\s\S]*?posa-browser-page:end \*\/\n?/g;
+
+export function stripBrowserPageBlock(html: string): string {
+	return String(html || "").replace(BROWSER_PAGE_BLOCK, "");
+}
+
 function buildPrintHtml(html: string, style: string): string {
 	return `<!DOCTYPE html>
 <html>
@@ -98,7 +110,7 @@ function buildPrintHtml(html: string, style: string): string {
 <meta charset="UTF-8">
 <style>${style || ""}</style>
 </head>
-<body>${html}</body>
+<body>${stripBrowserPageBlock(html)}</body>
 </html>`;
 }
 
