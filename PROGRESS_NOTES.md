@@ -11165,3 +11165,45 @@ and 80.000 of testfff 00421 remains.
 now also borrow `_own_profile_and_shift` and `tearDownClass` from
 `TestOneScreenExchangeOnInvoices`: 10/10 and 17/17 OK, no `_Test One-screen
 Exchange` profile left, System Settings unchanged (3, Asia/Muscat).
+
+## 117. A voucher spends only itself; another store's lost voucher says where it can be replaced; offline VAT finding; supervisor inventory (2026-11-19, on `develop-swan`, NOT on `stable`; user approved on live checks)
+
+**Voucher only itself.** `creditAuthorization.selectAuthorizedCredit` (used by
+the main-screen card and by Payments): once a credit note is picked (scanned
+or typed voucher, or a supervisor's return number) only the picked rows are
+applied -- no longer "plus a same-shift return" (the supervisor "all credit"
+already stopped when something was picked). With nothing picked, unchanged:
+same-shift credit (two-step exchange) and a supervisor's "all credit". Server
+unchanged (it only checks the rows the till sends). Live, T108 as supervisor,
+test x holding same-shift return 00448 (18.800) and old voucher
+MCO-CN-2026-00019 (80.850): voucher + 87.200 -> card "Customer pays 6.350",
+Payments Cash 6.350, one source; voucher + 21.800 -> card "Balance voucher
+59.050", Payments "Issue a credit note for 59.050" (not submitted). Specs:
+`creditAuthorization.spec.ts` (+2, one rewritten), `saleCreditVoucher.spec.ts`
+(card = Payments selection, with and without supervisor; BALANCE = remainder).
+
+**Lost voucher of another store.** `credit_voucher.lookup_credit_voucher`: a
+supervisor's return number not found in this store but found as a return of
+the same company in another store -> "This credit note was issued at another
+store — it can only be replaced there." (Arabic added). Rule unchanged:
+nothing usable, still counted as a wrong number, cashier still gets "not a
+valid number", another company never named, a shared customer's return keeps
+"works like cash". test_credit_voucher 82 (+4).
+
+**Offline VAT / stock (report only).** Offline tax uses the cached
+`tax_inclusive` flag (`document.ts`, `!!memory.tax_inclusive`); missing ->
+treated as exclusive -> VAT added again. A till fetches it at start-up only
+when it already has a cached opening shift (`DefaultLayout` hydrate path); on
+the first session after Clear cache or on a new browser it stays missing
+until the next online reload (2 minutes online were not enough). The Offline
+Status panel says "Offline data is ready / all Fresh" meanwhile. Synced sale
+ACC-SINV-2026-00450: server grand total 18.800, paid 19.740, change 0.940
+(never handed back) -> customer overcharged, drawer over. Code, not setup
+(staging profiles: posa_tax_inclusive 1, inclusive template); production has
+the same code. Stock 0 offline only in the first ~minute after a fresh load.
+Warm till: correct (ACC-SINV-2026-00449, 18.800 / 0.895).
+
+**Found while checking (not changed).** `invoices.get_draft_invoice_doc`
+returns `frappe.get_cached_doc(doctype, name)` for any doctype with no
+permission check; `payments.repair_overpayment_change_allocations` (writes a
+reconciliation with dry_run=0) has no role check. Both already on stable.

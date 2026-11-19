@@ -461,6 +461,8 @@ def lookup_credit_voucher(code=None, pos_profile=None, quiet_miss=0):
         _record_lookup_failure(till, code)
         if cint(quiet_miss):
             return {"found": 0}
+        if approved_by:
+            _refuse_other_store_return(code, profile)
         frappe.throw(_("This is not a valid credit note voucher number. Check it and try again."))
 
     voucher = frappe.db.get_value(
@@ -508,6 +510,22 @@ def lookup_credit_voucher(code=None, pos_profile=None, quiet_miss=0):
         # screen's voucher card; "" for a return made in Desk.
         "store": voucher.pos_profile or "",
     }
+
+
+def _refuse_other_store_return(code, profile):
+    """A supervisor typed the number of a return made at another store of the
+    same company: say so, instead of "not a valid number". Only that store can
+    replace it (the rule is unchanged: nothing becomes usable here). A shared
+    customer's return keeps its own message -- it is never replaced."""
+    name = find_return_by_number(code)
+    if not name:
+        return
+    other = frappe.db.get_value("Sales Invoice", name, ["company", "customer", "customer_name"], as_dict=True)
+    if not other or other.company != profile.get("company"):
+        return
+    if is_generic_customer(other.customer):
+        frappe.throw(lost_bearer_voucher_message(other.customer_name or other.customer))
+    frappe.throw(_("This credit note was issued at another store — it can only be replaced there."))
 
 
 def _credit_supervisor(pos_profile):

@@ -8,9 +8,10 @@
 //   - the customer's voucher for it was scanned or typed in Payments, or
 //   - a POS supervisor is on the till (lost voucher; advances too).
 // Once particular credit notes are picked (a voucher, or a return number a
-// supervisor typed), only those are used -- plus a same-shift exchange --
-// so a supervisor can replace one lost voucher without spending all of the
-// customer's credit at once.
+// supervisor typed), only those are used -- not the customer's other credit,
+// not even a same-shift return or with a supervisor on the till -- so a
+// voucher never spends more than itself, and the main screen and Payments
+// (both use this function) show the same result.
 
 export interface CreditVoucher {
 	credit_origin: string;
@@ -49,7 +50,7 @@ export function selectAuthorizedCredit(
 			row?.type === "Invoice" && Boolean(shift) && row.pos_opening_shift === shift;
 		if (voucher) {
 			authorized.push({ ...row, voucher_code: voucher.code });
-		} else if (sameShift || supervisorAll) {
+		} else if ((sameShift && !picked) || supervisorAll) {
 			authorized.push({ ...row });
 		} else {
 			needVoucher.push(row);
