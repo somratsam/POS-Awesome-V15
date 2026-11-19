@@ -120,10 +120,20 @@ def get_draft_invoices(
     return invoices_list
 
 
+# The only doctypes a POS draft can be loaded from (get_draft_invoice_doc).
+DRAFT_INVOICE_DOCTYPES = ("Sales Invoice", "POS Invoice")
+
+
 @frappe.whitelist()
 def get_draft_invoice_doc(invoice_name, doctype="Sales Invoice"):
+    # Whitelisted: any logged-in user can call it. Only POS invoice doctypes,
+    # and only a document the user may read -- the same ERPNext permission as
+    # the drafts list it is picked from (get_draft_invoices uses get_list).
+    if doctype not in DRAFT_INVOICE_DOCTYPES:
+        frappe.throw(frappe._("Only a Sales Invoice or POS Invoice can be loaded here."), frappe.PermissionError)
     started_at = time.perf_counter()
     doc = frappe.get_cached_doc(doctype, invoice_name)
+    doc.check_permission("read")
     log_perf_event(
         "get_draft_invoice_doc",
         started_at,
