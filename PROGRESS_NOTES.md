@@ -11361,3 +11361,7 @@ Test Pos row, then put back: disabled, no PIN, no row): real successive
 `bench build`s; popup on a newer build; same version re-announced after
 Dismiss stays hidden; newer build brings it back; with an item in the cart
 the message shows. No invoice or draft created.
+
+## 122. Client certificates (approved store devices): staging test built, paused until January 2027 (2026-11-25, staging only, nothing committed, nothing on production)
+
+Resume note with the decisions, the test-setup location (`~/staging-mtls-test`, test nginx on :8443, log-only), the 13-step Windows checklist (results owed: steps 4, 6, 7, 11), the "fully off" switch fix, and what is still untested: `docs/client-certificates-resume.md`. Proposal v3: https://claude.ai/artifact/32mbBWjFdZdpUmgDCnydQq. 2FA for admin roles is not enabled yet (the user will do it later).
