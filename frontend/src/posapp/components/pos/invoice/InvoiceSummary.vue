@@ -949,8 +949,8 @@ defineExpose({
 	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
-	gap: 16px;
-	padding: 16px 19px;
+	gap: 14px;
+	padding: 14px 16px;
 	border-radius: 20px;
 	background:
 		linear-gradient(135deg, rgba(var(--v-theme-primary), 0.12), rgba(var(--v-theme-success), 0.08)),
@@ -968,7 +968,7 @@ defineExpose({
 }
 
 .summary-hero__eyebrow {
-	font-size: 0.84rem;
+	font-size: 0.72rem;
 	font-weight: 700;
 	text-transform: uppercase;
 	letter-spacing: 0;
@@ -976,7 +976,7 @@ defineExpose({
 }
 
 .summary-hero__amount {
-	font-size: clamp(1.4rem, 2.35vw, 2.1rem);
+	font-size: clamp(1.2rem, 2vw, 1.8rem);
 	line-height: 1.1;
 	color: var(--pos-text-primary);
 }
@@ -998,17 +998,12 @@ defineExpose({
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px 14px;
-	font-size: 0.98rem;
+	font-size: 0.84rem;
 	color: var(--pos-text-secondary);
 }
 
 .summary-hero__field-wrap {
-	width: min(300px, 100%);
-}
-
-.summary-hero__field-wrap :deep(.v-field__input) {
-	min-height: 46px;
-	font-size: 1.05rem;
+	width: min(260px, 100%);
 }
 
 .invoice-summary-actions {
@@ -1096,23 +1091,23 @@ defineExpose({
 	}
 
 	.summary-hero {
-		padding: 10px 14px;
-		gap: 12px;
+		padding: 8px 12px;
+		gap: 10px;
 		border-radius: 14px;
 	}
 
 	.summary-hero__eyebrow {
-		font-size: 0.76rem;
+		font-size: 0.66rem;
 	}
 
 	.summary-hero__amount {
-		font-size: 1.65rem;
+		font-size: 1.4rem;
 	}
 
 	.summary-hero__meta {
 		flex-wrap: nowrap;
 		gap: 10px;
-		font-size: 0.88rem;
+		font-size: 0.78rem;
 		white-space: nowrap;
 	}
 
@@ -1121,10 +1116,9 @@ defineExpose({
 	}
 
 	.summary-hero__field-wrap :deep(.v-field__input) {
-		min-height: 42px;
-		padding-top: 7px;
-		padding-bottom: 7px;
-		font-size: 0.98rem;
+		min-height: 36px;
+		padding-top: 6px;
+		padding-bottom: 6px;
 	}
 
 	.invoice-summary-actions {
@@ -1139,8 +1133,8 @@ defineExpose({
 	}
 
 	.summary-hero {
-		padding: 7px 12px;
-		gap: 9px;
+		padding: 6px 10px;
+		gap: 8px;
 		border-radius: 12px;
 	}
 
@@ -1149,15 +1143,15 @@ defineExpose({
 	}
 
 	.summary-hero__eyebrow {
-		font-size: 0.72rem;
+		font-size: 0.62rem;
 	}
 
 	.summary-hero__amount {
-		font-size: 1.4rem;
+		font-size: 1.2rem;
 	}
 
 	.summary-hero__meta {
-		font-size: 0.85rem;
+		font-size: 0.74rem;
 	}
 
 	.summary-hero__field-wrap {
@@ -1165,10 +1159,10 @@ defineExpose({
 	}
 
 	.summary-hero__field-wrap :deep(.v-field__input) {
-		min-height: 38px;
-		padding-top: 5px;
-		padding-bottom: 5px;
-		font-size: 0.95rem;
+		min-height: 32px;
+		padding-top: 4px;
+		padding-bottom: 4px;
+		font-size: 0.85rem;
 	}
 }
 </style>
