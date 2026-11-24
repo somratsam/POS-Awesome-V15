@@ -23,6 +23,8 @@ and every reprint of an old closing is recalculated the same way.
   gives the same bridge after the customer pays later.
 - Left on credit notes: credit issued minus credit used in this shift's
   exchanges -- what the shop owes customers because of this shift.
+- TOTAL block (payment_total_lines): the payment lines, minus credit notes
+  issued, plus credit notes used and the other non-money lines = Net Sales.
 
 Credit Issued keeps its existing meaning: the total of the shift's returns.
 """
@@ -185,4 +187,31 @@ def get_sales_breakdown(pos_opening_shift, names_by_doctype):
         "rounding": money(rounding),
         "unpaid": money(unpaid),
         "other": other if abs(other) >= 0.0005 else 0.0,
+    }
+
+
+def payment_total_lines(breakdown, money_taken):
+    """The TOTAL block of the Z Report and the Closing Shift overview.
+
+    money_taken is the sum of the printed payment lines (cash net of change,
+    cards, less refunds) -- "Takings (cash + card)". Added to it: credit notes
+    issued (a minus: returns given as credit, not money), credit notes used (a
+    plus: sales paid with credit, not money) and the other ways a sale was
+    settled without money. They always come to TOTAL = Net Sales; anything
+    left over prints as "Other". Display only: no stored figure changes.
+
+    Credit notes issued leaves out returns refunded in money -- they issued no
+    credit note (returns are credit-only now; old data only).
+    """
+    issued = flt(breakdown["credit_issued"] - breakdown["refunds"], PRECISION)
+    used = flt(breakdown["credit_redeemed"], PRECISION)
+    lines = {key: flt(breakdown[key], PRECISION) for key in ("loyalty", "write_off", "rounding", "unpaid")}
+    net_sales = flt(breakdown["net_sales"], PRECISION)
+    other = flt(net_sales - (flt(money_taken) - issued + used + sum(lines.values())), PRECISION)
+    lines["other"] = other if abs(other) >= 0.0005 else 0.0
+    return {
+        "credit_notes_issued": issued,
+        "money_taken": flt(money_taken, PRECISION),
+        "total_lines": lines,
+        "total": net_sales,
     }

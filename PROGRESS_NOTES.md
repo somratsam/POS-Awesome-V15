@@ -11243,3 +11243,74 @@ login testserver@swan.com (Sales User / POS Manager) loads a test 222 draft.
 ## 119. Bigger bottom bar, no scrollbar, wider gap around Cancel Sale (2026-11-20, on `develop-swan`, NOT on `stable`; user OK on screenshots)
 
 - Left for later: the horizontal scrollbar under the item table at 1366x768 is still there (columns 51 px too wide for the table; also before this change).
+
+## 120. Z Report TOTAL block: credit notes issued (-) and used (+), TOTAL = Net Sales, Takings (cash + card) (2026-11-24, on `develop-swan`, NOT committed, NOT on `stable`; user approved on draft images)
+
+**Before.** The store read "- Credit notes used 64.440" in the Takings section
+as a deduction from sales. The figures were right (Net Sales - used + issued =
+Takings) but a credit note used works like a payment. Both stable/c911aa44
+(production) and develop-swan printed the "CREDIT NOTES" + "TAKINGS" layout;
+the "CUSTOMER CREDIT / Credit Redeemed Today / Left as Store Credit" layout is
+the pre-104 template (stable bcae9fec), printed before the c911aa44 deploy.
+Production Z Report record = git (MD5 5827388..., user checked), 0 refunded
+returns on production.
+
+**Change (display only, no stored field changes).**
+- Print format (git file, `html` only): CREDIT NOTES keeps its lines --
+  Credit notes issued with a minus, Exchanges Today under it, Credit notes
+  used with a plus -- each only when not 0; the heading only when issued or
+  used shows. Then the other non-money lines (Loyalty Points, Write-off,
+  Rounding, Unpaid, Other; own sign, only when not 0), `TOTAL` (bold, 16 px vs
+  13 px, line above) = Net Sales, hint "= Net Sales", "Takings (cash + card)"
+  (normal), then "Left on credit notes" (normal weight, only when not 0, moved
+  from the CREDIT NOTES section). The old Takings bridge section and its hint
+  "Equals Today's Payments above." are gone. New `plus()` macro (+ above 0,
+  a negative keeps its -). New labels in `_()`; existing print labels are not
+  wrapped (none of them are; left as is).
+- `sales_breakdown.payment_total_lines(breakdown, money_taken)`: shared by the
+  print and the screen. Credit notes issued = credit_issued - refunds (a return
+  refunded in money issued no credit note; old data only, returns are
+  credit-only); Other = Net Sales - (money + lines). Takings (cash + card) =
+  the sum of the printed payment lines (`get_payment_mode_counts`, cash net of
+  change, refunds off) -- not `takings`, which includes loyalty points
+  (ERPNext counts them in paid_amount; staging POSA-CS-26-0000060: 4490.530 vs
+  4488.530). No loyalty fix: `takings` and the stored fields are unchanged.
+- `z_report.py` returns `credit_notes_issued`, `money_taken`, `total_lines`
+  (existing keys kept). `overview._shift_z_summary` adds the same block from
+  the same payment-line query (Payments by Mode on the screen also holds
+  Payment Entries and cash movements, so it is not used).
+- Closing Shift screen: the block moved under "Payments by Mode of Payment",
+  title "Total", subtitle "Payments with credit notes add up to Net Sales";
+  credit lines "OMR -18.800" / "OMR +64.440" only when not 0, TOTAL bold 1.2x,
+  "= Net Sales", "Takings (cash + card)", "Left on credit notes" (always, as
+  before). New prop `totalAmount` (only ClosingDialog uses ShiftOverview).
+  Hidden in a blind count, as before.
+- Z Report History: columns relabelled "Credit notes issued" / "Credit notes
+  used" (same stored values, no new columns).
+
+**Checks.** New `test_z_report_total` 15/15: normal, issue, redeem, issue +
+redeem, pure exchange, return only, old cash refund (no issued line, TOTAL =
+Net Sales), cash refund still rejected (`_guard_return_cash_refund`, no test
+before), rounding both directions, loyalty, Other both directions, the helper,
+the overview block; every case adds the printed lines up and checks TOTAL =
+Net Sales. `test_z_report_layout` 17/17 updated; `test_z_report` stub for the
+new wrapper. Staging: all 64 closings add up, no Other line. Real print
+(`get_html_and_style` as QZ gets it, 80 mm, Arial metrics via Liberation
+Sans) on 9 closings: no cut, no wrap except the existing "Below zero" hint;
+TOTAL 16 px uses at most 160 of 268 px. Live: return MCO-CN-2026-00022
+(18.800, against MCO-2026-00035) made in Administrator's open shift
+POSA-OS-26-0000069 by T108 Cashier (re-enabled with a temporary PIN, then put
+back: disabled, no PIN row, no profile row, modified unchanged; terminal cache
+cleared); Closing Shift: issued OMR -18.800, TOTAL OMR 18.800, Takings 37.600,
+Left 18.800. Blind count (hide_expected_amount on and back to 0): block hidden.
+
+**Found, not changed.**
+- Refund sub-line under a payment mode prints "1 / --40.000" (`minus()` on
+  the negative `return_total`); old data only (production 0 refunded returns).
+- A return refunded in money still counts in "Left on credit notes"
+  (`left_as_store_credit` = credit issued - exchange credit). Old data only.
+- POSA-CS-26-0000001 (August): stored customer_credit_issued/redeemed 0/0, the
+  recalculated figures are 203.400 / 107.200 (fields filled in later).
+- Every migrate re-saves the Z Report record (new `modified`, same html).
+- Arabic: the new labels go through `_()` / `__()`; no Translation records
+  added. The old print labels stay English in an Arabic print.

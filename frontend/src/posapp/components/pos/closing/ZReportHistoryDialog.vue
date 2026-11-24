@@ -111,8 +111,8 @@ const headers = [
 	{ title: __("Cashier"), key: "user", align: "start" },
 	{ title: __("Date"), key: "posting_date", align: "start" },
 	{ title: __("Grand Total"), key: "grand_total", align: "end" },
-	{ title: __("Credit Issued"), key: "customer_credit_issued", align: "end" },
-	{ title: __("Credit Redeemed"), key: "customer_credit_redeemed", align: "end" },
+	{ title: __("Credit notes issued"), key: "customer_credit_issued", align: "end" },
+	{ title: __("Credit notes used"), key: "customer_credit_redeemed", align: "end" },
 	{ title: __("Print"), key: "actions", align: "center", sortable: false },
 ];
 

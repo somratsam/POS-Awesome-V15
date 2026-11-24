@@ -24,6 +24,7 @@
 								:customer-credit-issued-summary="customerCreditIssuedSummary"
 								:customer-credit-issued-by-currency="customerCreditIssuedByCurrency"
 								:takings-rows="takingsRows"
+								:total-amount="totalAmount"
 								:takings-total="takingsTotal"
 								:left-as-store-credit="leftAsStoreCredit"
 								:payments-by-mode="paymentsByMode"

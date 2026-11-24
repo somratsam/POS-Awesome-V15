@@ -11,15 +11,39 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
 )
 
 
-def _shift_z_summary(pos_opening_shift, doctype, invoices):
+def _shift_z_summary(pos_opening_shift, doctype, invoices, cash_mode_of_payment=None):
     """sales_breakdown.get_sales_breakdown for an open shift (imported here so
     the module loads with the light stubs its tests use; tests replace this
-    one function)."""
+    one function), with the Z Report's TOTAL block: Takings (cash + card) is
+    the sum of the same payment lines the Z Report prints (get_payment_mode_counts),
+    not Payments by Mode, which also holds Payment Entries and cash movements."""
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data import (
+        get_payment_mode_counts,
+    )
     from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.sales_breakdown import (
         get_sales_breakdown,
+        payment_total_lines,
     )
 
-    return get_sales_breakdown(pos_opening_shift, {doctype: [invoice.get("name") for invoice in invoices]})
+    summary = get_sales_breakdown(pos_opening_shift, {doctype: [invoice.get("name") for invoice in invoices]})
+    sales = [invoice.get("name") for invoice in invoices if invoice.get("name") and not invoice.get("is_return")]
+    returns = [invoice.get("name") for invoice in invoices if invoice.get("name") and invoice.get("is_return")]
+    modes = get_payment_mode_counts(
+        sales,
+        returns,
+        change_by_invoice={
+            invoice.get("name"): flt(invoice.get("change_amount"))
+            for invoice in invoices
+            if invoice.get("name") and not invoice.get("is_return")
+        },
+        cash_mode_of_payment=cash_mode_of_payment,
+    )
+    money_taken = sum(
+        flt(flt(entry.get("sale_total")), 3) - abs(flt(flt(entry.get("return_total")), 3))
+        for entry in modes.values()
+    )
+    summary.update(payment_total_lines(summary, money_taken))
+    return summary
 
 
 @frappe.whitelist()
@@ -751,7 +775,7 @@ def get_closing_shift_overview(pos_opening_shift):
     # The same figures the Z Report prints after closing (exchanges, returns
     # of earlier sales, takings bridge, store credit left, net-based
     # averages), from the same function, so the two never disagree.
-    z_summary = _shift_z_summary(opening_shift_doc.name, doctype, invoices)
+    z_summary = _shift_z_summary(opening_shift_doc.name, doctype, invoices, cash_mode_of_payment)
     # Average Ticket = the Z Report's Sales Figure/Receipt.
     average_invoice_value = flt(z_summary.get("sales_per_receipt") or 0)
 

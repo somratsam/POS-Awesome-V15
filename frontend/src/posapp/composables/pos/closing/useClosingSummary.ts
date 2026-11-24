@@ -334,30 +334,35 @@ export function useClosingSummary(
 	// takings bridge, store credit left, net-based averages).
 	const zSummary = computed<Record<string, any>>(() => unref(overview)?.z_summary || {});
 
-	// Takings: Net Sales + Credit Issued - Credit Redeemed, less the other ways
-	// a sale was settled without money (only lines that aren't zero), =
-	// Today's Payments -- the same lines as the Z Report.
+	// The Z Report's TOTAL block: credit notes issued (minus) and used (plus)
+	// and the other ways a sale was settled without money, each only when not
+	// zero; with the payment lines they come to TOTAL = Net Sales.
+	// Takings (cash + card) is the sum of the payment lines (server:
+	// sales_breakdown.payment_total_lines). sign: how the amount prints.
 	const takingsRows = computed(() => {
 		const z = zSummary.value;
-		const rows = [
-			{ key: "net", label: __("Net Sales"), amount: Number(z.net_sales || 0) },
-			{ key: "issued", label: __("+ Credit notes issued"), amount: Number(z.credit_issued || 0) },
-			{ key: "redeemed", label: __("- Credit notes used"), amount: Number(z.credit_redeemed || 0) },
-		];
+		const lines = z.total_lines || {};
+		const rows: Array<{ key: string; label: string; amount: number; sign: "-" | "+" }> = [];
+		const issued = Number(z.credit_notes_issued || 0);
+		const used = Number(z.credit_redeemed || 0);
+		if (issued !== 0) rows.push({ key: "issued", label: __("Credit notes issued"), amount: -issued, sign: "-" });
+		if (used !== 0) rows.push({ key: "redeemed", label: __("Credit notes used"), amount: used, sign: "+" });
 		const optional: Array<[string, string]> = [
-			["refunds", __("- Refunds")],
-			["loyalty", __("- Loyalty Points")],
-			["write_off", __("- Write-off")],
-			["rounding", __("- Rounding")],
-			["unpaid", __("- Unpaid")],
-			["other", __("- Other")],
+			["loyalty", __("Loyalty Points")],
+			["write_off", __("Write-off")],
+			["rounding", __("Rounding")],
+			["unpaid", __("Unpaid")],
+			["other", __("Other")],
 		];
 		for (const [key, label] of optional) {
-			if (Number(z[key] || 0) !== 0) rows.push({ key, label, amount: Number(z[key]) });
+			const amount = Number(lines[key] || 0);
+			if (amount !== 0) rows.push({ key, label, amount, sign: amount < 0 ? "-" : "+" });
 		}
 		return rows;
 	});
-	const takingsTotal = computed(() => Number(zSummary.value.takings || 0));
+	// TOTAL = Net Sales.
+	const totalAmount = computed(() => Number(zSummary.value.total ?? zSummary.value.net_sales ?? 0));
+	const takingsTotal = computed(() => Number(zSummary.value.money_taken || 0));
 	const leftAsStoreCredit = computed(() => Number(zSummary.value.left_as_store_credit || 0));
 
 	const salesSummary = computed(() => {
@@ -652,6 +657,7 @@ export function useClosingSummary(
 		customerCreditIssuedByCurrency,
 		zSummary,
 		takingsRows,
+		totalAmount,
 		takingsTotal,
 		leftAsStoreCredit,
 		primaryInsights,
