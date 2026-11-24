@@ -196,7 +196,7 @@
 				{{ __("Invoice Mgmt") }}
 			</v-btn>
 		</v-col>
-		<v-col cols="12" sm="6" class="summary-col--cancel">
+		<v-col cols="12" sm="6">
 			<v-btn
 				block
 				color="error"
@@ -406,20 +406,12 @@ const showMoreActions = computed(
 	background: #07884b !important;
 }
 
-/* Cancel Sale: about 12 px to every neighbouring button (its own cell
-   padding plus the neighbour's), so it is harder to press by mistake. */
-.v-row--dense > .summary-col--cancel {
-	padding: 8px;
-}
-
 /* Enhanced button styling with better performance */
 .summary-btn {
 	transition: all 0.2s ease !important;
 	position: relative;
 	overflow: hidden;
-	min-height: 54px !important;
-	padding: 0 10px !important;
-	font-size: 1rem !important;
+	min-height: 46px !important;
 	text-transform: none !important;
 }
 
@@ -444,8 +436,7 @@ const showMoreActions = computed(
 
 .pay-btn {
 	font-weight: 600 !important;
-	min-height: 56px !important;
-	font-size: 1.3rem !important;
+	font-size: 1.1rem !important;
 	background: linear-gradient(135deg, #4caf50, #45a049) !important;
 	box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3) !important;
 }
@@ -505,26 +496,21 @@ const showMoreActions = computed(
 		padding: 3px;
 	}
 
-	.v-row--dense > .summary-col--cancel {
-		padding: 9px;
-	}
-
 	.summary-btn {
-		height: 42px !important;
-		min-height: 42px !important;
-		padding: 0 10px !important;
-		font-size: 0.9rem !important;
+		height: 36px !important;
+		min-height: 36px !important;
+		font-size: 0.82rem !important;
 		letter-spacing: 0.01em;
 	}
 
 	.summary-btn :deep(.v-icon) {
-		font-size: 20px;
+		font-size: 18px;
 	}
 
 	.pay-btn {
-		height: 47px !important;
-		min-height: 47px !important;
-		font-size: 1.15rem !important;
+		height: 40px !important;
+		min-height: 40px !important;
+		font-size: 1rem !important;
 	}
 }
 
@@ -533,25 +519,21 @@ const showMoreActions = computed(
 		padding: 2px;
 	}
 
-	.v-row--dense > .summary-col--cancel {
-		padding: 10px;
-	}
-
 	.summary-btn {
-		height: 38px !important;
-		min-height: 38px !important;
-		padding: 0 6px !important;
-		font-size: 0.86rem !important;
+		height: 32px !important;
+		min-height: 32px !important;
+		padding: 0 8px !important;
+		font-size: 0.78rem !important;
 	}
 
 	.summary-btn :deep(.v-icon) {
-		font-size: 19px;
+		font-size: 16px;
 	}
 
 	.pay-btn {
-		height: 42px !important;
-		min-height: 42px !important;
-		font-size: 1.1rem !important;
+		height: 36px !important;
+		min-height: 36px !important;
+		font-size: 0.95rem !important;
 	}
 }
 </style>

@@ -1976,29 +1976,4 @@ export default {
 		min-height: 0;
 	}
 }
-
-/* Large tier: the saved (drag-resize) cart height is the most it gets; the
-   cart gives up height so the bottom bar always fits without a page scroll. */
-@media (min-width: 1600px) and (min-height: 960px) {
-	/* The page keeps its bottom padding (Pos.vue .dynamic-container) here. */
-	.invoice-shell:not(.invoice-shell--counter-grid) {
-		height: calc(100vh - 66px - var(--bottom-safe-space, 24px) - var(--dynamic-xs, 4px));
-	}
-
-	.invoice-shell:not(.invoice-shell--counter-grid) > .invoice-main-card {
-		flex: 0 1 auto;
-		min-height: 0;
-	}
-}
-
-/* Normal POS screen, 1100 px wide and up: the item table may be shorter than
-   320 px, so a short cart fits its card without a scrollbar. With more items
-   than fit, the cart card scrolls as before. */
-@media (min-width: 1100px) {
-	.invoice-shell:not(.invoice-shell--counter-grid) .invoice-items-card,
-	.invoice-shell:not(.invoice-shell--counter-grid) .items-table-wrapper,
-	.invoice-shell:not(.invoice-shell--counter-grid) :deep(.items-table-wrapper .posa-items-table-container) {
-		min-height: 0;
-	}
-}
 </style>

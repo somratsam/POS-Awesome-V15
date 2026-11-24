@@ -11243,8 +11243,9 @@ login testserver@swan.com (Sales User / POS Manager) loads a test 222 draft.
 ## 119. Bigger bottom bar, no scrollbar, wider gap around Cancel Sale (2026-11-20, on `develop-swan`, NOT on `stable`; user OK on screenshots)
 
 - Left for later: the horizontal scrollbar under the item table at 1366x768 is still there (columns 51 px too wide for the table; also before this change).
+- **Reverted 2026-11-24** on both branches: the bigger bar looked too big on another store PC, and production was rolled back to c911aa44 for it. Stable: `48ba9563` (revert of 8256831f). develop-swan: the commit "revert: bigger bottom bar (f4eca50a) on develop-swan" right after 99a06197. Each reverts only Invoice.vue, InvoiceActionButtons.vue, InvoiceSummary.vue and items-table-styles.css; this entry stays. To re-apply later: `git revert <that revert commit>` on the branch, which restores the four files, then build.
 
-## 120. Z Report TOTAL block: credit notes issued (-) and used (+), TOTAL = Net Sales, Takings (cash + card) (2026-11-24, on `develop-swan`, NOT committed, NOT on `stable`; user approved on draft images)
+## 120. Z Report TOTAL block: credit notes issued (-) and used (+), TOTAL = Net Sales, Takings (cash + card) (2026-11-24; develop-swan 99a06197, stable 92420082 (cherry-pick on top of the bottom-bar revert 48ba9563), both pushed; production not deployed; user approved on draft images)
 
 **Before.** The store read "- Credit notes used 64.440" in the Takings section
 as a deduction from sales. The figures were right (Net Sales - used + issued =
