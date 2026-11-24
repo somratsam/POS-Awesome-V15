@@ -1,7 +1,10 @@
 import { defineStore } from "pinia";
+import { useInvoiceStore } from "./invoiceStore";
+import { useCustomersStore } from "./customersStore";
 
 const VERSION_STORAGE_KEY = "posawesome_version";
 const DISMISSED_VERSION_KEY = "posawesome_update_dismissed";
+const DISMISSED_TIMESTAMP_KEY = "posawesome_update_dismissed_ts";
 const LAST_CHECK_KEY = "posawesome_update_last_check";
 const SNOOZE_STORAGE_KEY = "posawesome_update_snooze_until";
 const DEFAULT_SNOOZE_MINUTES = 10;
@@ -95,6 +98,43 @@ function normalizeVersionInput(
 	return { normalized, timestamp };
 }
 
+/**
+ * A sale in progress on this till: items in the cart, or an exchange still
+ * waiting for its sale. Same test as the Back to Desk arrow (Navbar goDesk).
+ * Reload Now is blocked while it is true, so a reload never drops a sale.
+ */
+export function hasSaleInProgress(): boolean {
+	try {
+		if (Number(useInvoiceStore().itemsCount || 0) > 0) return true;
+		if (useCustomersStore().pendingExchange) return true;
+	} catch (err) {
+		console.warn("Could not check the cart before reloading", err);
+	}
+	return false;
+}
+
+/**
+ * A dismissed update stays hidden; only a newer build brings the popup back.
+ * Build numbers are compared when both versions have one; otherwise (e.g. a
+ * git commit hash) only a different version counts as new.
+ */
+export function isNewerThanDismissed(
+	availableVersion: string | null,
+	availableTimestamp: number | null,
+	dismissedVersion: string | null,
+	dismissedTimestamp: number | null,
+): boolean {
+	if (!dismissedVersion) return true;
+	if (!availableVersion) return false;
+	if (availableVersion === dismissedVersion) return false;
+	const available = availableTimestamp ?? parseTimestamp(availableVersion);
+	const dismissed = dismissedTimestamp ?? parseTimestamp(dismissedVersion);
+	if (available && dismissed) {
+		return available > dismissed;
+	}
+	return true;
+}
+
 function formatTimestamp(timestamp: number | null): string | null {
 	if (!timestamp) return null;
 	const date = new Date(timestamp);
@@ -119,6 +159,7 @@ export interface UpdateState {
 	availableTimestamp: number | null;
 	dismissedUntil: number | null;
 	dismissedVersion: string | null;
+	dismissedTimestamp: number | null;
 	lastCheckedAt: number | null;
 	availableMessage: string | null;
 	availableCommit: string | null;
@@ -144,6 +185,7 @@ export const useUpdateStore = defineStore("update", {
 		availableTimestamp: null,
 		dismissedUntil: null,
 		dismissedVersion: null,
+		dismissedTimestamp: null,
 		lastCheckedAt: null,
 		availableMessage: null,
 		availableCommit: null,
@@ -168,12 +210,19 @@ export const useUpdateStore = defineStore("update", {
 				return false;
 			}
 			if (
-				state.dismissedVersion &&
-				state.availableVersion === state.dismissedVersion
+				!isNewerThanDismissed(
+					state.availableVersion,
+					state.availableTimestamp,
+					state.dismissedVersion,
+					state.dismissedTimestamp,
+				)
 			) {
 				return false;
 			}
 			return !state.dismissedUntil || state.dismissedUntil <= Date.now();
+		},
+		saleInProgress(): boolean {
+			return hasSaleInProgress();
 		},
 		formattedAvailableVersion(state: UpdateState): string | null {
 			return (
@@ -234,6 +283,9 @@ export const useUpdateStore = defineStore("update", {
 			);
 			if (dismissedVersion) {
 				this.dismissedVersion = dismissedVersion;
+				this.dismissedTimestamp = safeNumber(
+					safeStorageGet(window.localStorage, DISMISSED_TIMESTAMP_KEY),
+				);
 			}
 			const lastCheckedAt = safeNumber(
 				safeStorageGet(window.localStorage, LAST_CHECK_KEY),
@@ -306,17 +358,6 @@ export const useUpdateStore = defineStore("update", {
 				return;
 			}
 			if (versionChanged) {
-				if (this.dismissedVersion === normalized) {
-					this.dismissedVersion = null;
-					if (hasBrowserContext) {
-						safeStorageRemove(
-							window.localStorage,
-							DISMISSED_VERSION_KEY,
-						);
-					}
-				}
-			}
-			if (versionChanged) {
 				updates.availableVersion = normalized;
 			}
 			if (timestampChanged) {
@@ -352,6 +393,7 @@ export const useUpdateStore = defineStore("update", {
 				reloading: false,
 				dismissedUntil: null,
 				dismissedVersion: null,
+				dismissedTimestamp: null,
 			};
 			if (version) {
 				const { normalized, timestamp } = normalizeVersionInput(
@@ -379,6 +421,7 @@ export const useUpdateStore = defineStore("update", {
 			if (hasBrowserContext) {
 				safeStorageRemove(window.sessionStorage, SNOOZE_STORAGE_KEY);
 				safeStorageRemove(window.localStorage, DISMISSED_VERSION_KEY);
+				safeStorageRemove(window.localStorage, DISMISSED_TIMESTAMP_KEY);
 			}
 		},
 		dismissUpdate() {
@@ -386,6 +429,8 @@ export const useUpdateStore = defineStore("update", {
 				return;
 			}
 			this.dismissedVersion = this.availableVersion;
+			this.dismissedTimestamp =
+				this.availableTimestamp ?? parseTimestamp(this.availableVersion);
 			this.dismissedUntil = null;
 			if (hasBrowserContext) {
 				safeStorageSet(
@@ -393,6 +438,15 @@ export const useUpdateStore = defineStore("update", {
 					DISMISSED_VERSION_KEY,
 					this.availableVersion,
 				);
+				if (this.dismissedTimestamp) {
+					safeStorageSet(
+						window.localStorage,
+						DISMISSED_TIMESTAMP_KEY,
+						String(this.dismissedTimestamp),
+					);
+				} else {
+					safeStorageRemove(window.localStorage, DISMISSED_TIMESTAMP_KEY);
+				}
 				safeStorageRemove(
 					window.sessionStorage,
 					SNOOZE_STORAGE_KEY,
@@ -404,9 +458,11 @@ export const useUpdateStore = defineStore("update", {
 				return;
 			}
 			this.dismissedVersion = null;
+			this.dismissedTimestamp = null;
 			this.dismissedUntil = null;
 			if (hasBrowserContext) {
 				safeStorageRemove(window.localStorage, DISMISSED_VERSION_KEY);
+				safeStorageRemove(window.localStorage, DISMISSED_TIMESTAMP_KEY);
 				safeStorageRemove(window.sessionStorage, SNOOZE_STORAGE_KEY);
 			}
 		},
@@ -439,10 +495,9 @@ export const useUpdateStore = defineStore("update", {
 				if (buildVersion) {
 					this.setAvailableVersion(buildVersion);
 				}
-				this.availableReleaseUrl =
-					typeof r?.message?.release_url === "string"
-						? r.message.release_url
-						: null;
+				// Release notes (link, commit messages, commit list) are not
+				// shown in the popup for any role, so they are not kept.
+				this.availableReleaseUrl = null;
 				this.repoUrl =
 					typeof r?.message?.repo_url === "string"
 						? r.message.repo_url
@@ -458,22 +513,13 @@ export const useUpdateStore = defineStore("update", {
 							r.message.remote_sample_branch || branch;
 						this.availableCommit =
 							sample.commit_hash || remoteAhead?.[branch] || null;
-						this.availableMessage =
-							sample.commit_message?.trim() || null;
-						this.availableCommitDate =
-							sample.commit_date || null;
-						this.availableCommits =
-							r?.message?.remote_commits || [];
 						this.availableVersion =
 							this.availableCommit || buildVersion;
 						return;
 					}
 				}
-				if (r?.message?.commit_message) {
-					this.availableMessage =
-						r?.message?.commit_message?.trim() || null;
-					this.availableCommit = r?.message?.commit_hash || null;
-					this.availableCommitDate = r?.message?.commit_date || null;
+				if (r?.message?.commit_hash) {
+					this.availableCommit = r.message.commit_hash;
 				}
 			} catch (err) {
 				console.warn("Failed to check for updates", err);
@@ -485,6 +531,10 @@ export const useUpdateStore = defineStore("update", {
 		},
 		reloadNow() {
 			if (typeof this.reloadAction !== "function" || this.reloading) {
+				return;
+			}
+			// Never reload over a sale in progress (the popup says why).
+			if (hasSaleInProgress()) {
 				return;
 			}
 			this.reloading = true;

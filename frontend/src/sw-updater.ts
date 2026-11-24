@@ -394,7 +394,16 @@ if (typeof window !== "undefined" && "serviceWorker" in navigator) {
 
 		if (decision.reloadWindow) {
 			reloadScheduled = false;
-			setTimeout(() => window.location.reload(), 50);
+			setTimeout(() => {
+				// Checked again right before reloading: an item scanned after
+				// Reload Now must not be lost. The tab keeps running and the
+				// popup stays until the cart is empty.
+				if (updateStore.saleInProgress) {
+					updateStore.reloading = false;
+					return;
+				}
+				window.location.reload();
+			}, 50);
 		}
 	}
 
