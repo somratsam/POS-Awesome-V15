@@ -374,7 +374,8 @@ def get_remote_update_info() -> Dict[str, Any]:
     if not app_path or not os.path.exists(app_path):
         return data
 
-    _fetch_remote(app_path)
+    # No `git fetch` here: this runs every time the POS opens. Remote heads are
+    # read from what the last manual fetch/pull left in the local repo.
     heads = _get_remote_heads(app_path)
     data["remote_heads"] = heads
     current_branch = _get_current_branch(app_path)

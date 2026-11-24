@@ -11314,3 +11314,49 @@ Left 18.800. Blind count (hide_expected_amount on and back to 0): block hidden.
 - Every migrate re-saves the Z Report record (new `modified`, same html).
 - Arabic: the new labels go through `_()` / `__()`; no Translation records
   added. The old print labels stay English in an Arabic print.
+
+## 121. Update popup: no reload over a sale, Dismiss stays dismissed, no release notes, no git fetch on open, refresh wording (2026-11-24, on `develop-swan`, NOT on `stable`; production not deployed; user OK on screenshots)
+
+**Changes.**
+- Sale in progress = cart items or an exchange waiting for its sale (same test
+  as Navbar `goDesk`; `updateStore.hasSaleInProgress()`, getter
+  `saleInProgress`). `reloadNow()` refuses while true; `sw-updater.ts`
+  checks again right before its 50 ms reload. The popup shows "Finish or save
+  the current sale first" while true.
+- Dismiss: the code in `setAvailableVersion` that deleted the saved dismissal
+  when the incoming version equalled the dismissed one is gone (the available
+  version flipped between the build number and the git commit hash, so a
+  dismissed build came back). The dismissed build number is also saved
+  (`posawesome_update_dismissed_ts`); `shouldPrompt` shows again only for a
+  strictly newer build (versions without a build number: only a different
+  version). `markUpdateApplied` still clears it.
+- Release notes hidden for every role: no Release Notes link, commit message,
+  branch or commit list; the store no longer keeps them from the response.
+- `get_remote_update_info` no longer runs `git fetch` (it ran on every POS
+  open); still callable, same fields, reads only the local repo. Nothing else
+  used the fetch. Effect: the popup no longer appears for commits pushed but
+  not built; it still appears for a new build. Check on open + every 24 h
+  unchanged.
+- Wording: "A new version is available. When the cart is empty, refresh the
+  page (Ctrl+F5) to update." Reload Now button removed from the popup.
+
+**Why Reload Now was removed (not fixed, user decision).** Reload Now never
+worked: the loader imports the main bundle as `posawesome-*.js?v=<build>`,
+lazy chunks (`sw-updater`) import `./posawesome-*.js` without `?v`, so
+`stores/index.ts` runs twice and there are two Pinias. The popup's store has
+no `reloadAction`; service-worker version announcements land in the other
+store. Seen live (localhost proxy + secure-origin flag, both removed). Also:
+staging over plain http registers no service worker at all. The store guards
+above stay for when that is fixed. Click outside the popup still = Dismiss
+(existing, left as is).
+
+**Checks.** New `updateStoreDismissAndReload.spec.ts` (11; 9 fail on the old
+store, incl. the flip bug), `updatePrompt.spec.ts` and `sw-updater.spec.ts`
+updated (skip-reload test fails without the guard), new backend
+`test_remote_update_info` 2/2 (no fetch/pull, same fields; git failure still
+returns build_version). Frontend 312/312 files, 2130/2130 tests. Live on
+staging (headless Chromium, T108 Cashier re-enabled with a temporary PIN and
+Test Pos row, then put back: disabled, no PIN, no row): real successive
+`bench build`s; popup on a newer build; same version re-announced after
+Dismiss stays hidden; newer build brings it back; with an item in the cart
+the message shows. No invoice or draft created.

@@ -252,4 +252,52 @@ describe("sw updater runtime safety", () => {
 			expect.any(TypeError),
 		);
 	});
+
+	// Real timers: the worker's reply comes through a real MessageChannel.
+	const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+	async function reloadAfterApply(saleInProgress: boolean) {
+		vi.useRealTimers();
+		const waitingWorker = { postMessage: vi.fn() };
+		const { updateStore, serviceWorker } = await loadUpdaterHarness({
+			registrationOverrides: { waiting: waitingWorker },
+			controllerResponses: [
+				{ type: "SW_VERSION_INFO", version: "build-1000", timestamp: 1000 },
+				{ type: "SW_VERSION_INFO", version: "build-2000", timestamp: 2000 },
+			],
+		});
+		const reloadSpy = vi.fn();
+		const originalLocation = window.location;
+		Object.defineProperty(window, "location", {
+			configurable: true,
+			value: { ...originalLocation, reload: reloadSpy },
+		});
+		try {
+			// startup: controller reports the running build
+			await settle(20);
+			await updateStore.reloadAction();
+			expect(waitingWorker.postMessage).toHaveBeenCalledWith({ type: "SKIP_WAITING" });
+			// an item is scanned (or not) after Reload Now, before the reload fires
+			updateStore.saleInProgress = saleInProgress;
+			serviceWorker.dispatchEvent(new Event("controllerchange"));
+			await settle(150);
+			return { reloadSpy, updateStore };
+		} finally {
+			Object.defineProperty(window, "location", {
+				configurable: true,
+				value: originalLocation,
+			});
+		}
+	}
+
+	it("reloads after the new worker takes over when the cart is empty", async () => {
+		const { reloadSpy } = await reloadAfterApply(false);
+		expect(reloadSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("skips the reload when items were added after Reload Now", async () => {
+		const { reloadSpy, updateStore } = await reloadAfterApply(true);
+		expect(reloadSpy).not.toHaveBeenCalled();
+		expect(updateStore.reloading).toBe(false);
+	});
 });

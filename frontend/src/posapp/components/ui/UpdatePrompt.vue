@@ -24,51 +24,15 @@
 			</v-card-title>
 			<v-card-text class="pt-2">
 				<div class="text-body-2">
-					{{ __("Reload to apply the latest changes. Your current session will be refreshed.") }}
+					{{ __("A new version is available. When the cart is empty, refresh the page (Ctrl+F5) to update.") }}
 				</div>
-				<div class="update-details" v-if="detail || branch || commits.length">
-					<div v-if="detail" class="detail-row">
-						<v-icon size="16" class="detail-icon">mdi-text-box-outline</v-icon>
-						<span>{{ detail }}</span>
-					</div>
-					<div v-if="branch" class="detail-row">
-						<v-icon size="16" class="detail-icon">mdi-source-branch</v-icon>
-						<span>{{ branch }}</span>
-					</div>
-					<div v-if="commits.length" class="detail-row">
-						<v-icon size="16" class="detail-icon">mdi-source-commit</v-icon>
-						<span>{{ commits.length }} {{ __("commits") }}</span>
-					</div>
-					<ul v-if="commits.length" class="commit-list">
-						<li v-for="(commit, index) in commits" :key="commit.commit_hash || index">
-							<span class="commit-hash" v-if="commit.commit_short">
-								{{ commit.commit_short }}
-							</span>
-							<span class="commit-message">{{
-								commit.commit_message || commit.commit_hash
-							}}</span>
-							<span class="commit-date" v-if="commit.commit_date">
-								{{ commit.commit_date }}
-							</span>
-						</li>
-					</ul>
+				<div v-if="saleInProgress" class="update-blocked text-body-2 mt-2" data-test="update-sale-in-progress">
+					<v-icon size="16">mdi-cart-outline</v-icon>
+					<span>{{ __("Finish or save the current sale first") }}</span>
 				</div>
 			</v-card-text>
 			<v-card-actions class="update-actions">
-				<v-btn
-					v-if="releaseUrl"
-					variant="text"
-					color="primary"
-					:href="releaseUrl"
-					target="_blank"
-					rel="noopener noreferrer"
-				>
-					{{ __("Release Notes") }}
-				</v-btn>
 				<v-spacer></v-spacer>
-				<v-btn variant="flat" color="primary" :loading="updateStore.reloading" @click="reloadNow">
-					{{ __("Reload Now") }}
-				</v-btn>
 				<v-btn variant="elevated" color="primary" @click="dismiss">
 					{{ __("Dismiss") }}
 				</v-btn>
@@ -100,10 +64,10 @@ watch(
 );
 
 const label = computed(() => updateStore.formattedAvailableVersion);
-const detail = computed(() => updateStore.formattedAvailableDetails);
-const branch = computed(() => updateStore.formattedAvailableBranch);
-const commits = computed(() => updateStore.formattedAvailableCommits);
-const releaseUrl = computed(() => updateStore.availableReleaseUrl);
+// Release notes (commit details, branch, Release Notes link) are hidden for
+// every role. No Reload Now button: the cashier refreshes the page once the
+// cart is empty (the store still refuses to reload over a sale).
+const saleInProgress = computed(() => updateStore.saleInProgress);
 
 function dismiss() {
 	updateStore.dismissUpdate();
@@ -114,10 +78,6 @@ function handleDialogModelUpdate(nextVisible: boolean) {
 	if (!nextVisible && updateStore.shouldPrompt) {
 		dismiss();
 	}
-}
-
-function reloadNow() {
-	updateStore.reloadNow();
 }
 </script>
 
@@ -208,6 +168,22 @@ function reloadNow() {
 
 .detail-icon {
 	color: rgba(15, 23, 42, 0.5);
+}
+
+.update-blocked {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border-radius: 10px;
+	font-weight: 600;
+	color: rgb(var(--v-theme-on-surface, 33, 33, 33));
+	background: rgba(var(--v-theme-warning, 251, 140, 0), 0.16);
+	border: 1px solid rgba(var(--v-theme-warning, 251, 140, 0), 0.5);
+}
+
+.update-blocked .v-icon {
+	color: rgb(var(--v-theme-warning, 251, 140, 0));
 }
 
 .update-actions {
