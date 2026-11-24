@@ -83,6 +83,7 @@ def _load_module():
     spec.loader.exec_module(module)
     # The sales breakdown reads invoices; these tests are about authorization.
     module._sales_breakdown = lambda doc: _EmptyBreakdown()
+    module.payment_total_lines = lambda breakdown, money_taken: _EmptyBreakdown()
     return module
 
 

@@ -61,6 +61,7 @@ class TestZReportLayout(unittest.TestCase):
         self.assertIn(z_report.get_z_report_data, frappe.whitelisted)
         self.assertNotIn(z_report._sales_breakdown, frappe.whitelisted)
         self.assertNotIn(overview._shift_z_summary, frappe.whitelisted)
+        self.assertNotIn(z_report.payment_total_lines, frappe.whitelisted)
         self.assertIn(overview.get_closing_shift_overview, frappe.whitelisted)
 
     def test_both_template_calls_are_still_what_printed_patches_out(self):
@@ -73,57 +74,63 @@ class TestZReportLayout(unittest.TestCase):
         )
         for line in ("Gross Sales 145.940 OMR", "↳ of which exchanges (1) 72.970 OMR", "Returned -72.970 OMR",
                      "Net Sales 72.970 OMR", "Sales Count 1 + 1 exch.", "↳ Exchanges Today 72.970 OMR",
-                     "= Takings 72.970 OMR", "Sales Figure/Receipt 72.970 OMR", "Gross Sales Receipts 2 / 145.940",
+                     "TOTAL 72.970 OMR", "Takings (cash + card) 72.970 OMR", "Sales Figure/Receipt 72.970 OMR",
+                     "Gross Sales Receipts 2 / 145.940",
                      "Total Register 3 / 72.970"):
             self.assertIn(line, text)
         # 0 left on credit notes: the line doesn't print.
         self.assertNotIn("Left on credit notes", text)
         self.assertNotIn("Total Sales", text)
         self.assertNotIn("of earlier sales", text)
-        # "Exchanges Today" is the sub-line under Credit notes issued, as in the Overview.
-        self.assertRegex(text, r"Credit notes issued [0-9.]+ OMR\n↳ Exchanges Today 72\.970 OMR\nCredit notes used ")
+        # "Exchanges Today" is the sub-line under Credit notes issued, as in the Overview;
+        # issued prints with a minus, used with a plus.
+        self.assertRegex(text, r"Credit notes issued -72\.970 OMR\n↳ Exchanges Today 72\.970 OMR\nCredit notes used \+72\.970 OMR\nTOTAL ")
 
     def test_credit_note_not_used(self):
         text = printed([inv("S1", 72.97), inv("R1", -72.97, is_return=1, paid=0, return_against="S1")],
                        {}, {"S1": SHIFT}, VISA(72.97))
-        for line in ("Net Sales 0.000 OMR", "+ Credit notes issued 72.970 OMR",
-                     "= Takings 72.970 OMR", "Left on credit notes 72.970 OMR", "Sales Figure/Item -"):
+        for line in ("Net Sales 0.000 OMR", "Credit notes issued -72.970 OMR", "TOTAL 0.000 OMR",
+                     "Takings (cash + card) 72.970 OMR", "Left on credit notes 72.970 OMR", "Sales Figure/Item -"):
             self.assertIn(line, text)
-        # Nothing used: neither the Credit Notes line nor the Takings term prints.
+        # Left on credit notes: under Takings (cash + card), not part of the TOTAL.
+        self.assertIn("Takings (cash + card) 72.970 OMR\nLeft on credit notes 72.970 OMR", text)
+        # Nothing used: the Credit notes used line doesn't print.
         self.assertNotIn("Credit notes used", text)
         self.assertNotIn("exch.", text)
 
     def test_return_of_an_earlier_sale(self):
         text = printed([inv("R1", -139.3, customer="SANJU", is_return=1, paid=0, return_against="OLD")],
                        origin_shifts={"OLD": "SHIFT-OLD"})
-        for line in ("↳ of earlier sales 139.300 OMR", "Net Sales -139.300 OMR", "= Takings 0.000 OMR",
+        for line in ("↳ of earlier sales 139.300 OMR", "Net Sales -139.300 OMR", "TOTAL -139.300 OMR",
+                     "Takings (cash + card) 0.000 OMR",
                      "Items/Receipt -", "Sales Figure/Receipt -"):
             self.assertIn(line, text)
         self.assertIn("Net Sales -139.300 OMR\nBelow zero: returns of earlier sales exceed today's sales.", text)
         # 0 returned from this shift doesn't print.
         self.assertNotIn("of sales made in this shift", text)
 
-    def test_bridge_lines_only_when_not_zero(self):
+    def test_other_total_lines_only_when_not_zero(self):
         text = printed([inv("S1", 100, paid=60)], payments=VISA(60))
-        self.assertIn("- Unpaid 40.000 OMR", text)
-        self.assertIn("= Takings 60.000 OMR", text)
-        for absent in ("- Refunds", "- Loyalty Points", "- Write-off", "- Rounding", "- Other"):
+        self.assertIn("Visa\n1 / 60.000\nUnpaid +40.000 OMR\nTOTAL 100.000 OMR", text)
+        self.assertIn("Takings (cash + card) 60.000 OMR", text)
+        for absent in ("Refunds", "Loyalty Points", "Write-off", "Rounding", "Other"):
             self.assertNotIn(absent, text)
 
     def test_sales_only_shift_has_no_credit_note_or_return_lines(self):
         text = printed([inv("S1", 100)], payments=VISA(100))
         for line in ("Gross Sales 100.000 OMR", "Net Sales 100.000 OMR", "Sales Count 1", "Items Sold",
-                     "Total Quantity", "Discounts Granted", "= Takings 100.000 OMR", "VAT on Sales", "VAT Amount"):
+                     "Total Quantity", "Discounts Granted", "TOTAL 100.000 OMR", "VAT on Sales", "VAT Amount"):
             self.assertIn(line, text)
         for absent in ("Returned", "Items returned", "exch.", "Credit Notes", "Credit notes issued",
                        "Credit notes used", "Exchanges Today", "Left on credit notes", "VAT on returned items"):
             self.assertNotIn(absent, text)
-        # Takings goes straight from Net Sales to the total.
-        self.assertIn("Net Sales 100.000 OMR\n= Takings 100.000 OMR", text)
+        # No credit notes: the payment lines go straight to TOTAL, no Credit Notes heading.
+        self.assertIn("Today's Payments\nVisa\n1 / 100.000\nTOTAL 100.000 OMR\n= Net Sales\n"
+                      "Takings (cash + card) 100.000 OMR\nCash Balance", text)
 
     def test_credit_notes_heading_only_with_a_line_under_it(self):
         text = printed([inv("S1", 100, paid=60, redeemed=40)], payments=VISA(60))
-        self.assertRegex(text, r"Credit Notes\nCredit notes used 40\.000 OMR\nTakings")
+        self.assertRegex(text, r"Credit Notes\nCredit notes used \+40\.000 OMR\nTOTAL 100\.000 OMR")
         self.assertNotIn("Credit notes issued", text)
 
     def test_additional_information_drops_the_repeated_lines(self):
@@ -140,7 +147,10 @@ class TestZReportLayout(unittest.TestCase):
         for absent in ("Number of Receipts", "Number of returns", "Number of Items", "Net Sales incl. VAT",
                        "Per receipt and per item"):
             self.assertNotIn(absent, text)
-        self.assertIn("Equals Today's Payments above.", text)
+        # The old Takings section is gone.
+        self.assertNotIn("Equals Today's Payments above.", text)
+        self.assertNotIn("= Takings", text)
+        self.assertIn("= Net Sales", text)
 
     def test_payment_modes_with_nothing_do_not_print(self):
         payments = {"Visa": {"sale_count": 1, "sale_total": 100, "return_count": 0, "return_total": 0},
@@ -151,7 +161,7 @@ class TestZReportLayout(unittest.TestCase):
                  dict(zero, mode_of_payment="Master Card", closing_amount=5, difference=5)]
         text = printed([inv("S1", 100)], payments=payments, reconciliation=recon)
         self.assertNotIn("Maal", text)
-        self.assertIn("Today's Payments\nVisa\n1 / 100.000\nTakings", text)
+        self.assertIn("Today's Payments\nVisa\n1 / 100.000\nTOTAL", text)
         balance = text.split("Cash Balance", 1)[1]
         self.assertIn("Cash\nOpening 20.000", balance)
         # Counted something that wasn't expected: it prints.
@@ -163,7 +173,7 @@ class TestZReportLayout(unittest.TestCase):
         text = printed([], reconciliation=[dict(zero, mode_of_payment="Cash")])
         self.assertIn("No payments recorded", text)
         self.assertIn("Cash Balance\nNothing opened, expected or counted", text)
-        self.assertIn("= Takings 0.000 OMR", text)
+        self.assertIn("TOTAL 0.000 OMR\n= Net Sales\nTakings (cash + card) 0.000 OMR", text)
 
     def test_below_zero_hint_only_under_a_negative_net_sales(self):
         self.assertNotIn("Below zero", printed([inv("S1", 100)], payments=VISA(100)))
@@ -184,7 +194,7 @@ class TestZReportNumberFormat(unittest.TestCase):
     """amt() never prints "-0.000"; minus() puts "-" only in front of a non-zero amount."""
 
     def _macro(self, call, **values):
-        macros = "".join(re.findall(r"{% macro (?:amt|minus)\(.*?{% endmacro %}", TEMPLATE, flags=re.S))
+        macros = "".join(re.findall(r"{% macro (?:amt|minus|plus)\(.*?{% endmacro %}", TEMPLATE, flags=re.S))
         return frappe.render_template(macros + "{{ " + call + " }}", values).strip()
 
     def test_amt(self):
@@ -198,6 +208,13 @@ class TestZReportNumberFormat(unittest.TestCase):
         for value, expected in ((0, "0.000"), (-0.0, "0.000"), (0.0001, "0.000"), (40, "-40.000"), (2116.358, "-2116.358")):
             with self.subTest(value):
                 self.assertEqual(self._macro("minus(v)", v=value), expected)
+
+    def test_plus(self):
+        # "+" only in front of an amount above 0; a negative one keeps its "-".
+        for value, expected in ((0, "0.000"), (-0.0, "0.000"), (0.0001, "0.000"), (64.44, "+64.440"),
+                                (-0.01, "-0.010"), (-0.0004, "0.000")):
+            with self.subTest(value):
+                self.assertEqual(self._macro("plus(v)", v=value), expected)
 
     def test_every_amount_goes_through_amt(self):
         self.assertNotIn('"%.3f"|format(report', TEMPLATE)

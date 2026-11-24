@@ -11,6 +11,16 @@ from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.data imp
 from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.utils import get_base_value
 
 
+def payment_total_lines(breakdown, money_taken):
+    """sales_breakdown.payment_total_lines (imported here so the module loads
+    with the light stubs its tests use)."""
+    from posawesome.posawesome.doctype.pos_closing_shift.closing_processing.sales_breakdown import (
+        payment_total_lines as _payment_total_lines,
+    )
+
+    return _payment_total_lines(breakdown, money_taken)
+
+
 # Currency amounts are rounded to this precision before returning, so the
 # printed report never shows floating-point artifacts like 77.69999999999999.
 CURRENCY_PRECISION = 3
@@ -172,6 +182,13 @@ def get_z_report_data(pos_closing_shift):
         ).items()
     }
 
+    # Takings (cash + card): the payment lines printed above, refunds off.
+    # The refund rows hold negative amounts; abs() keeps either sign right.
+    money_taken = sum(
+        flt(entry["sale_total"]) - abs(flt(entry["return_total"])) for entry in payment_modes.values()
+    )
+    total_block = payment_total_lines(breakdown, money_taken)
+
     payment_reconciliation = [
         {
             "mode_of_payment": d.mode_of_payment,
@@ -203,6 +220,11 @@ def get_z_report_data(pos_closing_shift):
         "exchange_sales": breakdown["exchange_sales"],
         "receipt_count": breakdown["receipts"],
         "takings": breakdown["takings"],
+        # TOTAL block: payment lines - credit notes issued + credit notes used
+        # + the other non-money lines = Net Sales.
+        "credit_notes_issued": total_block["credit_notes_issued"],
+        "money_taken": total_block["money_taken"],
+        "total_lines": total_block["total_lines"],
         "bridge": {
             key: breakdown[key] for key in ("refunds", "loyalty", "write_off", "rounding", "unpaid", "other")
         },
